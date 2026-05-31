@@ -67,6 +67,7 @@ import com.shenghui.localvibe.core.datastore.AppStateStore
 import com.shenghui.localvibe.core.datastore.PersistedBookFile
 import com.shenghui.localvibe.core.datastore.PersistedFolder
 import com.shenghui.localvibe.core.datastore.PersistedPlaybackProgress
+import com.shenghui.localvibe.core.media.deleteUri
 import com.shenghui.localvibe.core.media.resolveDocumentTreeName
 import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.player.AudioPlayMode
@@ -113,6 +114,8 @@ private fun LocalVibeApp() {
     val audioFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
     val bookFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
     val importedBookFiles = remember { mutableStateListOf<LocalMediaFile>() }
+    val folderBookFiles = remember { mutableStateListOf<LocalMediaFile>() }
+    val folderBookFilesByFolder = remember { mutableStateMapOf<String, List<LocalMediaFile>>() }
     val scannedFilesByFolder = remember { mutableStateMapOf<String, List<LocalMediaFile>>() }
     val videoProgressMap = remember { mutableStateMapOf<String, Long>() }
     val videoMetadataCache = remember { mutableStateMapOf<String, VideoMetadata>() }
@@ -134,6 +137,180 @@ private fun LocalVibeApp() {
     var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
     var recentVideoUri by remember { mutableStateOf<String?>(null) }
     var recentAudioUri by remember { mutableStateOf<String?>(null) }
+    fun rebuildFolderBookFiles() {
+        folderBookFiles.clear()
+        folderBookFiles.addAll(
+            folderBookFilesByFolder.values
+                .flatten()
+                .distinctBy { it.normalizedBookKey() }
+                .sortedBy { it.name.lowercase() }
+        )
+    }
+
+    fun replaceFolderBookFiles(folderId: String, files: List<LocalMediaFile>) {
+        if (files.isEmpty()) {
+            folderBookFilesByFolder.remove(folderId)
+        } else {
+            folderBookFilesByFolder[folderId] = files
+                .filter { it.type == LocalMediaType.BOOK }
+                .distinctBy { it.normalizedBookKey() }
+        }
+        rebuildFolderBookFiles()
+    }
+
+    fun clearFolderBookFiles() {
+        folderBookFilesByFolder.clear()
+        folderBookFiles.clear()
+    }
+
+    fun refreshFolderCounts(type: LocalMediaType, folderId: String) {
+        val files = scannedFilesByFolder[typedFolderKey(type, folderId)].orEmpty()
+        val targetFolders = when (type) {
+            LocalMediaType.VIDEO -> videoFolders
+            LocalMediaType.AUDIO -> audioFolders
+            LocalMediaType.BOOK -> bookFolders
+            else -> return
+        }
+        targetFolders.updateFolder(folderId) {
+            copy(
+                videoCount = files.count { it.type == LocalMediaType.VIDEO },
+                audioCount = files.count { it.type == LocalMediaType.AUDIO },
+                bookCount = files.count { it.type == LocalMediaType.BOOK },
+                isScanning = false
+            )
+        }
+    }
+
+    fun removeFileFromFolderState(type: LocalMediaType, file: LocalMediaFile) {
+        val prefix = "${type.name}:"
+        scannedFilesByFolder.keys
+            .filter { it.startsWith(prefix) }
+            .toList()
+            .forEach { key ->
+                val nextFiles = scannedFilesByFolder[key]
+                    .orEmpty()
+                    .filterNot { it.uri == file.uri }
+                if (nextFiles.isEmpty()) {
+                    scannedFilesByFolder.remove(key)
+                } else {
+                    scannedFilesByFolder[key] = nextFiles
+                }
+                val folderId = key.removePrefix(prefix)
+                if (type == LocalMediaType.BOOK) {
+                    replaceFolderBookFiles(folderId, nextFiles)
+                }
+                refreshFolderCounts(type, folderId)
+            }
+    }
+
+    fun removeMediaFromMemory(file: LocalMediaFile) {
+        when (file.type) {
+            LocalMediaType.VIDEO -> {
+                removeFileFromFolderState(LocalMediaType.VIDEO, file)
+                videoProgressMap.remove(file.uri)
+                videoMetadataCache.remove(file.id)
+                videoQueue = videoQueue.filterNot { it.uri == file.uri }
+                currentVideoIndex = currentVideoIndex.coerceAtMost(videoQueue.lastIndex.coerceAtLeast(0))
+                if (selectedVideoUri == file.uri) {
+                    selectedVideoUri = null
+                    selectedMediaFile = selectedMediaFile?.takeIf { it.uri != file.uri }
+                }
+                if (recentVideoUri == file.uri) {
+                    recentVideoUri = null
+                    recentVideoFile = null
+                }
+            }
+
+            LocalMediaType.AUDIO -> {
+                removeFileFromFolderState(LocalMediaType.AUDIO, file)
+                audioProgressMap.remove(file.uri)
+                audioQueue = audioQueue.filterNot { it.uri == file.uri }
+                currentAudioIndex = currentAudioIndex.coerceAtMost(audioQueue.lastIndex.coerceAtLeast(0))
+                if (selectedAudioUri == file.uri) {
+                    selectedAudioUri = null
+                    selectedMediaFile = selectedMediaFile?.takeIf { it.uri != file.uri }
+                }
+                if (recentAudioUri == file.uri) {
+                    recentAudioUri = null
+                }
+            }
+
+            LocalMediaType.BOOK -> {
+                val bookKey = file.normalizedBookKey()
+                importedBookFiles.removeAll { it.normalizedBookKey() == bookKey }
+                removeFileFromFolderState(LocalMediaType.BOOK, file)
+            }
+
+            else -> Unit
+        }
+    }
+
+    fun removeMediaFromList(file: LocalMediaFile) {
+        coroutineScope.launch {
+            val bookKey = file.normalizedBookKey()
+            val wasImportedBook = file.type == LocalMediaType.BOOK &&
+                importedBookFiles.any { it.normalizedBookKey() == bookKey }
+            removeMediaFromMemory(file)
+            if (file.type == LocalMediaType.VIDEO) {
+                appStateStore.saveProgress(
+                    PersistedPlaybackProgress(
+                        mediaUri = file.uri,
+                        mediaType = LocalMediaType.VIDEO.name,
+                        positionMs = 0L,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+                appStateStore.saveRecentVideoUri(recentVideoUri)
+            }
+            if (file.type == LocalMediaType.AUDIO) {
+                appStateStore.saveRecentAudioUri(recentAudioUri)
+            }
+            if (wasImportedBook) {
+                appStateStore.removePersistedBookFile(file.uri)
+            }
+            Toast.makeText(
+                context,
+                if (file.type == LocalMediaType.BOOK) {
+                    "已从书架移除"
+                } else {
+                    "已从当前列表移除，重新扫描后可能恢复"
+                },
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    fun permanentlyDeleteMedia(file: LocalMediaFile) {
+        coroutineScope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                deleteUri(context.applicationContext, file.uri)
+            }
+            if (deleted) {
+                removeMediaFromMemory(file)
+                when (file.type) {
+                    LocalMediaType.VIDEO -> {
+                        appStateStore.saveProgress(
+                            PersistedPlaybackProgress(
+                                mediaUri = file.uri,
+                                mediaType = LocalMediaType.VIDEO.name,
+                                positionMs = 0L,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                        appStateStore.saveRecentVideoUri(recentVideoUri)
+                    }
+
+                    LocalMediaType.AUDIO -> appStateStore.saveRecentAudioUri(recentAudioUri)
+                    LocalMediaType.BOOK -> appStateStore.removePersistedBookFile(file.uri)
+                    else -> Unit
+                }
+                Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "删除失败，请检查文件权限", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun updateCategoryFolder(
         targetType: LocalMediaType,
         folder: MediaFolderUiModel,
@@ -147,6 +324,9 @@ private fun LocalVibeApp() {
         }
         targetFolders.upsertFolder(folder.id) { folder }
         scannedFilesByFolder[typedFolderKey(targetType, folder.id)] = files
+        if (targetType == LocalMediaType.BOOK) {
+            replaceFolderBookFiles(folder.id, files)
+        }
     }
 
     fun runAutoScan(targetType: LocalMediaType, showCompletionToast: Boolean = false) {
@@ -189,33 +369,12 @@ private fun LocalVibeApp() {
                 }
 
                 LocalMediaType.BOOK -> {
-                    if (bookFolders.isEmpty()) {
-                        Toast.makeText(context, "请先添加小说文件夹。", Toast.LENGTH_SHORT).show()
-                    } else {
-                        val refreshedFolders = bookFolders.toList()
-                        refreshedFolders.forEach { folder ->
-                            val scannedFiles = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    FolderScanner.scanFolder(
-                                        context.applicationContext,
-                                        Uri.parse(folder.uri)
-                                    )
-                                }.getOrDefault(emptyList())
-                            }
-                            val bookFiles = scannedFiles.filter { it.type == LocalMediaType.BOOK }
-                            if (bookFiles.isNotEmpty()) {
-                                updateCategoryFolder(
-                                    targetType = LocalMediaType.BOOK,
-                                    folder = folder.copy(
-                                        videoCount = 0,
-                                        audioCount = 0,
-                                        bookCount = bookFiles.size,
-                                        isScanning = false
-                                    ),
-                                    files = bookFiles
-                                )
-                            }
-                        }
+                    Log.d(
+                        BOOK_LOG_TAG,
+                        "book folder scan skipped, imported=${importedBookFiles.size}, folder=${folderBookFiles.size}"
+                    )
+                    if (showCompletionToast) {
+                        Toast.makeText(context, "小说请通过导入本地文档添加", Toast.LENGTH_SHORT).show()
                     }
                 }
 
@@ -284,6 +443,9 @@ private fun LocalVibeApp() {
             if (typedFiles.isEmpty()) {
                 targetFolders.removeAll { it.id == uriText }
                 scannedFilesByFolder.remove(typedFolderKey(targetType, uriText))
+                if (targetType == LocalMediaType.BOOK) {
+                    replaceFolderBookFiles(uriText, emptyList())
+                }
                 Toast.makeText(context, targetType.emptyFolderMessage(), Toast.LENGTH_SHORT).show()
             } else {
                 updateCategoryFolder(
@@ -344,8 +506,6 @@ private fun LocalVibeApp() {
             }.onFailure {
                 Log.w(BOOK_LOG_TAG, "persist permission failed uri=$uriText", it)
             }
-            importedBookFiles.removeAll { it.uri == uriText }
-            importedBookFiles.add(bookFile)
             persistedBooks.add(
                 PersistedBookFile(
                     id = uriText,
@@ -357,19 +517,33 @@ private fun LocalVibeApp() {
         }
         if (persistedBooks.isNotEmpty()) {
             coroutineScope.launch {
+                val importedBefore = importedBookFiles.size
+                val persistedBefore = appStateStore.getPersistedBookFiles().size
                 appStateStore.upsertPersistedBookFiles(persistedBooks)
                 val savedBooks = appStateStore.getPersistedBookFiles()
+                val selectedBookKeys = selectedBooks
+                    .map { it.second.normalizedBookKey() }
+                    .toSet()
+                val nextImportedBooks = importedBookFiles
+                    .filterNot { it.normalizedBookKey() in selectedBookKeys }
+                    .plus(selectedBooks.map { it.second })
+                    .distinctBy { it.normalizedBookKey() }
+                    .sortedBy { it.name.lowercase() }
+                importedBookFiles.clear()
+                importedBookFiles.addAll(nextImportedBooks)
                 Log.d(
                     BOOK_LOG_TAG,
-                    "saved imported book count=${savedBooks.size}, uris=${savedBooks.joinToString { it.uri }}"
+                    "persisted before=$persistedBefore, saved book files count=${savedBooks.size}, distinct before=${persistedBooks.size}, distinct after=${savedBooks.distinctBy { it.uri.trim() }.size}, uris=${savedBooks.joinToString { it.uri }}"
                 )
+                Log.d(
+                    BOOK_LOG_TAG,
+                    "imported before=$importedBefore, importedBookFiles count=${importedBookFiles.size}, uris=${importedBookFiles.joinToString { it.uri }}"
+                )
+                Toast.makeText(context, "已导入 ${selectedBooks.size} 本小说", Toast.LENGTH_SHORT).show()
             }
         }
         if (skippedCount > 0) {
             Toast.makeText(context, "已跳过非 TXT 文件", Toast.LENGTH_SHORT).show()
-        }
-        if (selectedBooks.isNotEmpty()) {
-            Toast.makeText(context, "已导入 ${selectedBooks.size} 本小说", Toast.LENGTH_SHORT).show()
         }
     }
     fun autoScanVideoAndAudio(force: Boolean = false, showCompletionToast: Boolean = false) {
@@ -414,11 +588,54 @@ private fun LocalVibeApp() {
         var skippedFolderCount = 0
         var restoredFolderBookCount = 0
 
+        val persistedBookFiles = appStateStore.getPersistedBookFiles()
+        Log.d(BOOK_LOG_TAG, "persistedBookFiles count=${persistedBookFiles.size}")
+        val restoredImportedBooks = mutableListOf<LocalMediaFile>()
+        persistedBookFiles.forEach { persistedBook ->
+            val uri = Uri.parse(persistedBook.uri)
+            val canOpen = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { true } ?: false
+                }.onFailure {
+                    Log.w(BOOK_LOG_TAG, "restore imported book failed uri=${persistedBook.uri}", it)
+                }.getOrDefault(false)
+            }
+            if (!canOpen) {
+                return@forEach
+            }
+            val file = uri.toLocalBookFile(context.applicationContext)
+                ?: LocalMediaFile(
+                    id = persistedBook.uri,
+                    name = persistedBook.name,
+                    uri = persistedBook.uri,
+                    type = LocalMediaType.BOOK,
+                    extension = "txt",
+                    size = 0L,
+                    parentFolderName = null
+                )
+            restoredImportedBooks.add(file)
+            Log.d(
+                BOOK_LOG_TAG,
+                "restored imported book uri=${persistedBook.uri}, hasPermission=${persistedBook.uri in grantedUris}"
+            )
+        }
+        importedBookFiles.clear()
+        importedBookFiles.addAll(
+            restoredImportedBooks
+                .distinctBy { it.normalizedBookKey() }
+                .sortedBy { it.name.lowercase() }
+        )
+        Log.d(BOOK_LOG_TAG, "restored imported book files count=${importedBookFiles.size}")
+
         appStateStore.loadFolders()
             .filter { it.source == "MANUAL" }
             .forEach { persistedFolder ->
                 val targetType = persistedFolder.targetType.toLocalMediaTypeOrNull()
                     ?: return@forEach
+                if (targetType == LocalMediaType.BOOK) {
+                    Log.d(BOOK_LOG_TAG, "skip restored book folder uri=${persistedFolder.uri}")
+                    return@forEach
+                }
                 if (persistedFolder.uri !in grantedUris) {
                     skippedFolderCount += 1
                     return@forEach
@@ -450,34 +667,15 @@ private fun LocalVibeApp() {
                         ),
                         files = typedFiles
                     )
+                } else if (targetType == LocalMediaType.BOOK) {
+                    replaceFolderBookFiles(persistedFolder.folderId, emptyList())
                 }
             }
         Log.d(BOOK_LOG_TAG, "restored folder book count=$restoredFolderBookCount")
-
-        val persistedBookFiles = appStateStore.getPersistedBookFiles()
-        Log.d(BOOK_LOG_TAG, "restored count from DataStore=${persistedBookFiles.size}")
-        var restoredBookCount = 0
-        persistedBookFiles.forEach { persistedBook ->
-            val hasPermission = persistedBook.uri in grantedUris
-            val file = Uri.parse(persistedBook.uri).toLocalBookFile(context.applicationContext)
-                ?: LocalMediaFile(
-                    id = persistedBook.uri,
-                    name = persistedBook.name,
-                    uri = persistedBook.uri,
-                    type = LocalMediaType.BOOK,
-                    extension = "txt",
-                    size = 0L,
-                    parentFolderName = null
-                )
-            importedBookFiles.removeAll { it.uri == file.uri }
-            importedBookFiles.add(file)
-            restoredBookCount += 1
-            Log.d(
-                BOOK_LOG_TAG,
-                "restored book uri=${persistedBook.uri}, hasPermission=$hasPermission"
-            )
-        }
-        Log.d(BOOK_LOG_TAG, "restored book files count=$restoredBookCount")
+        Log.d(
+            BOOK_LOG_TAG,
+            "final bookFiles count=${importedBookFiles.distinctBy { it.normalizedBookKey() }.size}"
+        )
 
         if (skippedFolderCount > 0) {
             Toast.makeText(context, "部分文件夹需要重新授权", Toast.LENGTH_SHORT).show()
@@ -633,6 +831,12 @@ private fun LocalVibeApp() {
                                 navController.navigate(LocalVibeRoute.AudioPlayer)
                             }
                         },
+                        onRemoveAudio = { file ->
+                            removeMediaFromList(file)
+                        },
+                        onDeleteAudio = { file ->
+                            permanentlyDeleteMedia(file)
+                        },
                         onRescanAudio = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
                         },
@@ -642,24 +846,13 @@ private fun LocalVibeApp() {
             }
             composable(LocalVibeRoute.BookLibrary) {
                 MainTabScaffold(navController = navController) { contentModifier ->
-                    val bookFolderGroups = bookFolders.map { folder ->
-                        MediaFolderGroupUiModel(
-                            folder = folder,
-                            files = scannedFilesByFolder[
-                                typedFolderKey(LocalMediaType.BOOK, folder.id)
-                            ].orEmpty(),
-                            source = folder.sourceLabel()
-                        )
-                    }
-                    val bookFiles = bookFolderGroups
-                        .flatMap { it.files }
-                        .plus(importedBookFiles)
-                        .distinctBy { it.uri }
+                    val bookFiles = importedBookFiles
+                        .distinctBy { it.normalizedBookKey() }
                         .sortedBy { it.name.lowercase() }
                     LaunchedEffect(bookFiles.size) {
                         Log.d(
                             BOOK_LOG_TAG,
-                            "final bookFiles count=${bookFiles.size}, uris=${bookFiles.joinToString { it.uri }}"
+                            "final bookFiles count=${bookFiles.size}, imported=${importedBookFiles.size}, folderIgnored=${folderBookFiles.size}, uris=${bookFiles.joinToString { it.uri }}"
                         )
                     }
                     BookLibraryScreen(
@@ -670,7 +863,13 @@ private fun LocalVibeApp() {
                             )
                         },
                         onRescanBooks = {
-                            runAutoScan(LocalMediaType.BOOK, showCompletionToast = true)
+                            Toast.makeText(context, "小说请通过导入本地文档添加", Toast.LENGTH_SHORT).show()
+                        },
+                        onRemoveBook = { file ->
+                            removeMediaFromList(file)
+                        },
+                        onDeleteBook = { file ->
+                            permanentlyDeleteMedia(file)
                         },
                         modifier = contentModifier
                     )
@@ -733,6 +932,12 @@ private fun LocalVibeApp() {
                             appStateStore.saveRecentAudioUri(file.uri)
                         }
                         navController.navigate(LocalVibeRoute.AudioPlayer)
+                    },
+                    onRemoveFile = { file ->
+                        removeMediaFromList(file)
+                    },
+                    onDeleteFile = { file ->
+                        permanentlyDeleteMedia(file)
                     },
                     onBack = { navController.popBackStack() }
                 )
@@ -844,6 +1049,7 @@ private fun LocalVibeApp() {
                             audioFolders.removeManualFoldersAndScans(LocalMediaType.AUDIO, scannedFilesByFolder)
                             bookFolders.removeManualFoldersAndScans(LocalMediaType.BOOK, scannedFilesByFolder)
                             importedBookFiles.clear()
+                            clearFolderBookFiles()
                             Toast.makeText(context, "已添加文件夹记录已清除", Toast.LENGTH_SHORT).show()
                         }
                     },
@@ -856,6 +1062,7 @@ private fun LocalVibeApp() {
                             appStateStore.clearPersistedBookFiles()
                             bookFolders.removeManualFoldersAndScans(LocalMediaType.BOOK, scannedFilesByFolder)
                             importedBookFiles.clear()
+                            clearFolderBookFiles()
                             Toast.makeText(context, "小说导入记录已清除", Toast.LENGTH_SHORT).show()
                         }
                     },
@@ -1022,6 +1229,11 @@ private fun typedFolderKey(
     type: LocalMediaType,
     folderId: String
 ): String = "${type.name}:$folderId"
+
+private fun LocalMediaFile.normalizedBookKey(): String {
+    val normalizedUri = uri.trim()
+    return normalizedUri.ifBlank { "${name.trim().lowercase()}:$size" }
+}
 
 private fun LocalMediaType.mediaReadPermission(): String? {
     return when {

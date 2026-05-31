@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -26,6 +27,8 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +66,8 @@ fun AudioLibraryScreen(
     onOpenFolder: (MediaFolderGroupUiModel) -> Unit,
     onOpenAudio: (LocalMediaFile, List<LocalMediaFile>) -> Unit,
     onShuffleAll: (List<LocalMediaFile>) -> Unit,
+    onRemoveAudio: (LocalMediaFile) -> Unit,
+    onDeleteAudio: (LocalMediaFile) -> Unit,
     onRescanAudio: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -155,6 +160,8 @@ fun AudioLibraryScreen(
                                     SongCard(
                                         file = song,
                                         progressMs = audioProgressMap[song.uri] ?: 0L,
+                                        onRemove = { onRemoveAudio(song) },
+                                        onDelete = { onDeleteAudio(song) },
                                         onClick = { onOpenAudio(song, shownSongs) }
                                     )
                                 }
@@ -354,9 +361,10 @@ private fun FloatingSearchBar(
 private fun SongCard(
     file: LocalMediaFile,
     progressMs: Long,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit,
     onClick: () -> Unit
 ) {
-    val context = LocalContext.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -403,14 +411,69 @@ private fun SongCard(
                     )
                 }
             }
-            TextButton(
-                onClick = {
-                    Toast.makeText(context, "更多操作后续实现", Toast.LENGTH_SHORT).show()
-                }
-            ) {
-                Text("更多")
-            }
+            SongMoreMenu(
+                onRemove = onRemove,
+                onDelete = onDelete
+            )
         }
+    }
+}
+
+@Composable
+private fun SongMoreMenu(
+    onRemove: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            DropdownMenuItem(
+                text = { Text("从列表移除") },
+                onClick = {
+                    expanded = false
+                    onRemove()
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("永久删除文件") },
+                onClick = {
+                    expanded = false
+                    showDeleteConfirm = true
+                }
+            )
+        }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("永久删除？") },
+            text = { Text("此操作会删除本地文件，无法从 Moon播放器 恢复。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 

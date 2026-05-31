@@ -45,38 +45,35 @@ class AppStateStore(private val context: Context) {
 
     suspend fun getPersistedBookFiles(): List<PersistedBookFile> {
         val json = context.appStateDataStore.data.first()[BookFilesKey].orEmpty()
-        if (json.isBlank()) return emptyList()
-
-        return runCatching {
-            val array = JSONArray(json)
-            List(array.length()) { index ->
-                val item = array.getJSONObject(index)
-                PersistedBookFile(
-                    id = item.getString("id"),
-                    name = item.getString("name"),
-                    uri = item.getString("uri"),
-                    addedAt = item.optLong("addedAt", 0L),
-                    progressPercent = item.optInt("progressPercent", 0),
-                    source = item.optString("source", "FILE")
-                )
-            }
-        }.getOrDefault(emptyList())
+        return decodeBookFiles(json)
     }
 
     suspend fun savePersistedBookFiles(files: List<PersistedBookFile>) {
-        saveBookFiles(files.distinctBy { it.uri })
+        saveBookFiles(files.distinctBy { it.uri.trim() })
     }
 
     suspend fun upsertPersistedBookFiles(files: List<PersistedBookFile>) {
-        val incomingUris = files.map { it.uri }.toSet()
-        val next = getPersistedBookFiles()
-            .filterNot { it.uri in incomingUris }
-            .plus(files)
-        saveBookFiles(next)
+        val incomingUris = files.map { it.uri.trim() }.toSet()
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeBookFiles(prefs[BookFilesKey].orEmpty())
+                .filterNot { it.uri.trim() in incomingUris }
+                .plus(files)
+                .distinctBy { it.uri.trim() }
+            prefs[BookFilesKey] = encodeBookFiles(next)
+        }
     }
 
     suspend fun clearPersistedBookFiles() {
         saveBookFiles(emptyList())
+    }
+
+    suspend fun removePersistedBookFile(uri: String) {
+        val normalizedUri = uri.trim()
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeBookFiles(prefs[BookFilesKey].orEmpty())
+                .filterNot { it.uri.trim() == normalizedUri }
+            prefs[BookFilesKey] = encodeBookFiles(next)
+        }
     }
 
     suspend fun loadBookFiles(): List<PersistedBookFile> = getPersistedBookFiles()
@@ -192,8 +189,32 @@ class AppStateStore(private val context: Context) {
     }
 
     private suspend fun saveBookFiles(files: List<PersistedBookFile>) {
+        context.appStateDataStore.edit { prefs ->
+            prefs[BookFilesKey] = encodeBookFiles(files)
+        }
+    }
+
+    private fun decodeBookFiles(json: String): List<PersistedBookFile> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val array = JSONArray(json)
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                PersistedBookFile(
+                    id = item.getString("id"),
+                    name = item.getString("name"),
+                    uri = item.getString("uri"),
+                    addedAt = item.optLong("addedAt", 0L),
+                    progressPercent = item.optInt("progressPercent", 0),
+                    source = item.optString("source", "FILE")
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeBookFiles(files: List<PersistedBookFile>): String {
         val array = JSONArray()
-        files.forEach { file ->
+        files.distinctBy { it.uri.trim() }.forEach { file ->
             array.put(
                 JSONObject()
                     .put("id", file.id)
@@ -204,9 +225,7 @@ class AppStateStore(private val context: Context) {
                     .put("source", file.source)
             )
         }
-        context.appStateDataStore.edit { prefs ->
-            prefs[BookFilesKey] = array.toString()
-        }
+        return array.toString()
     }
 
     private companion object {

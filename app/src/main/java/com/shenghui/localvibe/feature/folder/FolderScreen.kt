@@ -16,9 +16,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -62,6 +69,8 @@ fun FolderScreen(
     audioProgressMap: Map<String, Long>,
     onOpenVideo: (LocalMediaFile) -> Unit,
     onOpenAudio: (LocalMediaFile) -> Unit,
+    onRemoveFile: (LocalMediaFile) -> Unit,
+    onDeleteFile: (LocalMediaFile) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -132,6 +141,8 @@ fun FolderScreen(
                                 progressMs = videoProgressMap[file.uri] ?: 0L,
                                 metadata = videoMetadataCache[file.id],
                                 onMetadataLoaded = onVideoMetadataLoaded,
+                                onRemove = { onRemoveFile(file) },
+                                onDelete = { onDeleteFile(file) },
                                 onOpenVideo = { onOpenVideo(file) }
                             )
 
@@ -139,6 +150,8 @@ fun FolderScreen(
                                 file = file,
                                 iconText = "♪",
                                 progressMs = audioProgressMap[file.uri] ?: 0L,
+                                onRemove = { onRemoveFile(file) },
+                                onDelete = { onDeleteFile(file) },
                                 onClick = { onOpenAudio(file) }
                             )
 
@@ -146,6 +159,8 @@ fun FolderScreen(
                                 file = file,
                                 iconText = "文",
                                 progressMs = 0L,
+                                onRemove = { onRemoveFile(file) },
+                                onDelete = { onDeleteFile(file) },
                                 onClick = {
                                     Toast.makeText(context, "TXT 听书功能下一步实现", Toast.LENGTH_SHORT)
                                         .show()
@@ -166,6 +181,8 @@ fun FolderScreen(
                                 LocalMediaType.AUDIO -> audioProgressMap[file.uri] ?: 0L
                                 else -> 0L
                             },
+                            onRemove = { onRemoveFile(file) },
+                            onDelete = { onDeleteFile(file) },
                             onClick = {
                                 when (file.type) {
                                     LocalMediaType.VIDEO -> onOpenVideo(file)
@@ -189,6 +206,8 @@ private fun TypedFileCard(
     file: LocalMediaFile,
     iconText: String,
     progressMs: Long,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit,
     onClick: () -> Unit
 ) {
     Card(
@@ -241,6 +260,11 @@ private fun TypedFileCard(
                     )
                 }
             }
+            FileMoreMenu(
+                file = file,
+                onRemove = onRemove,
+                onDelete = onDelete
+            )
         }
     }
 }
@@ -251,6 +275,8 @@ private fun VideoFileCard(
     progressMs: Long,
     metadata: VideoMetadata?,
     onMetadataLoaded: (String, VideoMetadata) -> Unit,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit,
     onOpenVideo: () -> Unit
 ) {
     val context = LocalContext.current
@@ -303,13 +329,11 @@ private fun VideoFileCard(
                     )
                 }
             }
-            TextButton(
-                onClick = {
-                    Toast.makeText(context, "更多操作后续实现", Toast.LENGTH_SHORT).show()
-                }
-            ) {
-                Text("更多")
-            }
+            FileMoreMenu(
+                file = file,
+                onRemove = onRemove,
+                onDelete = onDelete
+            )
         }
     }
 }
@@ -345,6 +369,8 @@ private fun VideoThumbnail(metadata: VideoMetadata?) {
 private fun FileCard(
     file: LocalMediaFile,
     progressMs: Long,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit,
     onClick: () -> Unit
 ) {
     Card(
@@ -355,29 +381,106 @@ private fun FileCard(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = file.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = "${file.type.displayName()} · ${file.size.formatFileSize()}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if ((file.type == LocalMediaType.VIDEO || file.type == LocalMediaType.AUDIO) && progressMs > 0L) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(
-                    text = "上次播放到 ${formatDuration(progressMs)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
+                    text = file.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Text(
+                    text = "${file.type.displayName()} · ${file.size.formatFileSize()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if ((file.type == LocalMediaType.VIDEO || file.type == LocalMediaType.AUDIO) && progressMs > 0L) {
+                    Text(
+                        text = "上次播放到 ${formatDuration(progressMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
+            FileMoreMenu(
+                file = file,
+                onRemove = onRemove,
+                onDelete = onDelete
+            )
         }
+    }
+}
+
+@Composable
+private fun FileMoreMenu(
+    file: LocalMediaFile,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            DropdownMenuItem(
+                text = { Text("从列表移除") },
+                onClick = {
+                    expanded = false
+                    onRemove()
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("永久删除文件") },
+                onClick = {
+                    expanded = false
+                    showDeleteConfirm = true
+                }
+            )
+        }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(if (file.type == LocalMediaType.BOOK) "永久删除小说？" else "永久删除？") },
+            text = {
+                Text(
+                    if (file.type == LocalMediaType.BOOK) {
+                        "此操作会删除本地 TXT 文件，无法从 Moon播放器 恢复。"
+                    } else {
+                        "此操作会删除本地文件，无法从 Moon播放器 恢复。"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 

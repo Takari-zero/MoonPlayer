@@ -168,6 +168,8 @@ private fun LocalVideoPlayer(
     var gestureOverlay by remember { mutableStateOf<String?>(null) }
     var showControls by remember { mutableStateOf(true) }
     var currentPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
+    var draggingPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
+    var isSeekingByUser by remember { mutableStateOf(false) }
     var durationMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(true) }
     var gestureStart by remember { mutableStateOf(Offset.Zero) }
@@ -214,7 +216,9 @@ private fun LocalVideoPlayer(
     }
     LaunchedEffect(player) {
         while (true) {
-            currentPositionMs = player.currentPosition.coerceAtLeast(0L)
+            if (!isSeekingByUser) {
+                currentPositionMs = player.currentPosition.coerceAtLeast(0L)
+            }
             durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
             isPlaying = player.isPlaying
             delay(500)
@@ -296,11 +300,26 @@ private fun LocalVideoPlayer(
         if (showControls) {
             VideoControlOverlay(
                 title = mediaFile.name,
-                currentPositionMs = currentPositionMs,
+                currentPositionMs = if (isSeekingByUser) draggingPositionMs else currentPositionMs,
                 durationMs = durationMs,
                 isPlaying = isPlaying,
                 onBack = onBack,
-                onSeek = { player.seekTo(it) },
+                onSeekStart = {
+                    isSeekingByUser = true
+                    draggingPositionMs = currentPositionMs
+                    showControls = true
+                },
+                onSeekPreview = {
+                    draggingPositionMs = it
+                    showControls = true
+                },
+                onSeekFinished = {
+                    val target = draggingPositionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+                    currentPositionMs = target
+                    player.seekTo(target)
+                    isSeekingByUser = false
+                    showControls = true
+                },
                 onPrevious = { previous() },
                 onPlayPause = {
                     if (player.isPlaying) player.pause() else player.play()
@@ -334,12 +353,8 @@ private fun GestureValueOverlay(
 ) {
     Column(
         modifier = modifier
-            .width(58.dp)
-            .background(
-                Color(0xFF111827).copy(alpha = 0.30f),
-                shape = RoundedCornerShape(12.dp)
-            )
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .width(54.dp)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
@@ -378,7 +393,9 @@ private fun VideoControlOverlay(
     durationMs: Long,
     isPlaying: Boolean,
     onBack: () -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeekStart: () -> Unit,
+    onSeekPreview: (Long) -> Unit,
+    onSeekFinished: () -> Unit,
     onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit
@@ -414,9 +431,9 @@ private fun VideoControlOverlay(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.38f))
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+                .background(Color.Black.copy(alpha = 0.24f))
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -427,38 +444,40 @@ private fun VideoControlOverlay(
                 ThinVideoProgressBar(
                     currentPositionMs = currentPositionMs,
                     durationMs = durationMs,
-                    onSeek = onSeek,
+                    onSeekStart = onSeekStart,
+                    onSeekPreview = onSeekPreview,
+                    onSeekFinished = onSeekFinished,
                     modifier = Modifier.weight(1f)
                 )
                 Text(formatDuration(durationMs), color = Color.White)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),
+                horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onPrevious, modifier = Modifier.size(66.dp)) {
+                IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
                     Icon(
                         Icons.Filled.SkipPrevious,
                         contentDescription = "上一个",
                         tint = Color.White,
-                        modifier = Modifier.size(44.dp)
+                        modifier = Modifier.size(32.dp)
                     )
                 }
-                IconButton(onClick = onPlayPause, modifier = Modifier.size(86.dp)) {
+                IconButton(onClick = onPlayPause, modifier = Modifier.size(58.dp)) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = if (isPlaying) "暂停" else "播放",
                         tint = Color.White,
-                        modifier = Modifier.size(58.dp)
+                        modifier = Modifier.size(40.dp)
                     )
                 }
-                IconButton(onClick = onNext, modifier = Modifier.size(66.dp)) {
+                IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
                     Icon(
                         Icons.Filled.SkipNext,
                         contentDescription = "下一个",
                         tint = Color.White,
-                        modifier = Modifier.size(44.dp)
+                        modifier = Modifier.size(32.dp)
                     )
                 }
             }
@@ -470,7 +489,9 @@ private fun VideoControlOverlay(
 private fun ThinVideoProgressBar(
     currentPositionMs: Long,
     durationMs: Long,
-    onSeek: (Long) -> Unit,
+    onSeekStart: () -> Unit,
+    onSeekPreview: (Long) -> Unit,
+    onSeekFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val safeDuration = durationMs.coerceAtLeast(1L)
@@ -484,36 +505,46 @@ private fun ThinVideoProgressBar(
 
     BoxWithConstraints(
         modifier = modifier
-            .height(30.dp)
+            .height(22.dp)
             .pointerInput(safeDuration) {
                 detectTapGestures { offset ->
-                    onSeek(offset.toSeekPosition(size.width))
+                    onSeekStart()
+                    onSeekPreview(offset.toSeekPosition(size.width))
+                    onSeekFinished()
                 }
             }
             .pointerInput(safeDuration) {
-                detectDragGestures { change, _ ->
-                    onSeek(change.position.toSeekPosition(size.width))
-                    change.consume()
-                }
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        onSeekStart()
+                        onSeekPreview(offset.toSeekPosition(size.width))
+                    },
+                    onDragEnd = { onSeekFinished() },
+                    onDragCancel = { onSeekFinished() },
+                    onDrag = { change, _ ->
+                        onSeekPreview(change.position.toSeekPosition(size.width))
+                        change.consume()
+                    }
+                )
             },
         contentAlignment = Alignment.CenterStart
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(3.dp)
+                .height(2.dp)
                 .background(Color(0xFF2E3445), RoundedCornerShape(99.dp))
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth(progressFraction)
-                .height(3.dp)
+                .height(2.dp)
                 .background(Color(0xFF4D8DFF), RoundedCornerShape(99.dp))
         )
         Box(
             modifier = Modifier
-                .offset(x = (maxWidth - 12.dp) * progressFraction)
-                .size(12.dp)
+                .offset(x = (maxWidth - 10.dp) * progressFraction)
+                .size(10.dp)
                 .background(Color(0xFF8AB6FF), CircleShape)
         )
     }

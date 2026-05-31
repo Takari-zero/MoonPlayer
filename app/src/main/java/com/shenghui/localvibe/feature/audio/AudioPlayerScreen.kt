@@ -7,14 +7,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,7 +32,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -53,6 +57,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -65,9 +70,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -392,28 +397,44 @@ private fun LocalAudioPlayer(
                     DropdownMenu(
                         expanded = showPlayModeMenu,
                         onDismissRequest = { showPlayModeMenu = false },
-                        containerColor = Color(0xFF17141C)
+                        modifier = Modifier.width(168.dp),
+                        containerColor = Color(0xFF141821),
+                        shape = RoundedCornerShape(20.dp)
                     ) {
-                        AudioPlayMode.entries.forEach { mode ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = mode.fullLabel(),
-                                        color = if (mode == playMode) Color(0xFF8AB6FF) else Color.White
-                                    )
-                                },
-                                leadingIcon = {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            AudioPlayMode.entries.forEach { mode ->
+                                val selected = mode == playMode
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (selected) Color(0xFF203B68) else Color.Transparent
+                                        )
+                                        .clickable {
+                                            onPlayModeChanged(mode)
+                                            showPlayModeMenu = false
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
                                     Icon(
                                         imageVector = mode.icon(),
                                         contentDescription = null,
-                                        tint = if (mode == playMode) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.82f)
+                                        tint = if (selected) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.82f),
+                                        modifier = Modifier.size(22.dp)
                                     )
-                                },
-                                onClick = {
-                                    onPlayModeChanged(mode)
-                                    showPlayModeMenu = false
+                                    Text(
+                                        text = mode.fullLabel(),
+                                        color = if (selected) Color(0xFF8AB6FF) else Color.White,
+                                        fontSize = 15.sp
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
@@ -646,16 +667,18 @@ private fun EqualizerDialog(
     onReset: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         containerColor = Color(0xFF17141C)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(500.dp)
-                .padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxHeight(0.42f)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -668,7 +691,7 @@ private fun EqualizerDialog(
                     Switch(
                         checked = enabled,
                         onCheckedChange = onEnabledChange,
-                        modifier = Modifier.scale(0.68f),
+                        modifier = Modifier.scale(0.62f),
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color(0xFF8AB6FF),
                             checkedTrackColor = Color(0xFF254A7A),
@@ -688,7 +711,7 @@ private fun EqualizerDialog(
                 }
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 EqualizerPreset.entries
                     .filterNot { it == EqualizerPreset.CUSTOM }
@@ -801,33 +824,61 @@ private fun VerticalBandControl(
     Column(
         modifier = Modifier.width(48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        val fraction = ((level + 12f) / 24f).coerceIn(0f, 1f)
+        val controlAlpha = if (enabled) 1f else 0.38f
+        fun androidx.compose.ui.geometry.Offset.toBandLevel(height: Int): Float {
+            val nextFraction = (1f - y / height.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+            return (-12f + nextFraction * 24f).coerceIn(-12f, 12f)
+        }
+
         Text(
             text = "${if (level > 0f) "+" else ""}${level.toInt()} dB",
             color = Color.White.copy(alpha = 0.76f),
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             maxLines = 1
         )
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
-                .height(240.dp)
-                .width(48.dp),
+                .height(170.dp)
+                .width(38.dp)
+                .pointerInput(enabled) {
+                    detectTapGestures { offset ->
+                        if (enabled) {
+                            onLevelChange(offset.toBandLevel(size.height))
+                        }
+                    }
+                }
+                .pointerInput(enabled) {
+                    detectDragGestures { change, _ ->
+                        if (enabled) {
+                            onLevelChange(change.position.toBandLevel(size.height))
+                            change.consume()
+                        }
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
-            Slider(
-                value = level,
-                onValueChange = onLevelChange,
-                valueRange = -12f..12f,
-                enabled = enabled,
-                colors = SliderDefaults.colors(
-                    activeTrackColor = Color(0xFF4D8DFF),
-                    inactiveTrackColor = Color(0xFF2E3445),
-                    thumbColor = Color(0xFF8AB6FF)
-                ),
+            Box(
                 modifier = Modifier
-                    .width(240.dp)
-                    .rotate(-90f)
+                    .height(maxHeight)
+                    .width(2.dp)
+                    .background(Color(0xFF2E3445).copy(alpha = controlAlpha), RoundedCornerShape(99.dp))
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .height(maxHeight * fraction)
+                    .width(2.dp)
+                    .background(Color(0xFF4D8DFF).copy(alpha = controlAlpha), RoundedCornerShape(99.dp))
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = (maxHeight - 8.dp) * (1f - fraction))
+                    .size(8.dp)
+                    .background(Color(0xFF8AB6FF).copy(alpha = controlAlpha), CircleShape)
             )
         }
         Text(
