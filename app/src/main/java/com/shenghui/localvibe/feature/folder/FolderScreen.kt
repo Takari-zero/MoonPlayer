@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -43,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.shenghui.localvibe.core.media.VideoMetadata
@@ -121,14 +123,26 @@ fun FolderScreen(
                     }
                 )
             } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(onClick = onBack) { Text("返回") }
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.align(Alignment.CenterStart)
+                    ) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                    Text(
+                        text = folderName.ifBlank { "未命名文件夹" },
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .fillMaxWidth()
+                            .padding(horizontal = 56.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
                     var expanded by remember { mutableStateOf(false) }
-                    Box {
+                    Box(modifier = Modifier.align(Alignment.CenterEnd)) {
                         IconButton(onClick = { expanded = true }) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "更多")
                         }
@@ -148,15 +162,6 @@ fun FolderScreen(
                         }
                     }
                 }
-            }
-
-            if (!isMultiSelectMode) {
-                Text(
-                    text = folderName.ifBlank { "未命名文件夹" },
-                    style = MaterialTheme.typography.headlineMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
 
             if (targetType == null && !isMultiSelectMode) {

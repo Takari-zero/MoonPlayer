@@ -90,6 +90,38 @@ class AppStateStore(private val context: Context) {
         clearPersistedBookFiles()
     }
 
+    suspend fun loadBookProgress(): List<PersistedBookProgress> {
+        val json = context.appStateDataStore.data.first()[BookProgressKey].orEmpty()
+        return decodeBookProgress(json)
+    }
+
+    suspend fun saveBookProgress(progress: PersistedBookProgress) {
+        val normalizedUri = progress.uri.trim()
+        if (normalizedUri.isBlank()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeBookProgress(prefs[BookProgressKey].orEmpty())
+                .filterNot { it.uri.trim() == normalizedUri }
+                .plus(progress.copy(uri = normalizedUri))
+                .distinctBy { it.uri.trim() }
+            prefs[BookProgressKey] = encodeBookProgress(next)
+        }
+    }
+
+    suspend fun removeBookProgress(uri: String) {
+        val normalizedUri = uri.trim()
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeBookProgress(prefs[BookProgressKey].orEmpty())
+                .filterNot { it.uri.trim() == normalizedUri }
+            prefs[BookProgressKey] = encodeBookProgress(next)
+        }
+    }
+
+    suspend fun clearBookProgress() {
+        context.appStateDataStore.edit { prefs ->
+            prefs.remove(BookProgressKey)
+        }
+    }
+
     suspend fun loadHiddenAudioUris(): Set<String> {
         val json = context.appStateDataStore.data.first()[HiddenAudioUrisKey].orEmpty()
         if (json.isBlank()) return emptySet()
@@ -263,6 +295,36 @@ class AppStateStore(private val context: Context) {
         return array.toString()
     }
 
+    private fun decodeBookProgress(json: String): List<PersistedBookProgress> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val array = JSONArray(json)
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                PersistedBookProgress(
+                    uri = item.getString("uri"),
+                    paragraphIndex = item.optInt("paragraphIndex", 0).coerceAtLeast(0),
+                    totalParagraphs = item.optInt("totalParagraphs", 0).coerceAtLeast(0),
+                    updatedAt = item.optLong("updatedAt", 0L)
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeBookProgress(progressList: List<PersistedBookProgress>): String {
+        val array = JSONArray()
+        progressList.distinctBy { it.uri.trim() }.forEach { progress ->
+            array.put(
+                JSONObject()
+                    .put("uri", progress.uri)
+                    .put("paragraphIndex", progress.paragraphIndex)
+                    .put("totalParagraphs", progress.totalParagraphs)
+                    .put("updatedAt", progress.updatedAt)
+            )
+        }
+        return array.toString()
+    }
+
     private fun decodeHiddenAudioUris(json: String): Set<String> {
         if (json.isBlank()) return emptySet()
         return runCatching {
@@ -299,6 +361,7 @@ class AppStateStore(private val context: Context) {
     private companion object {
         val FoldersKey = stringPreferencesKey("manual_folders_json")
         val BookFilesKey = stringPreferencesKey("book_files_json")
+        val BookProgressKey = stringPreferencesKey("book_progress_json")
         val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
         val ProgressKey = stringPreferencesKey("playback_progress_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")

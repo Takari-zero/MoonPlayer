@@ -72,6 +72,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.documentfile.provider.DocumentFile
 import com.shenghui.localvibe.core.datastore.AppStateStore
 import com.shenghui.localvibe.core.datastore.PersistedBookFile
+import com.shenghui.localvibe.core.datastore.PersistedBookProgress
 import com.shenghui.localvibe.core.datastore.PersistedFolder
 import com.shenghui.localvibe.core.datastore.PersistedPlaybackProgress
 import com.shenghui.localvibe.core.media.deleteUri
@@ -86,6 +87,7 @@ import com.shenghui.localvibe.core.scanner.MediaStoreScanner
 import com.shenghui.localvibe.core.ui.theme.LocalVibeTheme
 import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
+import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
 import com.shenghui.localvibe.feature.folder.FolderScreen
 import com.shenghui.localvibe.feature.home.model.MediaFolderUiModel
@@ -128,6 +130,7 @@ private fun LocalVibeApp() {
     val videoProgressMap = remember { mutableStateMapOf<String, Long>() }
     val videoMetadataCache = remember { mutableStateMapOf<String, VideoMetadata>() }
     val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
+    val bookProgressMap = remember { mutableStateMapOf<String, PersistedBookProgress>() }
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
     var currentFolder by remember { mutableStateOf<MediaFolderUiModel?>(null) }
     var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
@@ -143,6 +146,7 @@ private fun LocalVibeApp() {
     var currentVideoIndex by remember { mutableStateOf(0) }
     var selectedVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAudioUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedBookUri by rememberSaveable { mutableStateOf<String?>(null) }
     var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
     var recentVideoUri by remember { mutableStateOf<String?>(null) }
     var recentAudioUri by remember { mutableStateOf<String?>(null) }
@@ -386,6 +390,11 @@ private fun LocalVibeApp() {
                 val bookKey = file.normalizedBookKey()
                 importedBookFiles.removeAll { it.normalizedBookKey() == bookKey }
                 removeFileFromFolderState(LocalMediaType.BOOK, file)
+                bookProgressMap.remove(file.uri)
+                if (selectedBookUri == file.uri) {
+                    selectedBookUri = null
+                    selectedMediaFile = selectedMediaFile?.takeIf { it.uri != file.uri }
+                }
             }
 
             else -> Unit
@@ -416,6 +425,7 @@ private fun LocalVibeApp() {
             }
             if (wasImportedBook) {
                 appStateStore.removePersistedBookFile(file.uri)
+                appStateStore.removeBookProgress(file.uri)
             }
             Toast.makeText(
                 context,
@@ -459,6 +469,7 @@ private fun LocalVibeApp() {
 
                     LocalMediaType.BOOK -> if (wasImportedBook) {
                         appStateStore.removePersistedBookFile(file.uri)
+                        appStateStore.removeBookProgress(file.uri)
                     }
 
                     else -> Unit
@@ -503,7 +514,10 @@ private fun LocalVibeApp() {
                         appStateStore.saveRecentAudioUri(recentAudioUri)
                         refreshMusicControllerAfterAudioRemoval(setOf(file.normalizedUri()))
                     }
-                    LocalMediaType.BOOK -> appStateStore.removePersistedBookFile(file.uri)
+                    LocalMediaType.BOOK -> {
+                        appStateStore.removePersistedBookFile(file.uri)
+                        appStateStore.removeBookProgress(file.uri)
+                    }
                     else -> Unit
                 }
                 Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
@@ -552,7 +566,10 @@ private fun LocalVibeApp() {
                         )
                     }
 
-                    LocalMediaType.BOOK -> appStateStore.removePersistedBookFile(file.uri)
+                    LocalMediaType.BOOK -> {
+                        appStateStore.removePersistedBookFile(file.uri)
+                        appStateStore.removeBookProgress(file.uri)
+                    }
                     else -> Unit
                 }
             }
@@ -853,6 +870,12 @@ private fun LocalVibeApp() {
         recentVideoUri = appStateStore.loadRecentVideoUri()
         recentAudioUri = appStateStore.loadRecentAudioUri()
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
+        bookProgressMap.clear()
+        appStateStore.loadBookProgress().forEach { progress ->
+            if (progress.totalParagraphs > 0) {
+                bookProgressMap[progress.uri] = progress
+            }
+        }
 
         val grantedUris = context.contentResolver.persistedUriPermissions
             .filter { it.isReadPermission }
@@ -1211,6 +1234,9 @@ private fun LocalVibeApp() {
                     }
                     BookLibraryScreen(
                         bookFiles = bookFiles,
+                        bookProgressPercentMap = bookFiles.associate { file ->
+                            file.uri to (bookProgressMap[file.uri]?.progressPercent() ?: 0)
+                        },
                         onImportBookFile = {
                             openTextDocumentsLauncher.launch(
                                 arrayOf("text/plain", "application/octet-stream")
@@ -1231,9 +1257,50 @@ private fun LocalVibeApp() {
                         onDeleteBooks = { files ->
                             permanentlyDeleteMedia(files)
                         },
+                        onOpenBook = { file ->
+                            selectedMediaFile = file
+                            selectedBookUri = file.uri
+                            navController.navigate(LocalVibeRoute.BookListen)
+                        },
                         modifier = contentModifier
                     )
                 }
+            }
+            composable(LocalVibeRoute.BookListen) {
+                val allBookFiles = importedBookFiles
+                    .plus(folderBookFiles)
+                    .distinctBy { it.normalizedBookKey() }
+                val resolvedBookFile = selectedMediaFile
+                    ?.takeIf { it.type == LocalMediaType.BOOK }
+                    ?: selectedBookUri?.let { uri ->
+                        allBookFiles.firstOrNull { it.uri == uri }
+                    }
+                BookListenScreen(
+                    bookFile = resolvedBookFile,
+                    initialParagraphIndex = resolvedBookFile?.let { file ->
+                        bookProgressMap[file.uri]?.paragraphIndex ?: 0
+                    } ?: 0,
+                    onProgressChanged = { uri, paragraphIndex, totalParagraphs ->
+                        val progress = PersistedBookProgress(
+                            uri = uri,
+                            paragraphIndex = paragraphIndex,
+                            totalParagraphs = totalParagraphs,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        bookProgressMap[uri] = progress
+                        coroutineScope.launch {
+                            appStateStore.saveBookProgress(progress)
+                        }
+                    },
+                    onBeforeSpeak = {
+                        val controller = musicController
+                        if (controller?.isPlaying == true) {
+                            controller.pause()
+                            Toast.makeText(context, "已暂停音乐播放", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(LocalVibeRoute.Profile) {
                 MainTabScaffold(navController = navController) { contentModifier ->
@@ -1427,10 +1494,12 @@ private fun LocalVibeApp() {
                         coroutineScope.launch {
                             appStateStore.clearFolders()
                             appStateStore.clearPersistedBookFiles()
+                            appStateStore.clearBookProgress()
                             videoFolders.removeManualFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
                             audioFolders.removeManualFoldersAndScans(LocalMediaType.AUDIO, scannedFilesByFolder)
                             bookFolders.removeManualFoldersAndScans(LocalMediaType.BOOK, scannedFilesByFolder)
                             importedBookFiles.clear()
+                            bookProgressMap.clear()
                             clearFolderBookFiles()
                             Toast.makeText(context, "已添加文件夹记录已清除", Toast.LENGTH_SHORT).show()
                         }
@@ -1442,8 +1511,10 @@ private fun LocalVibeApp() {
                             appStateStore.clearFolders()
                             remainingFolders.forEach { appStateStore.upsertFolder(it) }
                             appStateStore.clearPersistedBookFiles()
+                            appStateStore.clearBookProgress()
                             bookFolders.removeManualFoldersAndScans(LocalMediaType.BOOK, scannedFilesByFolder)
                             importedBookFiles.clear()
+                            bookProgressMap.clear()
                             clearFolderBookFiles()
                             Toast.makeText(context, "小说导入记录已清除", Toast.LENGTH_SHORT).show()
                         }
@@ -1648,6 +1719,13 @@ private fun LocalMediaFile.normalizedBookKey(): String {
 }
 
 private fun LocalMediaFile.normalizedUri(): String = uri.trim()
+
+private fun PersistedBookProgress.progressPercent(): Int {
+    if (totalParagraphs <= 0) return 0
+    return (((paragraphIndex.coerceAtLeast(0) + 1) * 100f) / totalParagraphs)
+        .toInt()
+        .coerceIn(0, 100)
+}
 
 private fun LocalMediaFile.toAudioMediaItem(): MediaItem {
     return MediaItem.Builder()

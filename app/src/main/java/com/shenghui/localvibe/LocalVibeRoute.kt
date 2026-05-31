@@ -5,6 +5,7 @@ object LocalVibeRoute {
     const val VideoLibrary = "videoLibrary"
     const val AudioLibrary = "audioLibrary"
     const val BookLibrary = "bookLibrary"
+    const val BookListen = "bookListen"
     const val Profile = "profile"
     const val Folder = "folder"
     const val VideoPlayer = "videoPlayer"

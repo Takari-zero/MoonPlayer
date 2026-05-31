@@ -39,7 +39,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -112,13 +111,11 @@ fun VideoPlayerScreen(
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.align(Alignment.Center)
             )
-            TextButton(
+            IconButton(
                 onClick = onBack,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(8.dp)
+                modifier = Modifier.align(Alignment.TopStart)
             ) {
-                Text("返回", color = Color.White)
+                Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
             }
             return@Box
         }
@@ -401,29 +398,40 @@ private fun VideoControlOverlay(
     onNext: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
-        Row(
+        Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.34f))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-            IconButton(onClick = onBack) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) {
                 Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
             }
             Text(
                 text = title,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .padding(horizontal = 132.dp),
                 color = Color.White,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
-            Text("音轨", color = Color.White.copy(alpha = 0.8f))
-            Text("字幕", color = Color.White.copy(alpha = 0.8f))
-            IconButton(onClick = {}) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("音轨", color = Color.White.copy(alpha = 0.8f))
+                Text("字幕", color = Color.White.copy(alpha = 0.8f))
+                IconButton(onClick = {}) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+                }
             }
         }
 

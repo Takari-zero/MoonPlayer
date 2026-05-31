@@ -27,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
@@ -47,6 +48,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -120,6 +122,12 @@ fun AudioPlayerScreen(
                 .padding(20.dp)
         ) {
             if (mediaFile == null || player == null) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.align(Alignment.TopStart)
+                ) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+                }
                 Text(
                     text = "未选择音乐文件。",
                     style = MaterialTheme.typography.bodyLarge,
@@ -551,16 +559,18 @@ private fun PlayerTopBar(
     onBack: () -> Unit,
     onMore: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        TextButton(onClick = onBack) {
-            Text("返回", color = Color.White)
+    Box(modifier = Modifier.fillMaxWidth()) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier.align(Alignment.CenterStart)
+        ) {
+            Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
         }
         Column(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 64.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -576,8 +586,11 @@ private fun PlayerTopBar(
                 style = MaterialTheme.typography.bodySmall
             )
         }
-        TextButton(onClick = onMore) {
-            Text("更多", color = Color.White)
+        IconButton(
+            onClick = onMore,
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
         }
     }
 }

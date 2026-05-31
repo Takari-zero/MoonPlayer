@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -59,12 +58,14 @@ import com.shenghui.localvibe.core.scanner.LocalMediaFile
 @Composable
 fun BookLibraryScreen(
     bookFiles: List<LocalMediaFile>,
+    bookProgressPercentMap: Map<String, Int>,
     onImportBookFile: () -> Unit,
     onRescanBooks: () -> Unit,
     onRemoveBook: (LocalMediaFile) -> Unit,
     onDeleteBook: (LocalMediaFile) -> Unit,
     onRemoveBooks: (List<LocalMediaFile>) -> Unit,
     onDeleteBooks: (List<LocalMediaFile>) -> Unit,
+    onOpenBook: (LocalMediaFile) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -154,6 +155,7 @@ fun BookLibraryScreen(
                     items(items = shownBooks, key = { it.uri }) { book ->
                         BookCard(
                             file = book,
+                            progressPercent = bookProgressPercentMap[book.uri] ?: 0,
                             isSelectionMode = isMultiSelectMode,
                             isSelected = book.uri in selectedBookUris,
                             onToggleSelected = {
@@ -165,7 +167,7 @@ fun BookLibraryScreen(
                                 if (isMultiSelectMode) {
                                     selectedBookUris = selectedBookUris.toggle(book.uri)
                                 } else {
-                                    Toast.makeText(context, "TXT 听书功能下一步实现", Toast.LENGTH_SHORT).show()
+                                    onOpenBook(book)
                                 }
                             }
                         )
@@ -272,9 +274,6 @@ private fun BookHeader(
                 IconButton(onClick = onRescanBooks) {
                     Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
                 }
-                IconButton(onClick = onManage) {
-                    Icon(Icons.Filled.ManageSearch, contentDescription = "管理")
-                }
                 Box {
                     IconButton(onClick = { expanded = true }) {
                         Icon(Icons.Filled.MoreVert, contentDescription = "更多")
@@ -284,6 +283,13 @@ private fun BookHeader(
                         onDismissRequest = { expanded = false },
                         shape = RoundedCornerShape(14.dp)
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("管理") },
+                            onClick = {
+                                expanded = false
+                                onManage()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("多选删除") },
                             onClick = {
@@ -338,6 +344,7 @@ private fun AddBookCard(onClick: () -> Unit) {
 @Composable
 private fun BookCard(
     file: LocalMediaFile,
+    progressPercent: Int,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
@@ -414,7 +421,7 @@ private fun BookCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "未开始",
+                        text = progressPercent.toBookProgressText(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -513,6 +520,14 @@ private fun FloatingSearchBar(
 
 private fun LocalMediaFile.displayTitle(): String {
     return name.substringBeforeLast('.', name)
+}
+
+private fun Int.toBookProgressText(): String {
+    return when {
+        this <= 0 -> "未开始"
+        this >= 100 -> "已完成"
+        else -> "已听 $this%"
+    }
 }
 
 private fun Set<String>.toggle(value: String): Set<String> {

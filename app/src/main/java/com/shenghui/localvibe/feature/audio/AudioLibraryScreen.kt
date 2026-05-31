@@ -356,6 +356,13 @@ private fun AudioHeader(
                             shape = RoundedCornerShape(14.dp)
                         ) {
                             DropdownMenuItem(
+                                text = { Text("管理") },
+                                onClick = {
+                                    expanded = false
+                                    onMore()
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("多选删除") },
                                 onClick = {
                                     expanded = false
