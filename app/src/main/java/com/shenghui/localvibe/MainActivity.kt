@@ -1,6 +1,7 @@
 package com.shenghui.localvibe
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -56,6 +57,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -71,6 +78,7 @@ import com.shenghui.localvibe.core.media.deleteUri
 import com.shenghui.localvibe.core.media.resolveDocumentTreeName
 import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.player.AudioPlayMode
+import com.shenghui.localvibe.core.player.MusicPlaybackService
 import com.shenghui.localvibe.core.scanner.FolderScanner
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
@@ -137,6 +145,63 @@ private fun LocalVibeApp() {
     var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
     var recentVideoUri by remember { mutableStateOf<String?>(null) }
     var recentAudioUri by remember { mutableStateOf<String?>(null) }
+    var musicController by remember { mutableStateOf<MediaController?>(null) }
+    var musicCurrentUri by remember { mutableStateOf<String?>(null) }
+    var musicCurrentPositionMs by remember { mutableStateOf(0L) }
+    var musicDurationMs by remember { mutableStateOf(0L) }
+    var musicIsPlaying by remember { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "未开启通知权限，后台播放通知可能不会显示", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun requestNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    fun applyAudioPlayMode(controller: Player?, mode: AudioPlayMode) {
+        controller ?: return
+        controller.shuffleModeEnabled = mode == AudioPlayMode.SHUFFLE
+        controller.repeatMode = when (mode) {
+            AudioPlayMode.REPEAT_ONE -> Player.REPEAT_MODE_ONE
+            AudioPlayMode.REPEAT_ALL -> Player.REPEAT_MODE_ALL
+            else -> Player.REPEAT_MODE_OFF
+        }
+    }
+
+    fun playAudioQueue(queue: List<LocalMediaFile>, file: LocalMediaFile, shuffle: Boolean = false) {
+        val controller = musicController ?: return
+        requestNotificationPermissionIfNeeded()
+        val nextQueue = queue.ifEmpty { listOf(file) }.distinctBy { it.uri }
+        val startIndex = nextQueue.indexOfFirst { it.uri == file.uri }.takeIf { it >= 0 } ?: 0
+        audioQueue = nextQueue
+        currentAudioIndex = startIndex
+        selectedMediaFile = nextQueue[startIndex]
+        selectedAudioUri = nextQueue[startIndex].uri
+        recentAudioUri = selectedAudioUri
+        if (shuffle) {
+            audioPlayMode = AudioPlayMode.SHUFFLE
+        }
+        applyAudioPlayMode(controller, audioPlayMode)
+        controller.setMediaItems(
+            nextQueue.map { it.toAudioMediaItem() },
+            startIndex,
+            0L
+        )
+        controller.prepare()
+        controller.play()
+        coroutineScope.launch {
+            appStateStore.saveRecentAudioUri(recentAudioUri)
+        }
+    }
     fun rebuildFolderBookFiles() {
         folderBookFiles.clear()
         folderBookFiles.addAll(
@@ -693,13 +758,86 @@ private fun LocalVibeApp() {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
+    DisposableEffect(Unit) {
+        val sessionToken = SessionToken(
+            context,
+            ComponentName(context, MusicPlaybackService::class.java)
+        )
+        val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+        controllerFuture.addListener(
+            {
+                musicController = controllerFuture.get()
+                applyAudioPlayMode(musicController, audioPlayMode)
+            },
+            ContextCompat.getMainExecutor(context)
+        )
+        onDispose {
+            MediaController.releaseFuture(controllerFuture)
+            musicController = null
+        }
+    }
+    DisposableEffect(musicController) {
+        val controller = musicController ?: return@DisposableEffect onDispose { }
+        fun syncMusicState() {
+            musicCurrentUri = controller.currentMediaItem?.mediaId
+            musicIsPlaying = controller.isPlaying
+            musicCurrentPositionMs = controller.currentPosition.coerceAtLeast(0L)
+            musicDurationMs = controller.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+            currentAudioIndex = controller.currentMediaItemIndex.coerceAtLeast(0)
+            selectedAudioUri = musicCurrentUri ?: selectedAudioUri
+        }
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                syncMusicState()
+                mediaItem?.mediaId?.let { uri ->
+                    recentAudioUri = uri
+                    selectedMediaFile = audioQueue.firstOrNull { it.uri == uri } ?: selectedMediaFile
+                    coroutineScope.launch {
+                        appStateStore.saveRecentAudioUri(uri)
+                    }
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                syncMusicState()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                syncMusicState()
+            }
+        }
+        controller.addListener(listener)
+        syncMusicState()
+        onDispose {
+            controller.removeListener(listener)
+        }
+    }
+    LaunchedEffect(musicController) {
+        while (musicController != null) {
+            val controller = musicController
+            if (controller != null) {
+                musicCurrentUri = controller.currentMediaItem?.mediaId
+                musicIsPlaying = controller.isPlaying
+                musicCurrentPositionMs = controller.currentPosition.coerceAtLeast(0L)
+                musicDurationMs = controller.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+            }
+            kotlinx.coroutines.delay(500)
+        }
+    }
+    LaunchedEffect(musicController, audioPlayMode) {
+        applyAudioPlayMode(musicController, audioPlayMode)
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        val miniAudioFile = selectedMediaFile?.takeIf { it.type == LocalMediaType.AUDIO }
+        val miniAudioFile = musicCurrentUri?.let { uri ->
+                audioQueue.firstOrNull { it.uri == uri }
+                    ?: scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
+            }
+            ?: selectedMediaFile?.takeIf { it.type == LocalMediaType.AUDIO }
             ?: selectedAudioUri?.let { uri ->
                 scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
             }
@@ -773,6 +911,13 @@ private fun LocalVibeApp() {
                 MainTabScaffold(
                     navController = navController,
                     miniAudioFile = miniAudioFile,
+                    miniIsPlaying = musicIsPlaying,
+                    miniProgressMs = musicCurrentPositionMs,
+                    miniDurationMs = musicDurationMs,
+                    onMiniPlayPause = {
+                        val controller = musicController ?: return@MainTabScaffold
+                        if (controller.isPlaying) controller.pause() else controller.play()
+                    },
                     onOpenMiniPlayer = { openMiniAudio() }
                 ) { contentModifier ->
                     val audioFolderGroups = audioFolders.map { folder ->
@@ -807,27 +952,14 @@ private fun LocalVibeApp() {
                             navController.navigate(LocalVibeRoute.Folder)
                         },
                         onOpenAudio = { file, queue ->
-                            audioQueue = queue.ifEmpty { listOf(file) }
-                            currentAudioIndex = audioQueue.indexOfFirst { it.uri == file.uri }
-                                .takeIf { it >= 0 } ?: 0
-                            selectedMediaFile = file
-                            selectedAudioUri = file.uri
-                            recentAudioUri = file.uri
-                            coroutineScope.launch {
-                                appStateStore.saveRecentAudioUri(file.uri)
-                            }
+                            playAudioQueue(queue, file)
                             navController.navigate(LocalVibeRoute.AudioPlayer)
                         },
                         onShuffleAll = { queue ->
-                            audioQueue = queue.shuffled()
-                            currentAudioIndex = 0
-                            selectedMediaFile = audioQueue.firstOrNull()
-                            selectedAudioUri = selectedMediaFile?.uri
-                            recentAudioUri = selectedMediaFile?.uri
-                            coroutineScope.launch {
-                                appStateStore.saveRecentAudioUri(recentAudioUri)
-                            }
-                            if (selectedMediaFile != null) {
+                            val shuffledQueue = queue.shuffled()
+                            val firstFile = shuffledQueue.firstOrNull()
+                            if (firstFile != null) {
+                                playAudioQueue(shuffledQueue, firstFile, shuffle = true)
                                 navController.navigate(LocalVibeRoute.AudioPlayer)
                             }
                         },
@@ -922,15 +1054,7 @@ private fun LocalVibeApp() {
                                 typedFolderKey(currentFolderTargetType ?: LocalMediaType.AUDIO, folder.id)
                             ]
                         }.orEmpty().filter { it.type == LocalMediaType.AUDIO }
-                        audioQueue = files.ifEmpty { listOf(file) }
-                        currentAudioIndex = audioQueue.indexOfFirst { it.uri == file.uri }
-                            .takeIf { it >= 0 } ?: 0
-                        selectedMediaFile = file
-                        selectedAudioUri = file.uri
-                        recentAudioUri = file.uri
-                        coroutineScope.launch {
-                            appStateStore.saveRecentAudioUri(file.uri)
-                        }
+                        playAudioQueue(files, file)
                         navController.navigate(LocalVibeRoute.AudioPlayer)
                     },
                     onRemoveFile = { file ->
@@ -999,30 +1123,54 @@ private fun LocalVibeApp() {
                 )
             }
             composable(LocalVibeRoute.AudioPlayer) {
-                val resolvedAudioFile = selectedMediaFile
+                val resolvedAudioFile = musicCurrentUri?.let { uri ->
+                    audioQueue.firstOrNull { it.uri == uri }
+                        ?: scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
+                } ?: selectedMediaFile
                     ?.takeIf { it.type == LocalMediaType.AUDIO }
-                    ?: selectedAudioUri?.let { uri ->
-                        audioQueue.firstOrNull { it.uri == uri }
-                    }
+                    ?: selectedAudioUri?.let { uri -> audioQueue.firstOrNull { it.uri == uri } }
                 AudioPlayerScreen(
                     mediaFile = resolvedAudioFile,
-                    initialPositionMs = 0L,
+                    player = musicController,
+                    currentPositionMs = musicCurrentPositionMs,
+                    durationMs = musicDurationMs,
+                    isPlaying = musicIsPlaying,
+                    audioSessionId = MusicPlaybackService.currentAudioSessionId,
                     queue = audioQueue,
                     currentIndex = currentAudioIndex,
                     playMode = audioPlayMode,
-                    onPlayModeChanged = { audioPlayMode = it },
+                    onPlayModeChanged = { mode ->
+                        audioPlayMode = mode
+                        applyAudioPlayMode(musicController, mode)
+                    },
                     onSelectAudio = { index ->
                         val nextFile = audioQueue.getOrNull(index) ?: return@AudioPlayerScreen
-                        currentAudioIndex = index
-                        selectedMediaFile = nextFile
-                        selectedAudioUri = nextFile.uri
-                        recentAudioUri = nextFile.uri
-                        coroutineScope.launch {
-                            appStateStore.saveRecentAudioUri(nextFile.uri)
+                        playAudioQueue(audioQueue, nextFile)
+                    },
+                    onPlayPause = {
+                        val controller = musicController ?: return@AudioPlayerScreen
+                        if (controller.isPlaying) controller.pause() else controller.play()
+                    },
+                    onPrevious = {
+                        val controller = musicController ?: return@AudioPlayerScreen
+                        if (controller.currentPosition > 3_000L) {
+                            controller.seekTo(0L)
+                        } else if (controller.hasPreviousMediaItem()) {
+                            controller.seekToPreviousMediaItem()
+                        } else {
+                            Toast.makeText(context, "已经是第一首", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    onProgressChanged = { mediaId, positionMs ->
-                        audioProgressMap.remove(mediaId)
+                    onNext = {
+                        val controller = musicController ?: return@AudioPlayerScreen
+                        if (controller.hasNextMediaItem() || audioPlayMode == AudioPlayMode.REPEAT_ALL) {
+                            controller.seekToNextMediaItem()
+                        } else {
+                            Toast.makeText(context, "已经是最后一首", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onSeekTo = { positionMs ->
+                        musicController?.seekTo(positionMs)
                     },
                     onBack = { navController.popBackStack() }
                 )
@@ -1080,6 +1228,10 @@ private fun LocalVibeApp() {
 private fun MainTabScaffold(
     navController: NavController,
     miniAudioFile: LocalMediaFile? = null,
+    miniIsPlaying: Boolean = false,
+    miniProgressMs: Long = 0L,
+    miniDurationMs: Long = 0L,
+    onMiniPlayPause: () -> Unit = {},
     onOpenMiniPlayer: () -> Unit = {},
     content: @Composable (Modifier) -> Unit
 ) {
@@ -1089,6 +1241,10 @@ private fun MainTabScaffold(
                 if (miniAudioFile != null) {
                     MiniAudioPlayerBar(
                         file = miniAudioFile,
+                        isPlaying = miniIsPlaying,
+                        progressMs = miniProgressMs,
+                        durationMs = miniDurationMs,
+                        onPlayPause = onMiniPlayPause,
                         onOpen = onOpenMiniPlayer
                     )
                 }
@@ -1110,6 +1266,10 @@ private fun MainTabScaffold(
 @Composable
 private fun MiniAudioPlayerBar(
     file: LocalMediaFile,
+    isPlaying: Boolean,
+    progressMs: Long,
+    durationMs: Long,
+    onPlayPause: () -> Unit,
     onOpen: () -> Unit
 ) {
     Card(
@@ -1151,8 +1311,18 @@ private fun MiniAudioPlayerBar(
                     maxLines = 1
                 )
             }
-            IconButton(onClick = onOpen) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "进入播放")
+            if (durationMs > 0L) {
+                Text(
+                    text = formatMiniProgress(progressMs, durationMs),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onPlayPause) {
+                Icon(
+                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "暂停" else "播放"
+                )
             }
             IconButton(onClick = onOpen) {
                 Icon(Icons.Filled.QueueMusic, contentDescription = "播放队列")
@@ -1233,6 +1403,25 @@ private fun typedFolderKey(
 private fun LocalMediaFile.normalizedBookKey(): String {
     val normalizedUri = uri.trim()
     return normalizedUri.ifBlank { "${name.trim().lowercase()}:$size" }
+}
+
+private fun LocalMediaFile.toAudioMediaItem(): MediaItem {
+    return MediaItem.Builder()
+        .setUri(uri)
+        .setMediaId(uri)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(name.substringBeforeLast('.', name))
+                .setArtist("Unknown")
+                .build()
+        )
+        .build()
+}
+
+private fun formatMiniProgress(positionMs: Long, durationMs: Long): String {
+    if (durationMs <= 0L) return "--:--"
+    val percent = (positionMs.coerceAtLeast(0L) * 100 / durationMs).coerceIn(0L, 100L)
+    return "$percent%"
 }
 
 private fun LocalMediaType.mediaReadPermission(): String? {

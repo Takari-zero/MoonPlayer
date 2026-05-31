@@ -1,11 +1,10 @@
 package com.shenghui.localvibe.feature.audio
 
 import android.media.audiofx.Equalizer
-import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -23,15 +22,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -45,9 +38,14 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -65,7 +63,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,27 +76,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.player.AudioPlayMode
 import com.shenghui.localvibe.core.player.EqualizerPreset
 import com.shenghui.localvibe.core.player.applyPreset
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
-import kotlinx.coroutines.delay
-import kotlin.random.Random
 
 @Composable
 fun AudioPlayerScreen(
     mediaFile: LocalMediaFile?,
-    initialPositionMs: Long,
+    player: Player?,
+    currentPositionMs: Long,
+    durationMs: Long,
+    isPlaying: Boolean,
+    audioSessionId: Int,
     queue: List<LocalMediaFile>,
     currentIndex: Int,
     playMode: AudioPlayMode,
     onPlayModeChanged: (AudioPlayMode) -> Unit,
     onSelectAudio: (Int) -> Unit,
-    onProgressChanged: (String, Long) -> Unit,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekTo: (Long) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -116,7 +116,7 @@ fun AudioPlayerScreen(
                 .background(Color.Black)
                 .padding(20.dp)
         ) {
-            if (mediaFile == null) {
+            if (mediaFile == null || player == null) {
                 Text(
                     text = "未选择音乐文件。",
                     style = MaterialTheme.typography.bodyLarge,
@@ -124,15 +124,21 @@ fun AudioPlayerScreen(
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
-                LocalAudioPlayer(
+                ServiceAudioPlayer(
                     mediaFile = mediaFile,
-                    initialPositionMs = initialPositionMs,
+                    currentPositionMs = currentPositionMs,
+                    durationMs = durationMs,
+                    isPlaying = isPlaying,
+                    audioSessionId = audioSessionId,
                     queue = queue,
                     currentIndex = currentIndex,
                     playMode = playMode,
                     onPlayModeChanged = onPlayModeChanged,
                     onSelectAudio = onSelectAudio,
-                    onProgressChanged = onProgressChanged,
+                    onPlayPause = onPlayPause,
+                    onPrevious = onPrevious,
+                    onNext = onNext,
+                    onSeekTo = onSeekTo,
                     onBack = onBack
                 )
             }
@@ -141,33 +147,26 @@ fun AudioPlayerScreen(
 }
 
 @Composable
-private fun LocalAudioPlayer(
+private fun ServiceAudioPlayer(
     mediaFile: LocalMediaFile,
-    initialPositionMs: Long,
+    currentPositionMs: Long,
+    durationMs: Long,
+    isPlaying: Boolean,
+    audioSessionId: Int,
     queue: List<LocalMediaFile>,
     currentIndex: Int,
     playMode: AudioPlayMode,
     onPlayModeChanged: (AudioPlayMode) -> Unit,
     onSelectAudio: (Int) -> Unit,
-    onProgressChanged: (String, Long) -> Unit,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeekTo: (Long) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val player = remember(mediaFile.uri) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.parse(mediaFile.uri)))
-            if (initialPositionMs > 0L) {
-                seekTo(initialPositionMs)
-            }
-            prepare()
-            playWhenReady = true
-        }
-    }
-    var currentPositionMs by remember(mediaFile.uri) {
-        mutableLongStateOf(initialPositionMs.coerceAtLeast(0L))
-    }
-    var durationMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
-    var isPlaying by remember { mutableStateOf(true) }
+    var displayPositionMs by remember(mediaFile.uri) { mutableLongStateOf(currentPositionMs) }
+    var isDraggingProgress by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
     var showPlayModeMenu by remember { mutableStateOf(false) }
@@ -175,84 +174,16 @@ private fun LocalAudioPlayer(
     var equalizerEnabled by remember { mutableStateOf(true) }
     var bandLevels by remember { mutableStateOf(listOf(0f, 0f, 0f, 0f, 0f)) }
     var equalizerSupported by remember { mutableStateOf(true) }
-    val latestPlayMode by rememberUpdatedState(playMode)
-    val latestCurrentIndex by rememberUpdatedState(currentIndex)
-    val latestQueue by rememberUpdatedState(queue)
 
-    fun saveCurrentProgress() {
-        onProgressChanged(mediaFile.uri, player.savedPosition())
-    }
-
-    fun selectAudio(index: Int) {
-        saveCurrentProgress()
-        onSelectAudio(index)
-    }
-
-    fun previous() {
-        val previousIndex = when {
-            latestQueue.isEmpty() -> -1
-            latestPlayMode == AudioPlayMode.SHUFFLE -> Random.nextInt(latestQueue.size)
-            latestCurrentIndex > 0 -> latestCurrentIndex - 1
-            latestPlayMode == AudioPlayMode.REPEAT_ALL -> latestQueue.lastIndex
-            else -> -1
-        }
-        if (previousIndex >= 0) {
-            selectAudio(previousIndex)
-        } else {
-            Toast.makeText(context, "已经是第一首", Toast.LENGTH_SHORT).show()
+    LaunchedEffect(currentPositionMs, isDraggingProgress) {
+        if (!isDraggingProgress) {
+            displayPositionMs = currentPositionMs
         }
     }
 
-    fun next(auto: Boolean = false) {
-        val nextIndex = when {
-            latestQueue.isEmpty() -> -1
-            latestPlayMode == AudioPlayMode.REPEAT_ONE && auto -> latestCurrentIndex
-            latestPlayMode == AudioPlayMode.SHUFFLE -> Random.nextInt(latestQueue.size)
-            latestCurrentIndex < latestQueue.lastIndex -> latestCurrentIndex + 1
-            latestPlayMode == AudioPlayMode.REPEAT_ALL -> 0
-            else -> -1
-        }
-        if (nextIndex >= 0) {
-            if (nextIndex == latestCurrentIndex && auto) {
-                player.seekTo(0L)
-                player.play()
-            } else {
-                selectAudio(nextIndex)
-            }
-        } else if (!auto) {
-            Toast.makeText(context, "已经是最后一首", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    LaunchedEffect(player) {
-        while (true) {
-            currentPositionMs = player.currentPosition.coerceAtLeast(0L)
-            durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
-            isPlaying = player.isPlaying
-            delay(500)
-        }
-    }
-
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) {
-                    next(auto = true)
-                }
-            }
-        }
-        player.addListener(listener)
-        onDispose {
-            player.removeListener(listener)
-            saveCurrentProgress()
-            player.release()
-        }
-    }
-
-    DisposableEffect(player, selectedPreset, equalizerEnabled, bandLevels) {
+    DisposableEffect(audioSessionId, selectedPreset, equalizerEnabled, bandLevels) {
         val equalizer = runCatching {
-            val sessionId = player.audioSessionId
-            if (sessionId == C.AUDIO_SESSION_ID_UNSET) null else Equalizer(0, sessionId)
+            if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) null else Equalizer(0, audioSessionId)
         }.getOrNull()
         if (equalizer == null) {
             equalizerSupported = false
@@ -269,9 +200,7 @@ private fun LocalAudioPlayer(
             }.onFailure {
                 equalizerSupported = false
             }
-            onDispose {
-                equalizer.release()
-            }
+            onDispose { equalizer.release() }
         }
     }
 
@@ -361,9 +290,15 @@ private fun LocalAudioPlayer(
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Slider(
-                    value = currentPositionMs.coerceAtMost(durationMs).toFloat(),
-                    onValueChange = { currentPositionMs = it.toLong() },
-                    onValueChangeFinished = { player.seekTo(currentPositionMs) },
+                    value = displayPositionMs.coerceAtMost(durationMs).toFloat(),
+                    onValueChange = {
+                        isDraggingProgress = true
+                        displayPositionMs = it.toLong()
+                    },
+                    onValueChangeFinished = {
+                        onSeekTo(displayPositionMs)
+                        isDraggingProgress = false
+                    },
                     valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
                     colors = SliderDefaults.colors(
                         activeTrackColor = Color(0xFF4D8DFF),
@@ -375,7 +310,7 @@ private fun LocalAudioPlayer(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(formatDuration(currentPositionMs), color = Color.White.copy(alpha = 0.7f))
+                    Text(formatDuration(displayPositionMs), color = Color.White.copy(alpha = 0.7f))
                     Text(formatDuration(durationMs), color = Color.White.copy(alpha = 0.7f))
                 }
             }
@@ -411,9 +346,7 @@ private fun LocalAudioPlayer(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(14.dp))
-                                        .background(
-                                            if (selected) Color(0xFF203B68) else Color.Transparent
-                                        )
+                                        .background(if (selected) Color(0xFF203B68) else Color.Transparent)
                                         .clickable {
                                             onPlayModeChanged(mode)
                                             showPlayModeMenu = false
@@ -441,17 +374,14 @@ private fun LocalAudioPlayer(
                 SmallIconAction(
                     label = "上一曲",
                     icon = { Icon(Icons.Filled.SkipPrevious, contentDescription = null) },
-                    onClick = { previous() },
+                    onClick = onPrevious,
                     iconSize = 38.dp
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Button(
-                    onClick = {
-                        if (player.isPlaying) player.pause() else player.play()
-                        isPlaying = player.isPlaying
-                    },
-                    modifier = Modifier.size(88.dp),
-                    shape = CircleShape
+                        onClick = onPlayPause,
+                        modifier = Modifier.size(88.dp),
+                        shape = CircleShape
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -468,7 +398,7 @@ private fun LocalAudioPlayer(
                 SmallIconAction(
                     label = "下一曲",
                     icon = { Icon(Icons.Filled.SkipNext, contentDescription = null) },
-                    onClick = { next() },
+                    onClick = onNext,
                     iconSize = 38.dp
                 )
                 SmallIconAction(
@@ -479,17 +409,10 @@ private fun LocalAudioPlayer(
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+            TextButton(
+                onClick = { Toast.makeText(context, "歌词功能后续实现", Toast.LENGTH_SHORT).show() }
             ) {
-                TextButton(
-                    onClick = {
-                        Toast.makeText(context, "歌词功能后续实现", Toast.LENGTH_SHORT).show()
-                    }
-                ) {
-                    Text("歌词", color = Color.White)
-                }
+                Text("歌词", color = Color.White)
             }
         }
     }
@@ -501,7 +424,7 @@ private fun LocalAudioPlayer(
             onDismiss = { showQueue = false },
             onSelect = {
                 showQueue = false
-                selectAudio(it)
+                onSelectAudio(it)
             }
         )
     }
@@ -522,7 +445,7 @@ private fun LocalAudioPlayer(
             onEnabledChange = { equalizerEnabled = it },
             onBandChange = { index, level ->
                 selectedPreset = EqualizerPreset.CUSTOM
-                bandLevels = bandLevels.toMutableList().also { it[index] = level }
+                bandLevels = bandLevels.toMutableList().also { levels -> levels[index] = level }
             },
             onReset = {
                 selectedPreset = EqualizerPreset.DEFAULT
@@ -585,16 +508,10 @@ private fun SmallIconAction(
         Box(
             modifier = Modifier
                 .size(48.dp)
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = onLongClick
-                ),
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick),
             contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier.size(iconSize),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.size(iconSize), contentAlignment = Alignment.Center) {
                 androidx.compose.runtime.CompositionLocalProvider(
                     androidx.compose.material3.LocalContentColor provides tint
                 ) {
@@ -602,12 +519,7 @@ private fun SmallIconAction(
                 }
             }
         }
-        Text(
-            text = label,
-            color = tint,
-            fontSize = 11.sp,
-            maxLines = 1
-        )
+        Text(text = label, color = tint, fontSize = 11.sp, maxLines = 1)
     }
 }
 
@@ -702,13 +614,13 @@ private fun EqualizerDialog(
                     )
                 }
             }
-                if (!equalizerSupported) {
-                    Text(
-                        text = "当前设备不支持均衡器，仍可保存预设选择。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+            if (!equalizerSupported) {
+                Text(
+                    text = "当前设备暂不支持均衡器，仍可保留预设选择。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -716,12 +628,12 @@ private fun EqualizerDialog(
                 EqualizerPreset.entries
                     .filterNot { it == EqualizerPreset.CUSTOM }
                     .forEach { preset ->
-                    AssistChip(
-                        onClick = { onSelectPreset(preset) },
-                        label = { Text(preset.label) },
-                        enabled = preset != selectedPreset
-                    )
-                }
+                        AssistChip(
+                            onClick = { onSelectPreset(preset) },
+                            label = { Text(preset.label) },
+                            enabled = preset != selectedPreset
+                        )
+                    }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -749,20 +661,6 @@ private fun EqualizerDialog(
                 }
             }
         }
-    }
-}
-
-private fun ExoPlayer.savedPosition(): Long {
-    val currentPosition = currentPosition.coerceAtLeast(0L)
-    val duration = duration
-    return if (
-        duration != C.TIME_UNSET &&
-        duration > 0L &&
-        duration - currentPosition <= FINISHED_THRESHOLD_MS
-    ) {
-        0L
-    } else {
-        currentPosition
     }
 }
 
@@ -845,9 +743,7 @@ private fun VerticalBandControl(
                 .width(38.dp)
                 .pointerInput(enabled) {
                     detectTapGestures { offset ->
-                        if (enabled) {
-                            onLevelChange(offset.toBandLevel(size.height))
-                        }
+                        if (enabled) onLevelChange(offset.toBandLevel(size.height))
                     }
                 }
                 .pointerInput(enabled) {
@@ -889,5 +785,3 @@ private fun VerticalBandControl(
         )
     }
 }
-
-private const val FINISHED_THRESHOLD_MS = 5_000L
