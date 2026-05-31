@@ -1,4 +1,4 @@
-package com.shenghui.localvibe
+﻿package com.shenghui.localvibe
 
 import android.Manifest
 import android.content.ComponentName
@@ -128,6 +128,7 @@ private fun LocalVibeApp() {
     val videoProgressMap = remember { mutableStateMapOf<String, Long>() }
     val videoMetadataCache = remember { mutableStateMapOf<String, VideoMetadata>() }
     val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
+    var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
     var currentFolder by remember { mutableStateOf<MediaFolderUiModel?>(null) }
     var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
     var currentAddTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
@@ -177,11 +178,47 @@ private fun LocalVibeApp() {
         }
     }
 
+    fun List<LocalMediaFile>.filterVisibleAudios(): List<LocalMediaFile> {
+        return filterNot {
+            it.type == LocalMediaType.AUDIO && it.normalizedUri() in hiddenAudioUris
+        }.distinctBy { it.normalizedUri() }
+    }
+
+    fun List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder>.filterHiddenAudioFolders(): List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder> {
+        return mapNotNull { result ->
+            val visibleFiles = result.files.filterVisibleAudios()
+            if (visibleFiles.isEmpty()) {
+                null
+            } else {
+                result.copy(
+                    folder = result.folder.copy(
+                        audioCount = visibleFiles.count { it.type == LocalMediaType.AUDIO }
+                    ),
+                    files = visibleFiles
+                )
+            }
+        }
+    }
+
+    suspend fun hideAudioFiles(files: List<LocalMediaFile>) {
+        val uris = files
+            .filter { it.type == LocalMediaType.AUDIO }
+            .map { it.normalizedUri() }
+            .filter { it.isNotBlank() }
+            .toSet()
+        if (uris.isEmpty()) return
+        hiddenAudioUris = hiddenAudioUris + uris
+        appStateStore.hideAudioUris(uris)
+    }
+
     fun playAudioQueue(queue: List<LocalMediaFile>, file: LocalMediaFile, shuffle: Boolean = false) {
         val controller = musicController ?: return
         requestNotificationPermissionIfNeeded()
-        val nextQueue = queue.ifEmpty { listOf(file) }.distinctBy { it.uri }
-        val startIndex = nextQueue.indexOfFirst { it.uri == file.uri }.takeIf { it >= 0 } ?: 0
+        val nextQueue = queue.ifEmpty { listOf(file) }
+            .filterVisibleAudios()
+            .ifEmpty { listOf(file) }
+        val startIndex = nextQueue.indexOfFirst { it.normalizedUri() == file.normalizedUri() }
+            .takeIf { it >= 0 } ?: 0
         audioQueue = nextQueue
         currentAudioIndex = startIndex
         selectedMediaFile = nextQueue[startIndex]
@@ -198,6 +235,50 @@ private fun LocalVibeApp() {
         )
         controller.prepare()
         controller.play()
+        coroutineScope.launch {
+            appStateStore.saveRecentAudioUri(recentAudioUri)
+        }
+    }
+
+    fun refreshMusicControllerAfterAudioRemoval(removedUris: Set<String>) {
+        if (removedUris.isEmpty()) return
+        val controller = musicController ?: return
+        val wasPlaying = controller.isPlaying
+        val currentUri = controller.currentMediaItem?.mediaId
+        val currentPosition = controller.currentPosition.coerceAtLeast(0L)
+        if (audioQueue.isEmpty()) {
+            controller.stop()
+            controller.clearMediaItems()
+            selectedMediaFile = selectedMediaFile?.takeIf { it.type != LocalMediaType.AUDIO }
+            selectedAudioUri = null
+            recentAudioUri = null
+            coroutineScope.launch {
+                appStateStore.saveRecentAudioUri(null)
+            }
+            return
+        }
+        val currentWasRemoved = currentUri in removedUris
+        val nextIndex = if (!currentWasRemoved && currentUri != null) {
+            audioQueue.indexOfFirst { it.uri == currentUri }.takeIf { it >= 0 } ?: 0
+        } else {
+            currentAudioIndex.coerceIn(0, audioQueue.lastIndex)
+        }
+        val nextFile = audioQueue[nextIndex]
+        currentAudioIndex = nextIndex
+        selectedMediaFile = nextFile
+        selectedAudioUri = nextFile.uri
+        recentAudioUri = nextFile.uri
+        controller.setMediaItems(
+            audioQueue.map { it.toAudioMediaItem() },
+            nextIndex,
+            if (currentWasRemoved) 0L else currentPosition
+        )
+        controller.prepare()
+        if (wasPlaying && !currentWasRemoved) {
+            controller.play()
+        } else if (wasPlaying && currentWasRemoved) {
+            controller.play()
+        }
         coroutineScope.launch {
             appStateStore.saveRecentAudioUri(recentAudioUri)
         }
@@ -248,13 +329,14 @@ private fun LocalVibeApp() {
 
     fun removeFileFromFolderState(type: LocalMediaType, file: LocalMediaFile) {
         val prefix = "${type.name}:"
+        val removedUri = file.normalizedUri()
         scannedFilesByFolder.keys
             .filter { it.startsWith(prefix) }
             .toList()
             .forEach { key ->
                 val nextFiles = scannedFilesByFolder[key]
                     .orEmpty()
-                    .filterNot { it.uri == file.uri }
+                    .filterNot { it.normalizedUri() == removedUri }
                 if (nextFiles.isEmpty()) {
                     scannedFilesByFolder.remove(key)
                 } else {
@@ -289,13 +371,13 @@ private fun LocalVibeApp() {
             LocalMediaType.AUDIO -> {
                 removeFileFromFolderState(LocalMediaType.AUDIO, file)
                 audioProgressMap.remove(file.uri)
-                audioQueue = audioQueue.filterNot { it.uri == file.uri }
+                audioQueue = audioQueue.filterNot { it.normalizedUri() == file.normalizedUri() }
                 currentAudioIndex = currentAudioIndex.coerceAtMost(audioQueue.lastIndex.coerceAtLeast(0))
-                if (selectedAudioUri == file.uri) {
+                if (selectedAudioUri?.trim() == file.normalizedUri()) {
                     selectedAudioUri = null
                     selectedMediaFile = selectedMediaFile?.takeIf { it.uri != file.uri }
                 }
-                if (recentAudioUri == file.uri) {
+                if (recentAudioUri?.trim() == file.normalizedUri()) {
                     recentAudioUri = null
                 }
             }
@@ -328,7 +410,9 @@ private fun LocalVibeApp() {
                 appStateStore.saveRecentVideoUri(recentVideoUri)
             }
             if (file.type == LocalMediaType.AUDIO) {
+                hideAudioFiles(listOf(file))
                 appStateStore.saveRecentAudioUri(recentAudioUri)
+                refreshMusicControllerAfterAudioRemoval(setOf(file.normalizedUri()))
             }
             if (wasImportedBook) {
                 appStateStore.removePersistedBookFile(file.uri)
@@ -345,10 +429,60 @@ private fun LocalVibeApp() {
         }
     }
 
+    fun removeMediaFromList(files: List<LocalMediaFile>) {
+        val uniqueFiles = files.distinctBy { it.uri }
+        if (uniqueFiles.isEmpty()) {
+            Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+            return
+        }
+        coroutineScope.launch {
+            val removedAudioUris = uniqueFiles
+                .filter { it.type == LocalMediaType.AUDIO }
+                .map { it.normalizedUri() }
+                .toSet()
+            hideAudioFiles(uniqueFiles)
+            uniqueFiles.forEach { file ->
+                val wasImportedBook = file.type == LocalMediaType.BOOK &&
+                    importedBookFiles.any { it.normalizedBookKey() == file.normalizedBookKey() }
+                removeMediaFromMemory(file)
+                when (file.type) {
+                    LocalMediaType.VIDEO -> {
+                        appStateStore.saveProgress(
+                            PersistedPlaybackProgress(
+                                mediaUri = file.uri,
+                                mediaType = LocalMediaType.VIDEO.name,
+                                positionMs = 0L,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+
+                    LocalMediaType.BOOK -> if (wasImportedBook) {
+                        appStateStore.removePersistedBookFile(file.uri)
+                    }
+
+                    else -> Unit
+                }
+            }
+            appStateStore.saveRecentVideoUri(recentVideoUri)
+            appStateStore.saveRecentAudioUri(recentAudioUri)
+            refreshMusicControllerAfterAudioRemoval(removedAudioUris)
+            Toast.makeText(context, "已移除 ${uniqueFiles.size} 项", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun permanentlyDeleteMedia(file: LocalMediaFile) {
         coroutineScope.launch {
             val deleted = withContext(Dispatchers.IO) {
                 deleteUri(context.applicationContext, file.uri)
+            }
+            if (!deleted && file.type == LocalMediaType.AUDIO) {
+                hideAudioFiles(listOf(file))
+                removeMediaFromMemory(file)
+                appStateStore.saveRecentAudioUri(recentAudioUri)
+                refreshMusicControllerAfterAudioRemoval(setOf(file.normalizedUri()))
+                Toast.makeText(context, "系统不允许直接删除该文件，已为你从列表移除。", Toast.LENGTH_SHORT).show()
+                return@launch
             }
             if (deleted) {
                 removeMediaFromMemory(file)
@@ -365,7 +499,10 @@ private fun LocalVibeApp() {
                         appStateStore.saveRecentVideoUri(recentVideoUri)
                     }
 
-                    LocalMediaType.AUDIO -> appStateStore.saveRecentAudioUri(recentAudioUri)
+                    LocalMediaType.AUDIO -> {
+                        appStateStore.saveRecentAudioUri(recentAudioUri)
+                        refreshMusicControllerAfterAudioRemoval(setOf(file.normalizedUri()))
+                    }
                     LocalMediaType.BOOK -> appStateStore.removePersistedBookFile(file.uri)
                     else -> Unit
                 }
@@ -375,6 +512,70 @@ private fun LocalVibeApp() {
             }
         }
     }
+
+    fun permanentlyDeleteMedia(files: List<LocalMediaFile>) {
+        val uniqueFiles = files.distinctBy { it.uri }
+        if (uniqueFiles.isEmpty()) {
+            Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+            return
+        }
+        coroutineScope.launch {
+            val results = withContext(Dispatchers.IO) {
+                uniqueFiles.associateWith { file ->
+                    deleteUri(context.applicationContext, file.uri)
+                }
+            }
+            val deletedFiles = results.filterValues { it }.keys.toList()
+            val failedAudioFiles = results
+                .filter { !it.value && it.key.type == LocalMediaType.AUDIO }
+                .keys
+                .toList()
+            val failedCount = results.count { !it.value && it.key.type != LocalMediaType.AUDIO }
+            val deletedAudioUris = deletedFiles
+                .filter { it.type == LocalMediaType.AUDIO }
+                .map { it.normalizedUri() }
+                .toSet()
+            if (failedAudioFiles.isNotEmpty()) {
+                hideAudioFiles(failedAudioFiles)
+            }
+            deletedFiles.forEach { file ->
+                removeMediaFromMemory(file)
+                when (file.type) {
+                    LocalMediaType.VIDEO -> {
+                        appStateStore.saveProgress(
+                            PersistedPlaybackProgress(
+                                mediaUri = file.uri,
+                                mediaType = LocalMediaType.VIDEO.name,
+                                positionMs = 0L,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+
+                    LocalMediaType.BOOK -> appStateStore.removePersistedBookFile(file.uri)
+                    else -> Unit
+                }
+            }
+            failedAudioFiles.forEach { file ->
+                removeMediaFromMemory(file)
+            }
+            appStateStore.saveRecentVideoUri(recentVideoUri)
+            appStateStore.saveRecentAudioUri(recentAudioUri)
+            refreshMusicControllerAfterAudioRemoval(
+                deletedAudioUris + failedAudioFiles.map { it.normalizedUri() }
+            )
+            if (deletedFiles.isNotEmpty()) {
+                Toast.makeText(context, "已删除 ${deletedFiles.size} 项", Toast.LENGTH_SHORT).show()
+            }
+            if (failedCount > 0) {
+                Toast.makeText(context, "$failedCount 项删除失败，请检查文件权限", Toast.LENGTH_SHORT).show()
+            }
+            if (failedAudioFiles.isNotEmpty()) {
+                Toast.makeText(context, "系统不允许直接删除 ${failedAudioFiles.size} 首音乐，已为你从列表移除。", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
 
     fun updateCategoryFolder(
         targetType: LocalMediaType,
@@ -388,9 +589,14 @@ private fun LocalVibeApp() {
             else -> return
         }
         targetFolders.upsertFolder(folder.id) { folder }
-        scannedFilesByFolder[typedFolderKey(targetType, folder.id)] = files
+        val visibleFiles = if (targetType == LocalMediaType.AUDIO) {
+            files.filterVisibleAudios()
+        } else {
+            files
+        }
+        scannedFilesByFolder[typedFolderKey(targetType, folder.id)] = visibleFiles
         if (targetType == LocalMediaType.BOOK) {
-            replaceFolderBookFiles(folder.id, files)
+            replaceFolderBookFiles(folder.id, visibleFiles)
         }
     }
 
@@ -418,7 +624,7 @@ private fun LocalVibeApp() {
                 LocalMediaType.AUDIO -> {
                     val folders = withContext(Dispatchers.IO) {
                         MediaStoreScanner.scanAudios(context.applicationContext)
-                    }
+                    }.filterHiddenAudioFolders()
                     audioFolders.removeAutoFoldersAndScans(LocalMediaType.AUDIO, scannedFilesByFolder)
                     folders.forEach { result ->
                         audioFolders.add(result.folder)
@@ -460,7 +666,7 @@ private fun LocalVibeApp() {
         if (canScanVideo) runAutoScan(LocalMediaType.VIDEO)
         if (canScanAudio) runAutoScan(LocalMediaType.AUDIO)
         if (!canScanVideo || !canScanAudio) {
-            Toast.makeText(context, "没有权限时可以使用手动添加文件夹。", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "没有媒体权限时可以使用手动添加文件夹。", Toast.LENGTH_SHORT).show()
         }
     }
     val openDocumentTreeLauncher = rememberLauncherForActivityResult(
@@ -504,6 +710,9 @@ private fun LocalVibeApp() {
                 }.getOrDefault(emptyList())
             }
             val typedFiles = scannedFiles.filter { it.type == targetType }
+                .let { files ->
+                    if (targetType == LocalMediaType.AUDIO) files.filterVisibleAudios() else files
+                }
 
             if (typedFiles.isEmpty()) {
                 targetFolders.removeAll { it.id == uriText }
@@ -638,13 +847,12 @@ private fun LocalVibeApp() {
                     }
                 }
 
-                LocalMediaType.AUDIO.name -> {
-                    // 音乐每次从头播放，旧版本保存的音乐进度在启动时忽略。
-                }
+                LocalMediaType.AUDIO.name -> Unit
             }
         }
         recentVideoUri = appStateStore.loadRecentVideoUri()
         recentAudioUri = appStateStore.loadRecentAudioUri()
+        hiddenAudioUris = appStateStore.loadHiddenAudioUris()
 
         val grantedUris = context.contentResolver.persistedUriPermissions
             .filter { it.isReadPermission }
@@ -715,6 +923,9 @@ private fun LocalVibeApp() {
                     }.getOrDefault(emptyList())
                 }
                 val typedFiles = scannedFiles.filter { it.type == targetType }
+                    .let { files ->
+                        if (targetType == LocalMediaType.AUDIO) files.filterVisibleAudios() else files
+                    }
                 if (typedFiles.isNotEmpty()) {
                     if (targetType == LocalMediaType.BOOK) {
                         restoredFolderBookCount += typedFiles.size
@@ -844,6 +1055,7 @@ private fun LocalVibeApp() {
             ?: recentAudioUri?.let { uri ->
                 scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
             }
+            ?.takeIf { it.normalizedUri() !in hiddenAudioUris }
         fun openMiniAudio() {
             val file = miniAudioFile ?: return
             if (audioQueue.none { it.uri == file.uri }) {
@@ -903,6 +1115,9 @@ private fun LocalVibeApp() {
                         onRescanVideo = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
                         },
+                        onMore = {
+                            Toast.makeText(context, "请进入文件夹后多选删除", Toast.LENGTH_SHORT).show()
+                        },
                         modifier = contentModifier
                     )
                 }
@@ -921,17 +1136,18 @@ private fun LocalVibeApp() {
                     onOpenMiniPlayer = { openMiniAudio() }
                 ) { contentModifier ->
                     val audioFolderGroups = audioFolders.map { folder ->
+                        val visibleFiles = scannedFilesByFolder[
+                            typedFolderKey(LocalMediaType.AUDIO, folder.id)
+                        ].orEmpty().filterVisibleAudios()
                         MediaFolderGroupUiModel(
                             folder = folder,
-                            files = scannedFilesByFolder[
-                                typedFolderKey(LocalMediaType.AUDIO, folder.id)
-                            ].orEmpty(),
+                            files = visibleFiles,
                             source = folder.sourceLabel()
                         )
-                    }
+                    }.filter { it.files.isNotEmpty() }
                     val audioFiles = audioFolderGroups
                         .flatMap { it.files }
-                        .distinctBy { it.uri }
+                        .filterVisibleAudios()
                         .sortedBy { it.name.lowercase() }
                     AudioLibraryScreen(
                         audioFiles = audioFiles,
@@ -969,6 +1185,12 @@ private fun LocalVibeApp() {
                         onDeleteAudio = { file ->
                             permanentlyDeleteMedia(file)
                         },
+                        onRemoveAudios = { files ->
+                            removeMediaFromList(files)
+                        },
+                        onDeleteAudios = { files ->
+                            permanentlyDeleteMedia(files)
+                        },
                         onRescanAudio = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
                         },
@@ -1002,6 +1224,12 @@ private fun LocalVibeApp() {
                         },
                         onDeleteBook = { file ->
                             permanentlyDeleteMedia(file)
+                        },
+                        onRemoveBooks = { files ->
+                            removeMediaFromList(files)
+                        },
+                        onDeleteBooks = { files ->
+                            permanentlyDeleteMedia(files)
                         },
                         modifier = contentModifier
                     )
@@ -1062,6 +1290,12 @@ private fun LocalVibeApp() {
                     },
                     onDeleteFile = { file ->
                         permanentlyDeleteMedia(file)
+                    },
+                    onRemoveFiles = { files ->
+                        removeMediaFromList(files)
+                    },
+                    onDeleteFiles = { files ->
+                        permanentlyDeleteMedia(files)
                     },
                     onBack = { navController.popBackStack() }
                 )
@@ -1217,6 +1451,14 @@ private fun LocalVibeApp() {
                     onRescanMedia = {
                         Toast.makeText(context, "正在重新扫描媒体", Toast.LENGTH_SHORT).show()
                         autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                    },
+                    onRestoreHiddenAudio = {
+                        coroutineScope.launch {
+                            appStateStore.clearHiddenAudioUris()
+                            hiddenAudioUris = emptySet()
+                            Toast.makeText(context, "已恢复隐藏音乐，请稍后查看", Toast.LENGTH_SHORT).show()
+                            autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                        }
                     }
                 )
             }
@@ -1404,6 +1646,8 @@ private fun LocalMediaFile.normalizedBookKey(): String {
     val normalizedUri = uri.trim()
     return normalizedUri.ifBlank { "${name.trim().lowercase()}:$size" }
 }
+
+private fun LocalMediaFile.normalizedUri(): String = uri.trim()
 
 private fun LocalMediaFile.toAudioMediaItem(): MediaItem {
     return MediaItem.Builder()

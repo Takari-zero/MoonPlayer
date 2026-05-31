@@ -20,7 +20,7 @@ private val SettingsItems = listOf(
     "播放设置",
     "扫描设置",
     "主题设置",
-    "关于Moon播放器"
+    "关于 Moon播放器"
 )
 
 @Composable
@@ -30,6 +30,7 @@ fun SettingsScreen(
     onClearFolders: () -> Unit,
     onClearBooks: () -> Unit,
     onRescanMedia: () -> Unit,
+    onRestoreHiddenAudio: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
@@ -79,6 +80,10 @@ fun SettingsScreen(
                 SettingsActionItem(
                     title = "重新扫描媒体",
                     onClick = onRescanMedia
+                )
+                SettingsActionItem(
+                    title = "恢复隐藏音乐",
+                    onClick = onRestoreHiddenAudio
                 )
             }
         }

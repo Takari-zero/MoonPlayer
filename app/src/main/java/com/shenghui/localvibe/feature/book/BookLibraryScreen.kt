@@ -9,20 +9,19 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
@@ -30,6 +29,9 @@ import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -61,11 +63,16 @@ fun BookLibraryScreen(
     onRescanBooks: () -> Unit,
     onRemoveBook: (LocalMediaFile) -> Unit,
     onDeleteBook: (LocalMediaFile) -> Unit,
+    onRemoveBooks: (List<LocalMediaFile>) -> Unit,
+    onDeleteBooks: (List<LocalMediaFile>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchKeyword by rememberSaveable { mutableStateOf("") }
+    var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
+    var selectedBookUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     val gridState = rememberLazyGridState()
     val shownBooks = remember(bookFiles, searchKeyword) {
         val sortedBooks = bookFiles.distinctBy { it.uri }.sortedBy { it.displayTitle().lowercase() }
@@ -85,52 +92,52 @@ fun BookLibraryScreen(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("小说", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        text = "TXT 小说",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            BookHeader(
+                isSearching = isSearching,
+                isMultiSelectMode = isMultiSelectMode,
+                selectedCount = selectedBookUris.size,
+                onToggleSearch = {
+                    if (isSearching) searchKeyword = ""
+                    isSearching = !isSearching
+                },
+                onImportBookFile = onImportBookFile,
+                onRescanBooks = onRescanBooks,
+                onManage = {
+                    Toast.makeText(context, "管理功能后续实现", Toast.LENGTH_SHORT).show()
+                },
+                onMore = {
+                    Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                },
+                onStartMultiSelect = {
+                    isMultiSelectMode = true
+                    selectedBookUris = emptySet()
+                },
+                onCancelMultiSelect = {
+                    isMultiSelectMode = false
+                    selectedBookUris = emptySet()
+                },
+                onSelectAll = {
+                    selectedBookUris = shownBooks.map { it.uri }.toSet()
+                },
+                onRemoveSelected = {
+                    val selectedBooks = shownBooks.filter { it.uri in selectedBookUris }
+                    if (selectedBooks.isEmpty()) {
+                        Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onRemoveBooks(selectedBooks)
+                        selectedBookUris = emptySet()
+                        isMultiSelectMode = false
+                    }
+                },
+                onDeleteSelected = {
+                    if (selectedBookUris.isEmpty()) {
+                        Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+                    } else {
+                        showBatchDeleteConfirm = true
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-                    IconButton(
-                        onClick = {
-                            if (isSearching) {
-                                searchKeyword = ""
-                            }
-                            isSearching = !isSearching
-                        }
-                    ) {
-                        Icon(Icons.Filled.Search, contentDescription = if (isSearching) "关闭搜索" else "搜索")
-                    }
-                    IconButton(onClick = onImportBookFile) {
-                        Icon(Icons.Filled.Add, contentDescription = "导入文档")
-                    }
-                    IconButton(onClick = onRescanBooks) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
-                    }
-                    IconButton(
-                        onClick = {
-                            Toast.makeText(context, "管理功能后续实现", Toast.LENGTH_SHORT).show()
-                        }
-                    ) {
-                        Icon(Icons.Filled.ManageSearch, contentDescription = "管理")
-                    }
-                    IconButton(
-                        onClick = {
-                            Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
-                        }
-                    ) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "更多")
-                    }
-                }
-            }
+            )
+
             Box(modifier = Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -144,21 +151,27 @@ fun BookLibraryScreen(
                         AddBookCard(onClick = onImportBookFile)
                     }
 
-                    items(
-                        items = shownBooks,
-                        key = { it.uri }
-                    ) { book ->
+                    items(items = shownBooks, key = { it.uri }) { book ->
                         BookCard(
                             file = book,
+                            isSelectionMode = isMultiSelectMode,
+                            isSelected = book.uri in selectedBookUris,
+                            onToggleSelected = {
+                                selectedBookUris = selectedBookUris.toggle(book.uri)
+                            },
                             onRemove = { onRemoveBook(book) },
                             onDelete = { onDeleteBook(book) },
                             onClick = {
-                                Toast.makeText(context, "TXT 听书功能下一步实现", Toast.LENGTH_SHORT).show()
+                                if (isMultiSelectMode) {
+                                    selectedBookUris = selectedBookUris.toggle(book.uri)
+                                } else {
+                                    Toast.makeText(context, "TXT 听书功能下一步实现", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         )
                     }
                 }
-                if (isSearching) {
+                if (isSearching && !isMultiSelectMode) {
                     FloatingSearchBar(
                         value = searchKeyword,
                         onValueChange = { searchKeyword = it },
@@ -172,6 +185,124 @@ fun BookLibraryScreen(
         }
     }
 
+    if (showBatchDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteConfirm = false },
+            title = { Text("永久删除小说？") },
+            text = { Text("将删除选中的 TXT 文件，此操作无法从 Moon播放器 恢复。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedBooks = shownBooks.filter { it.uri in selectedBookUris }
+                        showBatchDeleteConfirm = false
+                        onDeleteBooks(selectedBooks)
+                        selectedBookUris = emptySet()
+                        isMultiSelectMode = false
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun BookHeader(
+    isSearching: Boolean,
+    isMultiSelectMode: Boolean,
+    selectedCount: Int,
+    onToggleSearch: () -> Unit,
+    onImportBookFile: () -> Unit,
+    onRescanBooks: () -> Unit,
+    onManage: () -> Unit,
+    onMore: () -> Unit,
+    onStartMultiSelect: () -> Unit,
+    onCancelMultiSelect: () -> Unit,
+    onSelectAll: () -> Unit,
+    onRemoveSelected: () -> Unit,
+    onDeleteSelected: () -> Unit
+) {
+    if (isMultiSelectMode) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onCancelMultiSelect) { Text("取消") }
+            Text(
+                text = "已选择 $selectedCount 项",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Center
+            )
+            Row {
+                TextButton(onClick = onSelectAll) { Text("全选") }
+                TextButton(onClick = onRemoveSelected) { Text("移除") }
+                TextButton(onClick = onDeleteSelected) { Text("删除") }
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("小说", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    text = "TXT 小说",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            var expanded by remember { mutableStateOf(false) }
+            Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                IconButton(onClick = onToggleSearch) {
+                    Icon(Icons.Filled.Search, contentDescription = if (isSearching) "关闭搜索" else "搜索")
+                }
+                IconButton(onClick = onImportBookFile) {
+                    Icon(Icons.Filled.Add, contentDescription = "导入文档")
+                }
+                IconButton(onClick = onRescanBooks) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
+                }
+                IconButton(onClick = onManage) {
+                    Icon(Icons.Filled.ManageSearch, contentDescription = "管理")
+                }
+                Box {
+                    IconButton(onClick = { expanded = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("多选删除") },
+                            onClick = {
+                                expanded = false
+                                onStartMultiSelect()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("更多功能后续实现") },
+                            onClick = {
+                                expanded = false
+                                onMore()
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -192,11 +323,7 @@ private fun AddBookCard(onClick: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = "+",
-                style = MaterialTheme.typography.displaySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text(
                 text = "导入本地文档",
                 style = MaterialTheme.typography.bodySmall,
@@ -211,17 +338,21 @@ private fun AddBookCard(onClick: () -> Unit) {
 @Composable
 private fun BookCard(
     file: LocalMediaFile,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelected: () -> Unit,
     onRemove: () -> Unit,
     onDelete: () -> Unit,
     onClick: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
-
     Column(
         modifier = Modifier.combinedClickable(
             onClick = onClick,
-            onLongClick = { expanded = true }
+            onLongClick = {
+                if (isSelectionMode) onToggleSelected() else expanded = true
+            }
         ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -231,7 +362,13 @@ private fun BookCard(
                     .fillMaxWidth()
                     .aspectRatio(0.62f)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer),
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainer
+                        }
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -242,6 +379,27 @@ private fun BookCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
+                if (isSelectionMode) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Text("✓", color = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
+                }
                 Column(
                     modifier = Modifier.padding(horizontal = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -262,25 +420,27 @@ private fun BookCard(
                     )
                 }
             }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                DropdownMenuItem(
-                    text = { Text("从书架移除") },
-                    onClick = {
-                        expanded = false
-                        onRemove()
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("永久删除文件") },
-                    onClick = {
-                        expanded = false
-                        showDeleteConfirm = true
-                    }
-                )
+            if (!isSelectionMode) {
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("从书架移除") },
+                        onClick = {
+                            expanded = false
+                            onRemove()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("永久删除文件") },
+                        onClick = {
+                            expanded = false
+                            showDeleteConfirm = true
+                        }
+                    )
+                }
             }
         }
         Text(
@@ -317,10 +477,6 @@ private fun BookCard(
     }
 }
 
-private fun LocalMediaFile.displayTitle(): String {
-    return name.substringBeforeLast('.', name)
-}
-
 @Composable
 private fun FloatingSearchBar(
     value: String,
@@ -353,4 +509,12 @@ private fun FloatingSearchBar(
             placeholder = { Text(placeholder) }
         )
     }
+}
+
+private fun LocalMediaFile.displayTitle(): String {
+    return name.substringBeforeLast('.', name)
+}
+
+private fun Set<String>.toggle(value: String): Set<String> {
+    return if (value in this) this - value else this + value
 }

@@ -90,6 +90,41 @@ class AppStateStore(private val context: Context) {
         clearPersistedBookFiles()
     }
 
+    suspend fun loadHiddenAudioUris(): Set<String> {
+        val json = context.appStateDataStore.data.first()[HiddenAudioUrisKey].orEmpty()
+        if (json.isBlank()) return emptySet()
+        return runCatching {
+            val array = JSONArray(json)
+            buildSet {
+                repeat(array.length()) { index ->
+                    val value = array.opt(index)
+                    val uri = when (value) {
+                        is JSONObject -> value.optString("uri")
+                        else -> value?.toString().orEmpty()
+                    }.trim()
+                    if (uri.isNotBlank()) add(uri)
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun hideAudioUris(uris: Collection<String>) {
+        val normalizedUris = uris.map { it.trim() }.filter { it.isNotBlank() }
+        if (normalizedUris.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeHiddenAudioUris(prefs[HiddenAudioUrisKey].orEmpty())
+                .plus(normalizedUris)
+                .toSet()
+            prefs[HiddenAudioUrisKey] = encodeHiddenAudioUris(next)
+        }
+    }
+
+    suspend fun clearHiddenAudioUris() {
+        context.appStateDataStore.edit { prefs ->
+            prefs.remove(HiddenAudioUrisKey)
+        }
+    }
+
     suspend fun loadProgress(): List<PersistedPlaybackProgress> {
         val json = context.appStateDataStore.data.first()[ProgressKey].orEmpty()
         if (json.isBlank()) return emptyList()
@@ -228,9 +263,43 @@ class AppStateStore(private val context: Context) {
         return array.toString()
     }
 
+    private fun decodeHiddenAudioUris(json: String): Set<String> {
+        if (json.isBlank()) return emptySet()
+        return runCatching {
+            val array = JSONArray(json)
+            buildSet {
+                repeat(array.length()) { index ->
+                    val value = array.opt(index)
+                    val uri = when (value) {
+                        is JSONObject -> value.optString("uri")
+                        else -> value?.toString().orEmpty()
+                    }.trim()
+                    if (uri.isNotBlank()) add(uri)
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    private fun encodeHiddenAudioUris(uris: Set<String>): String {
+        val array = JSONArray()
+        uris.map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { uri ->
+                array.put(
+                    JSONObject()
+                        .put("uri", uri)
+                        .put("mediaType", "AUDIO")
+                        .put("hiddenAt", System.currentTimeMillis())
+                )
+            }
+        return array.toString()
+    }
+
     private companion object {
         val FoldersKey = stringPreferencesKey("manual_folders_json")
         val BookFilesKey = stringPreferencesKey("book_files_json")
+        val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
         val ProgressKey = stringPreferencesKey("playback_progress_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")
         val RecentAudioUriKey = stringPreferencesKey("recent_audio_uri")

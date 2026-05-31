@@ -2,6 +2,7 @@ package com.shenghui.localvibe.feature.audio
 
 import android.media.audiofx.Equalizer
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,8 +50,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -68,9 +67,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,6 +85,7 @@ import com.shenghui.localvibe.core.player.EqualizerPreset
 import com.shenghui.localvibe.core.player.applyPreset
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudioPlayerScreen(
     mediaFile: LocalMediaFile?,
@@ -146,6 +149,7 @@ fun AudioPlayerScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServiceAudioPlayer(
     mediaFile: LocalMediaFile,
@@ -289,22 +293,19 @@ private fun ServiceAudioPlayer(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Slider(
-                    value = displayPositionMs.coerceAtMost(durationMs).toFloat(),
+                AudioProgressSlider(
+                    positionMs = displayPositionMs.coerceAtMost(durationMs.coerceAtLeast(0L)),
+                    durationMs = durationMs,
                     onValueChange = {
                         isDraggingProgress = true
-                        displayPositionMs = it.toLong()
+                        displayPositionMs = it
                     },
-                    onValueChangeFinished = {
-                        onSeekTo(displayPositionMs)
+                    onValueChangeFinished = { targetPositionMs ->
+                        displayPositionMs = targetPositionMs
+                        onSeekTo(targetPositionMs)
                         isDraggingProgress = false
                     },
-                    valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-                    colors = SliderDefaults.colors(
-                        activeTrackColor = Color(0xFF4D8DFF),
-                        inactiveTrackColor = Color(0xFF3A3345),
-                        thumbColor = Color(0xFF8AB6FF)
-                    )
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -452,6 +453,94 @@ private fun ServiceAudioPlayer(
                 bandLevels = EqualizerPreset.DEFAULT.defaultBandLevels()
             },
             onDismiss = { showEqualizer = false }
+        )
+    }
+}
+
+@Composable
+private fun AudioProgressSlider(
+    positionMs: Long,
+    durationMs: Long,
+    onValueChange: (Long) -> Unit,
+    onValueChangeFinished: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val thumbRadiusPx = with(density) { 6.5.dp.toPx() }
+    val trackStrokePx = with(density) { 4.5.dp.toPx() }
+    val safeDurationMs = durationMs.coerceAtLeast(0L)
+    val rangeDurationMs = safeDurationMs.coerceAtLeast(1L)
+    var pendingSeekMs by remember { mutableLongStateOf(positionMs.coerceIn(0L, safeDurationMs)) }
+
+    LaunchedEffect(positionMs, safeDurationMs) {
+        pendingSeekMs = positionMs.coerceIn(0L, safeDurationMs)
+    }
+
+    fun positionFromX(x: Float, width: Float): Long {
+        if (safeDurationMs <= 0L) return 0L
+        val startX = thumbRadiusPx
+        val endX = (width - thumbRadiusPx).coerceAtLeast(startX)
+        val usableWidth = (endX - startX).coerceAtLeast(1f)
+        val fraction = ((x.coerceIn(startX, endX) - startX) / usableWidth).coerceIn(0f, 1f)
+        return (fraction * safeDurationMs).toLong().coerceIn(0L, safeDurationMs)
+    }
+
+    Canvas(
+        modifier = modifier
+            .height(32.dp)
+            .pointerInput(safeDurationMs, thumbRadiusPx) {
+                detectTapGestures { offset ->
+                    val target = positionFromX(offset.x, size.width.toFloat())
+                    pendingSeekMs = target
+                    onValueChange(target)
+                    onValueChangeFinished(target)
+                }
+            }
+            .pointerInput(safeDurationMs, thumbRadiusPx) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        val target = positionFromX(offset.x, size.width.toFloat())
+                        pendingSeekMs = target
+                        onValueChange(target)
+                    },
+                    onDragEnd = {
+                        onValueChangeFinished(pendingSeekMs)
+                    },
+                    onDragCancel = {
+                        onValueChangeFinished(pendingSeekMs)
+                    }
+                ) { change, _ ->
+                    val target = positionFromX(change.position.x, size.width.toFloat())
+                    pendingSeekMs = target
+                    onValueChange(target)
+                    change.consume()
+                }
+            }
+    ) {
+        val centerY = size.height / 2f
+        val startX = thumbRadiusPx
+        val endX = (size.width - thumbRadiusPx).coerceAtLeast(startX)
+        val fraction = (positionMs.toFloat() / rangeDurationMs.toFloat()).coerceIn(0f, 1f)
+        val thumbCenterX = startX + (endX - startX) * fraction
+
+        drawLine(
+            color = Color(0xFF2E3445),
+            start = Offset(startX, centerY),
+            end = Offset(endX, centerY),
+            strokeWidth = trackStrokePx,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = Color(0xFF4D8DFF),
+            start = Offset(startX, centerY),
+            end = Offset(thumbCenterX, centerY),
+            strokeWidth = trackStrokePx,
+            cap = StrokeCap.Round
+        )
+        drawCircle(
+            color = Color(0xFF8AB6FF),
+            radius = thumbRadiusPx,
+            center = Offset(thumbCenterX, centerY)
         )
     }
 }

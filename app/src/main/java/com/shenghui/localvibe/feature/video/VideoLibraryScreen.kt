@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Clear
@@ -56,6 +58,7 @@ fun VideoLibraryScreen(
     onOpenFolder: (VideoFolderUiModel) -> Unit,
     onContinueVideo: (LocalMediaFile) -> Unit,
     onRescanVideo: () -> Unit,
+    onMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -250,8 +253,31 @@ private fun VideoHeader(
                 IconButton(onClick = onRescanVideo) {
                     Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
                 }
-                IconButton(onClick = onMore) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+                var expanded by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { expanded = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("多选删除") },
+                            onClick = {
+                                expanded = false
+                                onMore()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("更多功能后续实现") },
+                            onClick = {
+                                expanded = false
+                                onMore()
+                            }
+                        )
+                    }
                 }
             }
         }
