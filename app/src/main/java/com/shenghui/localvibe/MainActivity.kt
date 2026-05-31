@@ -1,0 +1,1119 @@
+package com.shenghui.localvibe
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.core.content.ContextCompat
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation.NavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.documentfile.provider.DocumentFile
+import com.shenghui.localvibe.core.datastore.AppStateStore
+import com.shenghui.localvibe.core.datastore.PersistedBookFile
+import com.shenghui.localvibe.core.datastore.PersistedFolder
+import com.shenghui.localvibe.core.datastore.PersistedPlaybackProgress
+import com.shenghui.localvibe.core.media.resolveDocumentTreeName
+import com.shenghui.localvibe.core.media.VideoMetadata
+import com.shenghui.localvibe.core.player.AudioPlayMode
+import com.shenghui.localvibe.core.scanner.FolderScanner
+import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import com.shenghui.localvibe.core.scanner.LocalMediaType
+import com.shenghui.localvibe.core.scanner.MediaStoreScanner
+import com.shenghui.localvibe.core.ui.theme.LocalVibeTheme
+import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
+import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
+import com.shenghui.localvibe.feature.book.BookLibraryScreen
+import com.shenghui.localvibe.feature.folder.FolderScreen
+import com.shenghui.localvibe.feature.home.model.MediaFolderUiModel
+import com.shenghui.localvibe.feature.profile.ProfileScreen
+import com.shenghui.localvibe.feature.settings.SettingsScreen
+import com.shenghui.localvibe.feature.video.VideoLibraryScreen
+import com.shenghui.localvibe.feature.video.VideoPlayerScreen
+import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
+import com.shenghui.localvibe.feature.library.MediaFolderGroupUiModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            LocalVibeTheme {
+                LocalVibeApp()
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalVibeApp() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val navController = rememberNavController()
+    val coroutineScope = rememberCoroutineScope()
+    val appStateStore = remember { AppStateStore(context.applicationContext) }
+    val videoFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
+    val audioFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
+    val bookFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
+    val importedBookFiles = remember { mutableStateListOf<LocalMediaFile>() }
+    val scannedFilesByFolder = remember { mutableStateMapOf<String, List<LocalMediaFile>>() }
+    val videoProgressMap = remember { mutableStateMapOf<String, Long>() }
+    val videoMetadataCache = remember { mutableStateMapOf<String, VideoMetadata>() }
+    val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
+    var currentFolder by remember { mutableStateOf<MediaFolderUiModel?>(null) }
+    var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
+    var currentAddTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
+    var lastAutoScanAt by remember { mutableStateOf(0L) }
+    var videoPermissionDenied by remember { mutableStateOf(false) }
+    var audioPermissionDenied by remember { mutableStateOf(false) }
+    var selectedMediaFile by remember { mutableStateOf<LocalMediaFile?>(null) }
+    var audioQueue by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
+    var currentAudioIndex by remember { mutableStateOf(0) }
+    var audioPlayMode by remember { mutableStateOf(AudioPlayMode.NORMAL) }
+    var videoQueue by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
+    var currentVideoIndex by remember { mutableStateOf(0) }
+    var selectedVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedAudioUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
+    var recentVideoUri by remember { mutableStateOf<String?>(null) }
+    var recentAudioUri by remember { mutableStateOf<String?>(null) }
+    fun updateCategoryFolder(
+        targetType: LocalMediaType,
+        folder: MediaFolderUiModel,
+        files: List<LocalMediaFile>
+    ) {
+        val targetFolders = when (targetType) {
+            LocalMediaType.VIDEO -> videoFolders
+            LocalMediaType.AUDIO -> audioFolders
+            LocalMediaType.BOOK -> bookFolders
+            else -> return
+        }
+        targetFolders.upsertFolder(folder.id) { folder }
+        scannedFilesByFolder[typedFolderKey(targetType, folder.id)] = files
+    }
+
+    fun runAutoScan(targetType: LocalMediaType, showCompletionToast: Boolean = false) {
+        coroutineScope.launch {
+            when (targetType) {
+                LocalMediaType.VIDEO -> {
+                    val folders = withContext(Dispatchers.IO) {
+                        MediaStoreScanner.scanVideos(context.applicationContext)
+                    }
+                    videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
+                    folders.forEach { result ->
+                        videoFolders.add(result.folder)
+                        scannedFilesByFolder[typedFolderKey(LocalMediaType.VIDEO, result.folder.id)] =
+                            result.files
+                    }
+                    if (showCompletionToast && folders.isEmpty()) {
+                        Toast.makeText(context, "没有扫描到视频文件", Toast.LENGTH_SHORT).show()
+                    }
+                    if (showCompletionToast) {
+                        Toast.makeText(context, "媒体扫描已完成", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                LocalMediaType.AUDIO -> {
+                    val folders = withContext(Dispatchers.IO) {
+                        MediaStoreScanner.scanAudios(context.applicationContext)
+                    }
+                    audioFolders.removeAutoFoldersAndScans(LocalMediaType.AUDIO, scannedFilesByFolder)
+                    folders.forEach { result ->
+                        audioFolders.add(result.folder)
+                        scannedFilesByFolder[typedFolderKey(LocalMediaType.AUDIO, result.folder.id)] =
+                            result.files
+                    }
+                    if (showCompletionToast && folders.isEmpty()) {
+                        Toast.makeText(context, "没有扫描到音乐文件", Toast.LENGTH_SHORT).show()
+                    }
+                    if (showCompletionToast) {
+                        Toast.makeText(context, "媒体扫描已完成", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                LocalMediaType.BOOK -> {
+                    if (bookFolders.isEmpty()) {
+                        Toast.makeText(context, "请先添加小说文件夹。", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val refreshedFolders = bookFolders.toList()
+                        refreshedFolders.forEach { folder ->
+                            val scannedFiles = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    FolderScanner.scanFolder(
+                                        context.applicationContext,
+                                        Uri.parse(folder.uri)
+                                    )
+                                }.getOrDefault(emptyList())
+                            }
+                            val bookFiles = scannedFiles.filter { it.type == LocalMediaType.BOOK }
+                            if (bookFiles.isNotEmpty()) {
+                                updateCategoryFolder(
+                                    targetType = LocalMediaType.BOOK,
+                                    folder = folder.copy(
+                                        videoCount = 0,
+                                        audioCount = 0,
+                                        bookCount = bookFiles.size,
+                                        isScanning = false
+                                    ),
+                                    files = bookFiles
+                                )
+                            }
+                        }
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+    }
+
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val canScanVideo = LocalMediaType.VIDEO.mediaReadPermission()
+            ?.let { grants[it] == true || hasPermission(context, it) } ?: true
+        val canScanAudio = LocalMediaType.AUDIO.mediaReadPermission()
+            ?.let { grants[it] == true || hasPermission(context, it) } ?: true
+        videoPermissionDenied = !canScanVideo
+        audioPermissionDenied = !canScanAudio
+        if (canScanVideo) runAutoScan(LocalMediaType.VIDEO)
+        if (canScanAudio) runAutoScan(LocalMediaType.AUDIO)
+        if (!canScanVideo || !canScanAudio) {
+            Toast.makeText(context, "没有权限时可以使用手动添加文件夹。", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val openDocumentTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) {
+            return@rememberLauncherForActivityResult
+        }
+        val targetType = currentAddTargetType ?: LocalMediaType.VIDEO
+
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+
+        val uriText = uri.toString()
+        val targetFolders = when (targetType) {
+            LocalMediaType.VIDEO -> videoFolders
+            LocalMediaType.AUDIO -> audioFolders
+            LocalMediaType.BOOK -> bookFolders
+            else -> videoFolders
+        }
+        targetFolders.upsertFolder(uriText) {
+            MediaFolderUiModel(
+                id = uriText,
+                name = resolveDocumentTreeName(context, uri),
+                uri = uriText,
+                videoCount = 0,
+                audioCount = 0,
+                bookCount = 0,
+                isScanning = true
+            )
+        }
+
+        coroutineScope.launch {
+            val scannedFiles = withContext(Dispatchers.IO) {
+                runCatching {
+                    FolderScanner.scanFolder(context.applicationContext, uri)
+                }.getOrDefault(emptyList())
+            }
+            val typedFiles = scannedFiles.filter { it.type == targetType }
+
+            if (typedFiles.isEmpty()) {
+                targetFolders.removeAll { it.id == uriText }
+                scannedFilesByFolder.remove(typedFolderKey(targetType, uriText))
+                Toast.makeText(context, targetType.emptyFolderMessage(), Toast.LENGTH_SHORT).show()
+            } else {
+                updateCategoryFolder(
+                    targetType = targetType,
+                    folder = MediaFolderUiModel(
+                        id = uriText,
+                        name = resolveDocumentTreeName(context, uri),
+                        uri = uriText,
+                        videoCount = typedFiles.count { it.type == LocalMediaType.VIDEO },
+                        audioCount = typedFiles.count { it.type == LocalMediaType.AUDIO },
+                        bookCount = typedFiles.count { it.type == LocalMediaType.BOOK },
+                        isScanning = false
+                    ),
+                    files = typedFiles
+                )
+                appStateStore.upsertFolder(
+                    PersistedFolder(
+                        folderId = uriText,
+                        name = resolveDocumentTreeName(context, uri),
+                        uri = uriText,
+                        targetType = targetType.name,
+                        source = "MANUAL",
+                        addedAt = System.currentTimeMillis(),
+                        lastScannedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+    }
+    val openTextDocumentsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isEmpty()) {
+            return@rememberLauncherForActivityResult
+        }
+        var skippedCount = 0
+        val selectedBooks = uris.mapNotNull { uri ->
+            val bookFile = uri.toLocalBookFile(context.applicationContext)
+            if (bookFile == null || bookFile.extension.lowercase() != "txt") {
+                skippedCount += 1
+                null
+            } else {
+                uri to bookFile
+            }
+        }
+        Log.d(
+            BOOK_LOG_TAG,
+            "selected txt count=${selectedBooks.size}, uris=${selectedBooks.joinToString { it.second.uri }}"
+        )
+        val persistedBooks = mutableListOf<PersistedBookFile>()
+        selectedBooks.forEach { (uri, bookFile) ->
+            val uriText = uri.toString()
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }.onFailure {
+                Log.w(BOOK_LOG_TAG, "persist permission failed uri=$uriText", it)
+            }
+            importedBookFiles.removeAll { it.uri == uriText }
+            importedBookFiles.add(bookFile)
+            persistedBooks.add(
+                PersistedBookFile(
+                    id = uriText,
+                    name = bookFile.name,
+                    uri = uriText,
+                    addedAt = System.currentTimeMillis()
+                )
+            )
+        }
+        if (persistedBooks.isNotEmpty()) {
+            coroutineScope.launch {
+                appStateStore.upsertPersistedBookFiles(persistedBooks)
+                val savedBooks = appStateStore.getPersistedBookFiles()
+                Log.d(
+                    BOOK_LOG_TAG,
+                    "saved imported book count=${savedBooks.size}, uris=${savedBooks.joinToString { it.uri }}"
+                )
+            }
+        }
+        if (skippedCount > 0) {
+            Toast.makeText(context, "已跳过非 TXT 文件", Toast.LENGTH_SHORT).show()
+        }
+        if (selectedBooks.isNotEmpty()) {
+            Toast.makeText(context, "已导入 ${selectedBooks.size} 本小说", Toast.LENGTH_SHORT).show()
+        }
+    }
+    fun autoScanVideoAndAudio(force: Boolean = false, showCompletionToast: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastAutoScanAt < AUTO_SCAN_THROTTLE_MS) {
+            return
+        }
+        lastAutoScanAt = now
+
+        val missingPermissions = mediaScanPermissions()
+            .filter { !hasPermission(context, it) }
+        if (missingPermissions.isNotEmpty()) {
+            mediaPermissionLauncher.launch(missingPermissions.toTypedArray())
+        } else {
+            videoPermissionDenied = false
+            audioPermissionDenied = false
+            runAutoScan(LocalMediaType.VIDEO, showCompletionToast = false)
+            runAutoScan(LocalMediaType.AUDIO, showCompletionToast = showCompletionToast)
+        }
+    }
+    LaunchedEffect(Unit) {
+        appStateStore.loadProgress().forEach { progress ->
+            when (progress.mediaType) {
+                LocalMediaType.VIDEO.name -> {
+                    if (progress.positionMs > 0L) {
+                        videoProgressMap[progress.mediaUri] = progress.positionMs
+                    }
+                }
+
+                LocalMediaType.AUDIO.name -> {
+                    // 音乐每次从头播放，旧版本保存的音乐进度在启动时忽略。
+                }
+            }
+        }
+        recentVideoUri = appStateStore.loadRecentVideoUri()
+        recentAudioUri = appStateStore.loadRecentAudioUri()
+
+        val grantedUris = context.contentResolver.persistedUriPermissions
+            .filter { it.isReadPermission }
+            .map { it.uri.toString() }
+            .toSet()
+        var skippedFolderCount = 0
+        var restoredFolderBookCount = 0
+
+        appStateStore.loadFolders()
+            .filter { it.source == "MANUAL" }
+            .forEach { persistedFolder ->
+                val targetType = persistedFolder.targetType.toLocalMediaTypeOrNull()
+                    ?: return@forEach
+                if (persistedFolder.uri !in grantedUris) {
+                    skippedFolderCount += 1
+                    return@forEach
+                }
+
+                val scannedFiles = withContext(Dispatchers.IO) {
+                    runCatching {
+                        FolderScanner.scanFolder(
+                            context.applicationContext,
+                            Uri.parse(persistedFolder.uri)
+                        )
+                    }.getOrDefault(emptyList())
+                }
+                val typedFiles = scannedFiles.filter { it.type == targetType }
+                if (typedFiles.isNotEmpty()) {
+                    if (targetType == LocalMediaType.BOOK) {
+                        restoredFolderBookCount += typedFiles.size
+                    }
+                    updateCategoryFolder(
+                        targetType = targetType,
+                        folder = MediaFolderUiModel(
+                            id = persistedFolder.folderId,
+                            name = persistedFolder.name,
+                            uri = persistedFolder.uri,
+                            videoCount = typedFiles.count { it.type == LocalMediaType.VIDEO },
+                            audioCount = typedFiles.count { it.type == LocalMediaType.AUDIO },
+                            bookCount = typedFiles.count { it.type == LocalMediaType.BOOK },
+                            isScanning = false
+                        ),
+                        files = typedFiles
+                    )
+                }
+            }
+        Log.d(BOOK_LOG_TAG, "restored folder book count=$restoredFolderBookCount")
+
+        val persistedBookFiles = appStateStore.getPersistedBookFiles()
+        Log.d(BOOK_LOG_TAG, "restored count from DataStore=${persistedBookFiles.size}")
+        var restoredBookCount = 0
+        persistedBookFiles.forEach { persistedBook ->
+            val hasPermission = persistedBook.uri in grantedUris
+            val file = Uri.parse(persistedBook.uri).toLocalBookFile(context.applicationContext)
+                ?: LocalMediaFile(
+                    id = persistedBook.uri,
+                    name = persistedBook.name,
+                    uri = persistedBook.uri,
+                    type = LocalMediaType.BOOK,
+                    extension = "txt",
+                    size = 0L,
+                    parentFolderName = null
+                )
+            importedBookFiles.removeAll { it.uri == file.uri }
+            importedBookFiles.add(file)
+            restoredBookCount += 1
+            Log.d(
+                BOOK_LOG_TAG,
+                "restored book uri=${persistedBook.uri}, hasPermission=$hasPermission"
+            )
+        }
+        Log.d(BOOK_LOG_TAG, "restored book files count=$restoredBookCount")
+
+        if (skippedFolderCount > 0) {
+            Toast.makeText(context, "部分文件夹需要重新授权", Toast.LENGTH_SHORT).show()
+        }
+        autoScanVideoAndAudio(force = true)
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                autoScanVideoAndAudio()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        val miniAudioFile = selectedMediaFile?.takeIf { it.type == LocalMediaType.AUDIO }
+            ?: selectedAudioUri?.let { uri ->
+                scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
+            }
+            ?: recentAudioUri?.let { uri ->
+                scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
+            }
+        fun openMiniAudio() {
+            val file = miniAudioFile ?: return
+            if (audioQueue.none { it.uri == file.uri }) {
+                audioQueue = listOf(file)
+                currentAudioIndex = 0
+            }
+            selectedMediaFile = file
+            selectedAudioUri = file.uri
+            navController.navigate(LocalVibeRoute.AudioPlayer)
+        }
+        NavHost(
+            navController = navController,
+            startDestination = LocalVibeRoute.VideoLibrary
+        ) {
+            composable(LocalVibeRoute.VideoLibrary) {
+                MainTabScaffold(navController = navController) { contentModifier ->
+                    val videoFolderGroups = videoFolders.map { folder ->
+                        VideoFolderUiModel(
+                            folder = folder,
+                            videos = scannedFilesByFolder[
+                                typedFolderKey(LocalMediaType.VIDEO, folder.id)
+                            ].orEmpty(),
+                            source = folder.sourceLabel()
+                        )
+                    }
+                    VideoLibraryScreen(
+                        videoFolders = videoFolderGroups,
+                        permissionDeniedMessage = if (videoPermissionDenied) {
+                            "没有媒体权限，无法自动扫描视频。你仍然可以手动添加文件夹。"
+                        } else {
+                            null
+                        },
+                        recentVideoFile = recentVideoFile ?: recentVideoUri?.let { uri ->
+                            scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
+                        },
+                        onAddFolder = {
+                            currentAddTargetType = LocalMediaType.VIDEO
+                            openDocumentTreeLauncher.launch(null)
+                        },
+                        onOpenFolder = { item ->
+                            currentFolder = item.folder
+                            currentFolderTargetType = LocalMediaType.VIDEO
+                            navController.navigate(LocalVibeRoute.Folder)
+                        },
+                        onContinueVideo = { file ->
+                            selectedMediaFile = file
+                            selectedVideoUri = file.uri
+                            videoQueue = listOf(file)
+                            currentVideoIndex = 0
+                            recentVideoFile = file
+                            recentVideoUri = file.uri
+                            coroutineScope.launch {
+                                appStateStore.saveRecentVideoUri(file.uri)
+                            }
+                            navController.navigate(LocalVibeRoute.VideoPlayer)
+                        },
+                        onRescanVideo = {
+                            autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                        },
+                        modifier = contentModifier
+                    )
+                }
+            }
+            composable(LocalVibeRoute.AudioLibrary) {
+                MainTabScaffold(
+                    navController = navController,
+                    miniAudioFile = miniAudioFile,
+                    onOpenMiniPlayer = { openMiniAudio() }
+                ) { contentModifier ->
+                    val audioFolderGroups = audioFolders.map { folder ->
+                        MediaFolderGroupUiModel(
+                            folder = folder,
+                            files = scannedFilesByFolder[
+                                typedFolderKey(LocalMediaType.AUDIO, folder.id)
+                            ].orEmpty(),
+                            source = folder.sourceLabel()
+                        )
+                    }
+                    val audioFiles = audioFolderGroups
+                        .flatMap { it.files }
+                        .distinctBy { it.uri }
+                        .sortedBy { it.name.lowercase() }
+                    AudioLibraryScreen(
+                        audioFiles = audioFiles,
+                        audioFolders = audioFolderGroups,
+                        audioProgressMap = emptyMap(),
+                        permissionDeniedMessage = if (audioPermissionDenied) {
+                            "没有媒体权限，无法自动扫描音乐。你仍然可以手动添加文件夹。"
+                        } else {
+                            null
+                        },
+                        onAddFolder = {
+                            currentAddTargetType = LocalMediaType.AUDIO
+                            openDocumentTreeLauncher.launch(null)
+                        },
+                        onOpenFolder = { item ->
+                            currentFolder = item.folder
+                            currentFolderTargetType = LocalMediaType.AUDIO
+                            navController.navigate(LocalVibeRoute.Folder)
+                        },
+                        onOpenAudio = { file, queue ->
+                            audioQueue = queue.ifEmpty { listOf(file) }
+                            currentAudioIndex = audioQueue.indexOfFirst { it.uri == file.uri }
+                                .takeIf { it >= 0 } ?: 0
+                            selectedMediaFile = file
+                            selectedAudioUri = file.uri
+                            recentAudioUri = file.uri
+                            coroutineScope.launch {
+                                appStateStore.saveRecentAudioUri(file.uri)
+                            }
+                            navController.navigate(LocalVibeRoute.AudioPlayer)
+                        },
+                        onShuffleAll = { queue ->
+                            audioQueue = queue.shuffled()
+                            currentAudioIndex = 0
+                            selectedMediaFile = audioQueue.firstOrNull()
+                            selectedAudioUri = selectedMediaFile?.uri
+                            recentAudioUri = selectedMediaFile?.uri
+                            coroutineScope.launch {
+                                appStateStore.saveRecentAudioUri(recentAudioUri)
+                            }
+                            if (selectedMediaFile != null) {
+                                navController.navigate(LocalVibeRoute.AudioPlayer)
+                            }
+                        },
+                        onRescanAudio = {
+                            autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                        },
+                        modifier = contentModifier
+                    )
+                }
+            }
+            composable(LocalVibeRoute.BookLibrary) {
+                MainTabScaffold(navController = navController) { contentModifier ->
+                    val bookFolderGroups = bookFolders.map { folder ->
+                        MediaFolderGroupUiModel(
+                            folder = folder,
+                            files = scannedFilesByFolder[
+                                typedFolderKey(LocalMediaType.BOOK, folder.id)
+                            ].orEmpty(),
+                            source = folder.sourceLabel()
+                        )
+                    }
+                    val bookFiles = bookFolderGroups
+                        .flatMap { it.files }
+                        .plus(importedBookFiles)
+                        .distinctBy { it.uri }
+                        .sortedBy { it.name.lowercase() }
+                    LaunchedEffect(bookFiles.size) {
+                        Log.d(
+                            BOOK_LOG_TAG,
+                            "final bookFiles count=${bookFiles.size}, uris=${bookFiles.joinToString { it.uri }}"
+                        )
+                    }
+                    BookLibraryScreen(
+                        bookFiles = bookFiles,
+                        onImportBookFile = {
+                            openTextDocumentsLauncher.launch(
+                                arrayOf("text/plain", "application/octet-stream")
+                            )
+                        },
+                        onRescanBooks = {
+                            runAutoScan(LocalMediaType.BOOK, showCompletionToast = true)
+                        },
+                        modifier = contentModifier
+                    )
+                }
+            }
+            composable(LocalVibeRoute.Profile) {
+                MainTabScaffold(navController = navController) { contentModifier ->
+                    ProfileScreen(
+                        onOpenSettings = { navController.navigate(LocalVibeRoute.Settings) },
+                        modifier = contentModifier
+                    )
+                }
+            }
+            composable(LocalVibeRoute.Folder) {
+                FolderScreen(
+                    folderName = currentFolder?.name ?: "未命名文件夹",
+                    files = currentFolder?.let { folder ->
+                        scannedFilesByFolder[
+                            typedFolderKey(currentFolderTargetType ?: LocalMediaType.VIDEO, folder.id)
+                        ]
+                    }.orEmpty(),
+                    targetType = currentFolderTargetType,
+                    videoProgressMap = videoProgressMap,
+                    videoMetadataCache = videoMetadataCache,
+                    onVideoMetadataLoaded = { mediaId, metadata ->
+                        videoMetadataCache[mediaId] = metadata
+                    },
+                    audioProgressMap = emptyMap(),
+                    onOpenVideo = { file ->
+                        val files = currentFolder?.let { folder ->
+                            scannedFilesByFolder[
+                                typedFolderKey(currentFolderTargetType ?: LocalMediaType.VIDEO, folder.id)
+                            ]
+                        }.orEmpty().filter { it.type == LocalMediaType.VIDEO }
+                        videoQueue = files.ifEmpty { listOf(file) }
+                        currentVideoIndex = videoQueue.indexOfFirst { it.uri == file.uri }
+                            .takeIf { it >= 0 } ?: 0
+                        selectedMediaFile = file
+                        selectedVideoUri = file.uri
+                        recentVideoFile = file
+                        recentVideoUri = file.uri
+                        coroutineScope.launch {
+                            appStateStore.saveRecentVideoUri(file.uri)
+                        }
+                        navController.navigate(LocalVibeRoute.VideoPlayer)
+                    },
+                    onOpenAudio = { file ->
+                        val files = currentFolder?.let { folder ->
+                            scannedFilesByFolder[
+                                typedFolderKey(currentFolderTargetType ?: LocalMediaType.AUDIO, folder.id)
+                            ]
+                        }.orEmpty().filter { it.type == LocalMediaType.AUDIO }
+                        audioQueue = files.ifEmpty { listOf(file) }
+                        currentAudioIndex = audioQueue.indexOfFirst { it.uri == file.uri }
+                            .takeIf { it >= 0 } ?: 0
+                        selectedMediaFile = file
+                        selectedAudioUri = file.uri
+                        recentAudioUri = file.uri
+                        coroutineScope.launch {
+                            appStateStore.saveRecentAudioUri(file.uri)
+                        }
+                        navController.navigate(LocalVibeRoute.AudioPlayer)
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(LocalVibeRoute.VideoPlayer) {
+                val allVideoFiles = scannedFilesByFolder.values
+                    .flatten()
+                    .filter { it.type == LocalMediaType.VIDEO }
+                    .distinctBy { it.uri }
+                val resolvedVideoFile = selectedMediaFile
+                    ?.takeIf { it.type == LocalMediaType.VIDEO }
+                    ?: selectedVideoUri?.let { uri ->
+                        allVideoFiles.firstOrNull { it.uri == uri }
+                    }
+                    ?: recentVideoUri?.let { uri ->
+                        allVideoFiles.firstOrNull { it.uri == uri }
+                    }
+                val resolvedVideoQueue = videoQueue
+                    .takeIf { it.isNotEmpty() }
+                    ?: resolvedVideoFile?.let { listOf(it) }
+                    ?: emptyList()
+                val resolvedVideoIndex = resolvedVideoQueue.indexOfFirst {
+                    it.uri == resolvedVideoFile?.uri
+                }.takeIf { it >= 0 } ?: currentVideoIndex
+                VideoPlayerScreen(
+                    mediaFile = resolvedVideoFile,
+                    initialPositionMs = resolvedVideoFile?.let { videoProgressMap[it.uri] } ?: 0L,
+                    queue = resolvedVideoQueue,
+                    currentIndex = resolvedVideoIndex,
+                    onSelectVideo = { index ->
+                        val nextFile = resolvedVideoQueue.getOrNull(index) ?: return@VideoPlayerScreen
+                        currentVideoIndex = index
+                        selectedMediaFile = nextFile
+                        selectedVideoUri = nextFile.uri
+                        recentVideoFile = nextFile
+                        recentVideoUri = nextFile.uri
+                        coroutineScope.launch {
+                            appStateStore.saveRecentVideoUri(nextFile.uri)
+                        }
+                    },
+                    onProgressChanged = { mediaId, positionMs ->
+                        if (positionMs > 0L) {
+                            videoProgressMap[mediaId] = positionMs
+                        } else {
+                            videoProgressMap.remove(mediaId)
+                        }
+                        coroutineScope.launch {
+                            appStateStore.saveProgress(
+                                PersistedPlaybackProgress(
+                                    mediaUri = mediaId,
+                                    mediaType = LocalMediaType.VIDEO.name,
+                                    positionMs = positionMs,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(LocalVibeRoute.AudioPlayer) {
+                val resolvedAudioFile = selectedMediaFile
+                    ?.takeIf { it.type == LocalMediaType.AUDIO }
+                    ?: selectedAudioUri?.let { uri ->
+                        audioQueue.firstOrNull { it.uri == uri }
+                    }
+                AudioPlayerScreen(
+                    mediaFile = resolvedAudioFile,
+                    initialPositionMs = 0L,
+                    queue = audioQueue,
+                    currentIndex = currentAudioIndex,
+                    playMode = audioPlayMode,
+                    onPlayModeChanged = { audioPlayMode = it },
+                    onSelectAudio = { index ->
+                        val nextFile = audioQueue.getOrNull(index) ?: return@AudioPlayerScreen
+                        currentAudioIndex = index
+                        selectedMediaFile = nextFile
+                        selectedAudioUri = nextFile.uri
+                        recentAudioUri = nextFile.uri
+                        coroutineScope.launch {
+                            appStateStore.saveRecentAudioUri(nextFile.uri)
+                        }
+                    },
+                    onProgressChanged = { mediaId, positionMs ->
+                        audioProgressMap.remove(mediaId)
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(LocalVibeRoute.Settings) {
+                SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onClearProgress = {
+                        coroutineScope.launch {
+                            appStateStore.clearProgress()
+                            videoProgressMap.clear()
+                            audioProgressMap.clear()
+                            recentVideoFile = null
+                            recentVideoUri = null
+                            recentAudioUri = null
+                            Toast.makeText(context, "播放进度已清除", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onClearFolders = {
+                        coroutineScope.launch {
+                            appStateStore.clearFolders()
+                            appStateStore.clearPersistedBookFiles()
+                            videoFolders.removeManualFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
+                            audioFolders.removeManualFoldersAndScans(LocalMediaType.AUDIO, scannedFilesByFolder)
+                            bookFolders.removeManualFoldersAndScans(LocalMediaType.BOOK, scannedFilesByFolder)
+                            importedBookFiles.clear()
+                            Toast.makeText(context, "已添加文件夹记录已清除", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onClearBooks = {
+                        coroutineScope.launch {
+                            val remainingFolders = appStateStore.loadFolders()
+                                .filterNot { it.targetType == LocalMediaType.BOOK.name }
+                            appStateStore.clearFolders()
+                            remainingFolders.forEach { appStateStore.upsertFolder(it) }
+                            appStateStore.clearPersistedBookFiles()
+                            bookFolders.removeManualFoldersAndScans(LocalMediaType.BOOK, scannedFilesByFolder)
+                            importedBookFiles.clear()
+                            Toast.makeText(context, "小说导入记录已清除", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onRescanMedia = {
+                        Toast.makeText(context, "正在重新扫描媒体", Toast.LENGTH_SHORT).show()
+                        autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MainTabScaffold(
+    navController: NavController,
+    miniAudioFile: LocalMediaFile? = null,
+    onOpenMiniPlayer: () -> Unit = {},
+    content: @Composable (Modifier) -> Unit
+) {
+    Scaffold(
+        bottomBar = {
+            Column {
+                if (miniAudioFile != null) {
+                    MiniAudioPlayerBar(
+                        file = miniAudioFile,
+                        onOpen = onOpenMiniPlayer
+                    )
+                }
+                MainBottomBar(navController = navController)
+            }
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(innerPadding)
+        ) {
+            content(Modifier)
+        }
+    }
+}
+
+@Composable
+private fun MiniAudioPlayerBar(
+    file: LocalMediaFile,
+    onOpen: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clickable(onClick = onOpen),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer,
+                        RoundedCornerShape(10.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("♪", color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = file.name.substringBeforeLast('.', file.name),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1
+                )
+                Text(
+                    text = "Unknown",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+            IconButton(onClick = onOpen) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "进入播放")
+            }
+            IconButton(onClick = onOpen) {
+                Icon(Icons.Filled.QueueMusic, contentDescription = "播放队列")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MainBottomBar(navController: NavController) {
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+
+    NavigationBar {
+        MainTabs.forEach { tab ->
+            NavigationBarItem(
+                selected = currentRoute == tab.route,
+                onClick = {
+                    if (currentRoute != tab.route) {
+                        navController.navigate(tab.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                },
+                icon = { Text(tab.iconText) },
+                label = { Text(tab.label) }
+            )
+        }
+    }
+}
+
+private data class MainTab(
+    val route: String,
+    val label: String,
+    val iconText: String
+)
+
+private val MainTabs = listOf(
+    MainTab(LocalVibeRoute.VideoLibrary, "视频", "▶"),
+    MainTab(LocalVibeRoute.AudioLibrary, "音乐", "♪"),
+    MainTab(LocalVibeRoute.BookLibrary, "小说", "文"),
+    MainTab(LocalVibeRoute.Profile, "我的", "我")
+)
+
+private const val AUTO_SCAN_THROTTLE_MS = 10_000L
+private const val BOOK_LOG_TAG = "LocalVibeBooks"
+
+private fun mediaScanPermissions(): List<String> {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        listOf(
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_AUDIO
+        )
+    } else {
+        listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+}
+
+private fun hasPermission(
+    context: android.content.Context,
+    permission: String
+): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context,
+        permission
+    ) == PackageManager.PERMISSION_GRANTED
+}
+
+private fun typedFolderKey(
+    type: LocalMediaType,
+    folderId: String
+): String = "${type.name}:$folderId"
+
+private fun LocalMediaType.mediaReadPermission(): String? {
+    return when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && this == LocalMediaType.VIDEO ->
+            Manifest.permission.READ_MEDIA_VIDEO
+
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && this == LocalMediaType.AUDIO ->
+            Manifest.permission.READ_MEDIA_AUDIO
+
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+            (this == LocalMediaType.VIDEO || this == LocalMediaType.AUDIO) ->
+            Manifest.permission.READ_EXTERNAL_STORAGE
+
+        else -> null
+    }
+}
+
+private fun LocalMediaType.emptyFolderMessage(): String {
+    return when (this) {
+        LocalMediaType.VIDEO -> "该文件夹中没有视频文件"
+        LocalMediaType.AUDIO -> "该文件夹中没有音乐文件"
+        LocalMediaType.BOOK -> "该文件夹中没有 TXT 小说文件"
+        else -> "该文件夹中没有可用文件"
+    }
+}
+
+private fun String.toLocalMediaTypeOrNull(): LocalMediaType? {
+    return runCatching { LocalMediaType.valueOf(this) }.getOrNull()
+}
+
+private fun Uri.toLocalBookFile(context: android.content.Context): LocalMediaFile? {
+    val documentFile = DocumentFile.fromSingleUri(context, this) ?: return null
+    val name = documentFile.name ?: "未命名小说.txt"
+    val extension = name.substringAfterLast('.', "")
+    return LocalMediaFile(
+        id = toString(),
+        name = name,
+        uri = toString(),
+        type = LocalMediaType.BOOK,
+        extension = extension,
+        size = documentFile.length(),
+        parentFolderName = null
+    )
+}
+
+private fun MediaFolderUiModel.sourceLabel(): String {
+    return if (id.startsWith("auto:")) "自动扫描" else "手动添加"
+}
+
+private fun MutableList<MediaFolderUiModel>.removeManualFoldersAndScans(
+    type: LocalMediaType,
+    scannedFilesByFolder: MutableMap<String, List<LocalMediaFile>>
+) {
+    val manualFolderIds = filterNot { it.id.startsWith("auto:") }
+        .map { it.id }
+    removeAll { !it.id.startsWith("auto:") }
+    manualFolderIds.forEach { folderId ->
+        scannedFilesByFolder.remove(typedFolderKey(type, folderId))
+    }
+}
+
+private fun MutableList<MediaFolderUiModel>.removeAutoFoldersAndScans(
+    type: LocalMediaType,
+    scannedFilesByFolder: MutableMap<String, List<LocalMediaFile>>
+) {
+    val autoFolderIds = filter { it.id.startsWith("auto:") }
+        .map { it.id }
+    removeAll { it.id.startsWith("auto:") }
+    autoFolderIds.forEach { folderId ->
+        scannedFilesByFolder.remove(typedFolderKey(type, folderId))
+    }
+}
+
+private fun MutableList<MediaFolderUiModel>.upsertFolder(
+    folderId: String,
+    createOrUpdate: () -> MediaFolderUiModel
+) {
+    val index = indexOfFirst { it.id == folderId }
+    val folder = createOrUpdate()
+    if (index >= 0) {
+        this[index] = folder
+    } else {
+        add(folder)
+    }
+}
+
+private fun MutableList<MediaFolderUiModel>.updateFolder(
+    folderId: String,
+    update: MediaFolderUiModel.() -> MediaFolderUiModel
+) {
+    val index = indexOfFirst { it.id == folderId }
+    if (index >= 0) {
+        this[index] = this[index].update()
+    }
+}
