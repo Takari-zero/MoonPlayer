@@ -1,5 +1,7 @@
 package com.shenghui.localvibe.feature.book
 
+import android.content.Intent
+import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +34,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -85,6 +89,7 @@ fun BookListenScreen(
     var speechRate by remember { mutableFloatStateOf(1.0f) }
     var pitch by remember { mutableFloatStateOf(1.0f) }
     var ttsError by remember { mutableStateOf<String?>(null) }
+    var ttsRetryKey by remember { mutableIntStateOf(0) }
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     val latestParagraphs by rememberUpdatedState(paragraphs)
     val latestBookFile by rememberUpdatedState(bookFile)
@@ -98,7 +103,7 @@ fun BookListenScreen(
     }
 
     var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
-    DisposableEffect(Unit) {
+    DisposableEffect(ttsRetryKey) {
         val controller = BookTtsController(
             context = context,
             onReady = { isTtsReady = true },
@@ -135,6 +140,23 @@ fun BookListenScreen(
             }
             controller.shutdown()
             ttsController = null
+        }
+    }
+
+    fun restartTtsCheck() {
+        isTtsReady = false
+        ttsError = null
+        ttsController?.shutdown()
+        ttsController = null
+        ttsRetryKey += 1
+        Toast.makeText(context, "正在重新检测系统语音", Toast.LENGTH_SHORT).show()
+    }
+
+    fun openIntentSafely(intent: Intent, errorMessage: String) {
+        runCatching {
+            context.startActivity(intent)
+        }.onFailure {
+            Toast.makeText(context, errorMessage, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -251,10 +273,41 @@ fun BookListenScreen(
                     isPlaying = false
                     onBack()
                 },
-                onMore = {
-                    Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                onMenuAction = { action ->
+                    when (action) {
+                        "语音设置" -> openIntentSafely(
+                            Intent("com.android.settings.TTS_SETTINGS"),
+                            "无法打开语音设置"
+                        )
+                        "重新检测 TTS" -> restartTtsCheck()
+                        "目录" -> Toast.makeText(context, "章节目录后续实现", Toast.LENGTH_SHORT).show()
+                        "跳转段落" -> Toast.makeText(context, "跳转段落功能后续实现", Toast.LENGTH_SHORT).show()
+                        "字号设置" -> Toast.makeText(context, "字号设置功能后续实现", Toast.LENGTH_SHORT).show()
+                        "夜间模式" -> Toast.makeText(context, "夜间模式后续实现", Toast.LENGTH_SHORT).show()
+                        else -> Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
+
+            if (ttsError != null) {
+                TtsUnavailableCard(
+                    message = ttsError.orEmpty(),
+                    onInstallVoiceData = {
+                        openIntentSafely(
+                            Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
+                            "无法打开语音数据安装页面"
+                        )
+                    },
+                    onOpenVoiceSettings = {
+                        openIntentSafely(
+                            Intent("com.android.settings.TTS_SETTINGS")
+                                .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+                            "无法打开语音设置"
+                        )
+                    },
+                    onRetry = { restartTtsCheck() }
+                )
+            }
 
             when {
                 isLoading -> {
@@ -322,18 +375,21 @@ fun BookListenScreen(
 private fun BookListenTopBar(
     title: String,
     onBack: () -> Unit,
-    onMore: () -> Unit
+    onMenuAction: (String) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        IconButton(onClick = onBack) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier.align(Alignment.CenterStart)
+        ) {
             Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
         }
         Column(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 64.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -343,14 +399,76 @@ private fun BookListenTopBar(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+            IconButton(onClick = { expanded = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                containerColor = Color(0xFF141821),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                listOf(
+                    "语音设置",
+                    "重新检测 TTS",
+                    "目录",
+                    "跳转段落",
+                    "字号设置",
+                    "夜间模式",
+                    "更多功能"
+                ).forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text(item, color = Color.White.copy(alpha = 0.92f)) },
+                        onClick = {
+                            expanded = false
+                            onMenuAction(item)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TtsUnavailableCard(
+    message: String,
+    onInstallVoiceData: () -> Unit,
+    onOpenVoiceSettings: () -> Unit,
+    onRetry: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF111827))
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Text(
-                text = "TXT 听书",
-                color = Color.White.copy(alpha = 0.56f),
+                text = "系统语音不可用",
+                color = Color(0xFF8AB6FF),
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                text = message.ifBlank { "请安装或启用系统中文 TTS 语音包。" },
+                color = Color.White.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.bodySmall
             )
-        }
-        IconButton(onClick = onMore) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onInstallVoiceData) {
+                    Text("安装语音数据", color = Color(0xFF8AB6FF))
+                }
+                TextButton(onClick = onOpenVoiceSettings) {
+                    Text("语音设置", color = Color(0xFF8AB6FF))
+                }
+                TextButton(onClick = onRetry) {
+                    Text("重试", color = Color(0xFF8AB6FF))
+                }
+            }
         }
     }
 }

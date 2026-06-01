@@ -28,12 +28,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Loop
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +61,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -71,6 +82,7 @@ import androidx.media3.ui.PlayerView
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import kotlinx.coroutines.delay
+import kotlin.math.absoluteValue
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -163,6 +175,7 @@ private fun LocalVideoPlayer(
     val latestQueue by rememberUpdatedState(queue)
     val latestIndex by rememberUpdatedState(currentIndex)
     var gestureOverlay by remember { mutableStateOf<String?>(null) }
+    var seekPreviewOverlay by remember { mutableStateOf<VideoSeekPreview?>(null) }
     var showControls by remember { mutableStateOf(true) }
     var currentPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
     var draggingPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
@@ -170,7 +183,11 @@ private fun LocalVideoPlayer(
     var durationMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(true) }
     var gestureStart by remember { mutableStateOf(Offset.Zero) }
+    var dragMode by remember { mutableStateOf(VideoDragMode.UNKNOWN) }
+    var totalDragX by remember { mutableFloatStateOf(0f) }
     var totalDragY by remember { mutableFloatStateOf(0f) }
+    var gestureSeekStartMs by remember { mutableLongStateOf(0L) }
+    var gestureSeekPreviewMs by remember { mutableLongStateOf(0L) }
     var startBrightness by remember { mutableFloatStateOf(activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f) }
     var startVolume by remember { mutableStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
 
@@ -203,6 +220,12 @@ private fun LocalVideoPlayer(
         if (gestureOverlay != null) {
             delay(1000)
             gestureOverlay = null
+        }
+    }
+    LaunchedEffect(seekPreviewOverlay, dragMode) {
+        if (seekPreviewOverlay != null && dragMode != VideoDragMode.SEEK) {
+            delay(900)
+            seekPreviewOverlay = null
         }
     }
     LaunchedEffect(showControls) {
@@ -250,28 +273,73 @@ private fun LocalVideoPlayer(
                 detectDragGestures(
                     onDragStart = { offset ->
                         gestureStart = offset
+                        dragMode = VideoDragMode.UNKNOWN
+                        totalDragX = 0f
                         totalDragY = 0f
+                        gestureSeekStartMs = player.currentPosition.coerceAtLeast(0L)
+                        gestureSeekPreviewMs = gestureSeekStartMs
                         startBrightness = activity?.window?.attributes?.screenBrightness
                             ?.takeIf { it >= 0f } ?: 0.5f
                         startVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     },
+                    onDragEnd = {
+                        if (dragMode == VideoDragMode.SEEK) {
+                            val target = gestureSeekPreviewMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+                            currentPositionMs = target
+                            player.seekTo(target)
+                            seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
+                            showControls = true
+                        }
+                        dragMode = VideoDragMode.UNKNOWN
+                    },
+                    onDragCancel = {
+                        dragMode = VideoDragMode.UNKNOWN
+                    },
                     onDrag = { change, dragAmount ->
+                        totalDragX += dragAmount.x
                         totalDragY += dragAmount.y
-                        val height = size.height.toFloat().coerceAtLeast(1f)
-                        val percentDelta = (-totalDragY / height) * 1.8f
-                        if (gestureStart.x < size.width / 2f) {
-                            val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
-                            activity?.setScreenBrightness(brightness)
-                            gestureOverlay = "亮度 ${(brightness * 100).toInt()}%"
-                            showControls = true
-                        } else {
-                            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                            val volumeDelta = (percentDelta * maxVolume).toInt()
-                            val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
-                            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
-                            val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
-                            gestureOverlay = "音量 $percent%"
-                            showControls = true
+                        if (dragMode == VideoDragMode.UNKNOWN) {
+                            val absX = totalDragX.absoluteValue
+                            val absY = totalDragY.absoluteValue
+                            if (absX > 18f || absY > 18f) {
+                                dragMode = if (absX > absY * 1.25f) {
+                                    VideoDragMode.SEEK
+                                } else {
+                                    VideoDragMode.VERTICAL
+                                }
+                            }
+                        }
+                        when (dragMode) {
+                            VideoDragMode.SEEK -> {
+                                val width = size.width.toFloat().coerceAtLeast(1f)
+                                val deltaMs = ((totalDragX / (width * 0.5f)) * 60_000L)
+                                    .toLong()
+                                    .coerceIn(-300_000L, 300_000L)
+                                val target = (gestureSeekStartMs + deltaMs)
+                                    .coerceIn(0L, durationMs.coerceAtLeast(1L))
+                                gestureSeekPreviewMs = target
+                                seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
+                                showControls = true
+                            }
+                            VideoDragMode.VERTICAL -> {
+                                val height = size.height.toFloat().coerceAtLeast(1f)
+                                val percentDelta = (-totalDragY / height) * 1.8f
+                                if (gestureStart.x < size.width / 2f) {
+                                    val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
+                                    activity?.setScreenBrightness(brightness)
+                                    gestureOverlay = "亮度 ${(brightness * 100).toInt()}%"
+                                    showControls = true
+                                } else {
+                                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                    val volumeDelta = (percentDelta * maxVolume).toInt()
+                                    val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
+                                    val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
+                                    gestureOverlay = "音量 $percent%"
+                                    showControls = true
+                                }
+                            }
+                            VideoDragMode.UNKNOWN -> Unit
                         }
                         change.consume()
                     }
@@ -338,6 +406,13 @@ private fun LocalVideoPlayer(
                     .padding(horizontal = 28.dp)
             )
         }
+
+        seekPreviewOverlay?.let { preview ->
+            SeekPreviewOverlay(
+                preview = preview,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
     }
 }
 
@@ -384,6 +459,37 @@ private fun GestureValueOverlay(
 }
 
 @Composable
+private fun SeekPreviewOverlay(
+    preview: VideoSeekPreview,
+    modifier: Modifier = Modifier
+) {
+    val isForward = preview.deltaMs >= 0L
+    Column(
+        modifier = modifier
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = if (isForward) Icons.Filled.FastForward else Icons.Filled.FastRewind,
+            contentDescription = null,
+            tint = Color(0xFF8AB6FF),
+            modifier = Modifier.size(34.dp)
+        )
+        Text(
+            text = formatDuration(preview.targetMs),
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            text = formatSeekDelta(preview.deltaMs),
+            color = Color.White.copy(alpha = 0.72f),
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
 private fun VideoControlOverlay(
     title: String,
     currentPositionMs: Long,
@@ -397,6 +503,9 @@ private fun VideoControlOverlay(
     onPlayPause: () -> Unit,
     onNext: () -> Unit
 ) {
+    val context = LocalContext.current
+    var moreMenuExpanded by remember { mutableStateOf(false) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
@@ -416,21 +525,26 @@ private fun VideoControlOverlay(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .fillMaxWidth()
-                    .padding(horizontal = 132.dp),
+                    .padding(horizontal = 64.dp),
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
-            Row(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("音轨", color = Color.White.copy(alpha = 0.8f))
-                Text("字幕", color = Color.White.copy(alpha = 0.8f))
-                IconButton(onClick = {}) {
+            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+                }
+                if (moreMenuExpanded) {
+                    VideoToolPanel(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 50.dp, end = 4.dp),
+                        onToolClick = { label ->
+                            moreMenuExpanded = false
+                            Toast.makeText(context, "$label 功能后续实现", Toast.LENGTH_SHORT).show()
+                        }
+                    )
                 }
             }
         }
@@ -490,6 +604,83 @@ private fun VideoControlOverlay(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun VideoToolPanel(
+    onToolClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val tools = listOf(
+        "音轨" to Icons.Filled.Audiotrack,
+        "字幕" to Icons.Filled.Subtitles,
+        "解码" to Icons.Filled.Settings,
+        "倍速" to Icons.Filled.Speed,
+        "画面" to Icons.Filled.AspectRatio,
+        "循环" to Icons.Filled.Loop,
+        "截图" to Icons.Filled.PhotoCamera,
+        "更多" to Icons.Filled.MoreHoriz
+    )
+    Column(
+        modifier = modifier
+            .width(292.dp)
+            .background(Color(0xE6101722), RoundedCornerShape(22.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        tools.chunked(4).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                row.forEach { (label, icon) ->
+                    VideoToolItem(
+                        label = label,
+                        icon = icon,
+                        onClick = { onToolClick(label) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoToolItem(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(58.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(Color(0xFF151E2B), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color(0xFF8AB6FF),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.86f),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1
+        )
     }
 }
 
@@ -570,6 +761,22 @@ private fun ExoPlayer.savedPosition(): Long {
     } else {
         currentPosition
     }
+}
+
+private enum class VideoDragMode {
+    UNKNOWN,
+    VERTICAL,
+    SEEK
+}
+
+private data class VideoSeekPreview(
+    val targetMs: Long,
+    val deltaMs: Long
+)
+
+private fun formatSeekDelta(deltaMs: Long): String {
+    val sign = if (deltaMs >= 0L) "+" else "-"
+    return "$sign${formatDuration(deltaMs.absoluteValue)}"
 }
 
 private tailrec fun Context.findActivity(): Activity? {

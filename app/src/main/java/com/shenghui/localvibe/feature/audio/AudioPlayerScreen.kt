@@ -46,6 +46,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -106,6 +107,8 @@ fun AudioPlayerScreen(
     onNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onBack: () -> Unit,
+    onRemoveCurrent: (LocalMediaFile) -> Unit = {},
+    onDeleteCurrent: (LocalMediaFile) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -150,7 +153,9 @@ fun AudioPlayerScreen(
                     onPrevious = onPrevious,
                     onNext = onNext,
                     onSeekTo = onSeekTo,
-                    onBack = onBack
+                    onBack = onBack,
+                    onRemoveCurrent = onRemoveCurrent,
+                    onDeleteCurrent = onDeleteCurrent
                 )
             }
         }
@@ -174,13 +179,16 @@ private fun ServiceAudioPlayer(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onRemoveCurrent: (LocalMediaFile) -> Unit,
+    onDeleteCurrent: (LocalMediaFile) -> Unit
 ) {
     val context = LocalContext.current
     var displayPositionMs by remember(mediaFile.uri) { mutableLongStateOf(currentPositionMs) }
     var isDraggingProgress by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
     var showPlayModeMenu by remember { mutableStateOf(false) }
     var selectedPreset by remember { mutableStateOf(EqualizerPreset.DEFAULT) }
     var equalizerEnabled by remember { mutableStateOf(true) }
@@ -224,9 +232,13 @@ private fun ServiceAudioPlayer(
         PlayerTopBar(
             title = mediaFile.displayTitle(),
             onBack = onBack,
-            onMore = {
-                Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
-            }
+            onSongInfo = { Toast.makeText(context, "歌曲信息后续实现", Toast.LENGTH_SHORT).show() },
+            onShowQueue = { showQueue = true },
+            onShowEqualizer = { showEqualizer = true },
+            onShare = { Toast.makeText(context, "分享功能后续实现", Toast.LENGTH_SHORT).show() },
+            onRemove = { onRemoveCurrent(mediaFile) },
+            onDelete = { showDeleteConfirm = true },
+            onMore = { Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show() }
         )
 
         Column(
@@ -463,6 +475,29 @@ private fun ServiceAudioPlayer(
             onDismiss = { showEqualizer = false }
         )
     }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("永久删除音乐？") },
+            text = { Text("此操作会尝试删除本地音乐文件，无法从 Moon播放器 恢复。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDeleteCurrent(mediaFile)
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -557,8 +592,15 @@ private fun AudioProgressSlider(
 private fun PlayerTopBar(
     title: String,
     onBack: () -> Unit,
+    onSongInfo: () -> Unit,
+    onShowQueue: () -> Unit,
+    onShowEqualizer: () -> Unit,
+    onShare: () -> Unit,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit,
     onMore: () -> Unit
 ) {
+    var expanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
         IconButton(
             onClick = onBack,
@@ -580,19 +622,66 @@ private fun PlayerTopBar(
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleMedium
             )
-            Text(
-                text = "Unknown",
-                color = Color.White.copy(alpha = 0.62f),
-                style = MaterialTheme.typography.bodySmall
-            )
         }
         IconButton(
-            onClick = onMore,
+            onClick = { expanded = true },
             modifier = Modifier.align(Alignment.CenterEnd)
         ) {
             Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
         }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = Color(0xFF141821),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            AudioTopMenuItem("歌曲信息") {
+                expanded = false
+                onSongInfo()
+            }
+            AudioTopMenuItem("播放队列") {
+                expanded = false
+                onShowQueue()
+            }
+            AudioTopMenuItem("均衡器") {
+                expanded = false
+                onShowEqualizer()
+            }
+            AudioTopMenuItem("分享") {
+                expanded = false
+                onShare()
+            }
+            AudioTopMenuItem("从列表移除") {
+                expanded = false
+                onRemove()
+            }
+            AudioTopMenuItem("永久删除文件", danger = true) {
+                expanded = false
+                onDelete()
+            }
+            AudioTopMenuItem("更多功能") {
+                expanded = false
+                onMore()
+            }
+        }
     }
+}
+
+@Composable
+private fun AudioTopMenuItem(
+    text: String,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = text,
+                color = if (danger) Color(0xFFF97066) else Color.White.copy(alpha = 0.92f)
+            )
+        },
+        onClick = onClick
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

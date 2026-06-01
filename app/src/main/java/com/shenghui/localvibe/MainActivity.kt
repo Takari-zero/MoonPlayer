@@ -1473,7 +1473,9 @@ private fun LocalVibeApp() {
                     onSeekTo = { positionMs ->
                         musicController?.seekTo(positionMs)
                     },
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onRemoveCurrent = { file -> removeMediaFromList(file) },
+                    onDeleteCurrent = { file -> permanentlyDeleteMedia(file) }
                 )
             }
             composable(LocalVibeRoute.Settings) {
