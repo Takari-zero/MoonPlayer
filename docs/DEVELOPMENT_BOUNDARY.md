@@ -13,6 +13,18 @@
 - 用户要求只写文档时，不得修改业务代码。
 - 用户要求暂停功能开发时，必须停止功能改动。
 
+每次开发前必须先阅读：
+
+- `docs/PRODUCT_SPEC.md`
+- `docs/UI_GUIDE.md`
+- `docs/DEVELOPMENT_BOUNDARY.md`
+- 当前模块对应的专项文档：
+  - 视频模块：`docs/VIDEO_MODULE_SPEC.md`
+  - 音乐模块：`docs/MUSIC_MODULE_SPEC.md`
+  - 小说模块：`docs/BOOK_MODULE_SPEC.md`
+
+开发时应参考成熟播放器产品的布局、层级、交互和成熟度，但不得照搬品牌、图标和文案。
+
 ## 2. 模块边界
 
 ### 视频模块
@@ -154,4 +166,3 @@
 - 是否编译？
 - 如果未编译，原因是什么？
 - 下一步建议是什么？
-
