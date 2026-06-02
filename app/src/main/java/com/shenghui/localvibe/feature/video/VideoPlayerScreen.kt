@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -74,8 +76,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -184,6 +188,7 @@ private fun LocalVideoPlayer(
     val latestIndex by rememberUpdatedState(currentIndex)
     var gestureOverlay by remember { mutableStateOf<String?>(null) }
     var seekPreviewOverlay by remember { mutableStateOf<VideoSeekPreview?>(null) }
+    var resizeModeOverlay by remember { mutableStateOf<String?>(null) }
     var showControls by remember { mutableStateOf(true) }
     var currentPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
     var draggingPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
@@ -203,6 +208,7 @@ private fun LocalVideoPlayer(
     var isRepeatOne by remember(mediaFile.uri) { mutableStateOf(false) }
     var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
     var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
+    var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -219,6 +225,12 @@ private fun LocalVideoPlayer(
 
     fun saveCurrentProgress() {
         onProgressChanged(mediaFile.uri, player.savedPosition())
+    }
+
+    fun requestBack() {
+        if (isBackRequested) return
+        isBackRequested = true
+        onBack()
     }
 
     fun selectVideo(index: Int) {
@@ -246,6 +258,12 @@ private fun LocalVideoPlayer(
         if (gestureOverlay != null) {
             delay(1000)
             gestureOverlay = null
+        }
+    }
+    LaunchedEffect(resizeModeOverlay) {
+        if (resizeModeOverlay != null) {
+            delay(1_000)
+            resizeModeOverlay = null
         }
     }
     LaunchedEffect(seekPreviewOverlay, dragMode) {
@@ -283,7 +301,9 @@ private fun LocalVideoPlayer(
         onDispose {
             player.removeListener(listener)
             saveCurrentProgress()
-            player.release()
+            Handler(Looper.getMainLooper()).post {
+                player.release()
+            }
         }
     }
 
@@ -319,7 +339,7 @@ private fun LocalVideoPlayer(
                     },
                     onDragEnd = {
                         if (dragMode == VideoDragMode.BACK) {
-                            onBack()
+                            requestBack()
                         } else if (dragMode == VideoDragMode.SEEK) {
                             val target = gestureSeekPreviewMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
                             currentPositionMs = target
@@ -415,7 +435,7 @@ private fun LocalVideoPlayer(
                 currentPositionMs = if (isSeekingByUser) draggingPositionMs else currentPositionMs,
                 durationMs = durationMs,
                 isPlaying = isPlaying,
-                onBack = onBack,
+                onBack = ::requestBack,
                 onSeekStart = {
                     isSeekingByUser = true
                     draggingPositionMs = currentPositionMs
@@ -451,7 +471,7 @@ private fun LocalVideoPlayer(
                 },
                 onResizeModeSelected = { mode ->
                     videoResizeMode = mode
-                    Toast.makeText(context, "画面比例：${mode.label}", Toast.LENGTH_SHORT).show()
+                    resizeModeOverlay = mode.label
                 },
                 onToggleRepeat = {
                     val nextRepeat = !isRepeatOne
@@ -498,6 +518,23 @@ private fun LocalVideoPlayer(
                 preview = preview,
                 modifier = Modifier.align(Alignment.Center)
             )
+        }
+
+        resizeModeOverlay?.let { label ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.48f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 30.dp, vertical = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    color = Color.White,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
     }
 }
@@ -838,7 +875,7 @@ private fun VideoControlOverlay(
                 IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Filled.SkipNext, contentDescription = "下一集", tint = Color.White, modifier = Modifier.size(32.dp))
                 }
-                IconButton(onClick = { showResizePanel = true }, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = { onResizeModeSelected(resizeMode.next()) }, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Filled.AspectRatio, contentDescription = "适应屏幕", tint = Color.White, modifier = Modifier.size(28.dp))
                 }
             }
@@ -1309,7 +1346,12 @@ private enum class VideoResizeMode(
     FIT("适应", AspectRatioFrameLayout.RESIZE_MODE_FIT),
     FILL("填充", AspectRatioFrameLayout.RESIZE_MODE_FILL),
     ZOOM("缩放", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
-    STRETCH("拉伸", AspectRatioFrameLayout.RESIZE_MODE_FILL)
+    STRETCH("拉伸", AspectRatioFrameLayout.RESIZE_MODE_FILL);
+
+    fun next(): VideoResizeMode {
+        val nextIndex = (entries.indexOf(this) + 1) % entries.size
+        return entries[nextIndex]
+    }
 }
 
 private data class VideoToolAction(
