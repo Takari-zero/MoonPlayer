@@ -1,14 +1,16 @@
 package com.shenghui.localvibe.feature.video
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,26 +18,34 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SortByAlpha
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -44,6 +54,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,10 +69,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
 
-private val VideoBackground = Color(0xFF05070D)
+private val VideoBackground = Color(0xFF0B0D14)
 private val VideoSurface = Color(0xFF101722)
 private val VideoSurfaceSoft = Color(0xFF151E2B)
 private val VideoPrimary = Color(0xFF4D8DFF)
@@ -69,6 +81,11 @@ private val VideoPrimarySoft = Color(0xFF8AB6FF)
 private val VideoTextPrimary = Color(0xFFF5F7FA)
 private val VideoTextSecondary = Color(0xFFA8B2C2)
 private val VideoTextMuted = Color(0xFF6F7A8A)
+
+private enum class VideoLibrarySortMode {
+    NAME,
+    COUNT
+}
 
 @Composable
 fun VideoLibraryScreen(
@@ -78,6 +95,7 @@ fun VideoLibraryScreen(
     onAddFolder: () -> Unit,
     onOpenFolder: (VideoFolderUiModel) -> Unit,
     onContinueVideo: (LocalMediaFile) -> Unit,
+    onRemoveFolders: (List<VideoFolderUiModel>) -> Unit,
     onRescanVideo: () -> Unit,
     onMore: () -> Unit,
     modifier: Modifier = Modifier
@@ -87,9 +105,13 @@ fun VideoLibraryScreen(
     var searchKeyword by rememberSaveable { mutableStateOf("") }
     var isGridMode by rememberSaveable { mutableStateOf(false) }
     var showMorePanel by rememberSaveable { mutableStateOf(false) }
+    var sortMode by rememberSaveable { mutableStateOf(VideoLibrarySortMode.NAME) }
+    var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
+    var selectedFolderIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
     val listState = rememberLazyListState()
-    val shownFolders = remember(videoFolders, searchKeyword) {
-        if (searchKeyword.isBlank()) {
+    val gridState = rememberLazyGridState()
+    val shownFolders = remember(videoFolders, searchKeyword, sortMode) {
+        val filtered = if (searchKeyword.isBlank()) {
             videoFolders
         } else {
             val keyword = searchKeyword.trim()
@@ -98,6 +120,15 @@ fun VideoLibraryScreen(
                     item.videos.any { it.name.contains(keyword, ignoreCase = true) }
             }
         }
+        when (sortMode) {
+            VideoLibrarySortMode.NAME -> filtered.sortedBy { it.folder.name.lowercase() }
+            VideoLibrarySortMode.COUNT -> filtered.sortedByDescending { it.videos.size }
+        }
+    }
+
+    BackHandler(enabled = isSearching) {
+        searchKeyword = ""
+        isSearching = false
     }
 
     Scaffold(
@@ -135,18 +166,43 @@ fun VideoLibraryScreen(
             Column(modifier = Modifier.fillMaxSize()) {
                 VideoHeader(
                     isSearching = isSearching,
-                    searchKeyword = searchKeyword,
-                    onSearchKeywordChange = { searchKeyword = it },
+                    isGridMode = isGridMode,
                     onToggleSearch = {
                         if (isSearching) searchKeyword = ""
                         isSearching = !isSearching
                     },
                     onAddFolder = onAddFolder,
-                    isGridMode = isGridMode,
-                    onToggleViewMode = { isGridMode = !isGridMode },
-                    onRescanVideo = onRescanVideo,
-                    onMore = { showMorePanel = true }
+                    onToggleViewMode = {
+                        isGridMode = !isGridMode
+                    },
+                    onMore = {
+                        showMorePanel = true
+                    }
                 )
+
+                if (isMultiSelectMode) {
+                    VideoFolderMultiSelectBar(
+                        selectedCount = selectedFolderIds.size,
+                        onCancel = {
+                            isMultiSelectMode = false
+                            selectedFolderIds = emptySet()
+                        },
+                        onSelectAll = {
+                            selectedFolderIds = shownFolders.map { it.folder.id }.toSet()
+                        },
+                        onRemoveSelected = {
+                            val selectedFolders = shownFolders.filter { it.folder.id in selectedFolderIds }
+                            if (selectedFolders.isEmpty()) {
+                                Toast.makeText(context, "请先选择文件夹", Toast.LENGTH_SHORT).show()
+                            } else {
+                                onRemoveFolders(selectedFolders)
+                                Toast.makeText(context, "已移除 ${selectedFolders.size} 个文件夹", Toast.LENGTH_SHORT).show()
+                                selectedFolderIds = emptySet()
+                                isMultiSelectMode = false
+                            }
+                        }
+                    )
+                }
 
                 LazyColumn(
                     state = listState,
@@ -165,14 +221,6 @@ fun VideoLibraryScreen(
                         }
                     }
 
-                    item {
-                        Text(
-                            text = "视频文件夹",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = VideoTextPrimary
-                        )
-                    }
-
                     if (shownFolders.isEmpty()) {
                         item {
                             EmptyVideoState(
@@ -184,35 +232,71 @@ fun VideoLibraryScreen(
                             )
                         }
                     } else if (isGridMode) {
-                        shownFolders.chunked(2).forEach { rowItems ->
-                            item(key = rowItems.joinToString { it.folder.id }) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    rowItems.forEach { item ->
-                                        VideoFolderCard(
-                                            item = item,
-                                            compact = true,
-                                            onClick = { onOpenFolder(item) },
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                    if (rowItems.size == 1) {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
+                        item {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(3),
+                                state = gridState,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(
+                                        ((shownFolders.size + 2) / 3 * 132)
+                                            .coerceAtLeast(132)
+                                            .dp
+                                    ),
+                                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(24.dp),
+                                userScrollEnabled = false
+                            ) {
+                                items(
+                                    items = shownFolders,
+                                    key = { it.folder.id }
+                                ) { item ->
+                                    VideoFolderGridItem(
+                                        item = item,
+                                        isSelectionMode = isMultiSelectMode,
+                                        isSelected = item.folder.id in selectedFolderIds,
+                                        onToggleSelected = {
+                                            selectedFolderIds = selectedFolderIds.toggle(item.folder.id)
+                                        },
+                                        onClick = {
+                                            if (isMultiSelectMode) {
+                                                selectedFolderIds = selectedFolderIds.toggle(item.folder.id)
+                                            } else {
+                                                onOpenFolder(item)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            isMultiSelectMode = true
+                                            selectedFolderIds = setOf(item.folder.id)
+                                        }
+                                    )
                                 }
                             }
                         }
                     } else {
                         shownFolders.forEach { item ->
                             item(key = item.folder.id) {
-                                VideoFolderCard(
-                                    item = item,
-                                    compact = false,
-                                    onClick = { onOpenFolder(item) },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                                    VideoFolderCard(
+                                        item = item,
+                                        compact = false,
+                                        isSelectionMode = isMultiSelectMode,
+                                        isSelected = item.folder.id in selectedFolderIds,
+                                        onToggleSelected = {
+                                            selectedFolderIds = selectedFolderIds.toggle(item.folder.id)
+                                        },
+                                        onClick = {
+                                            if (isMultiSelectMode) {
+                                                selectedFolderIds = selectedFolderIds.toggle(item.folder.id)
+                                            } else {
+                                                onOpenFolder(item)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            isMultiSelectMode = true
+                                            selectedFolderIds = setOf(item.folder.id)
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
                             }
                         }
                     }
@@ -220,6 +304,15 @@ fun VideoLibraryScreen(
             }
 
             if (isSearching) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(8f)
+                        .clickable {
+                            searchKeyword = ""
+                            isSearching = false
+                        }
+                )
                 FloatingSearchBar(
                     value = searchKeyword,
                     onValueChange = { searchKeyword = it },
@@ -227,12 +320,18 @@ fun VideoLibraryScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(horizontal = 16.dp, vertical = 76.dp)
+                        .zIndex(9f)
                 )
             }
             if (showMorePanel) {
                 VideoLibraryMorePanel(
                     isGridMode = isGridMode,
+                    sortMode = sortMode,
                     onDismiss = { showMorePanel = false },
+                    onSearch = {
+                        showMorePanel = false
+                        isSearching = true
+                    },
                     onListMode = {
                         isGridMode = false
                         showMorePanel = false
@@ -248,6 +347,20 @@ fun VideoLibraryScreen(
                     onRescan = {
                         showMorePanel = false
                         onRescanVideo()
+                        Toast.makeText(context, "已重新扫描视频", Toast.LENGTH_SHORT).show()
+                    },
+                    onSortByName = {
+                        sortMode = VideoLibrarySortMode.NAME
+                        showMorePanel = false
+                    },
+                    onSortByCount = {
+                        sortMode = VideoLibrarySortMode.COUNT
+                        showMorePanel = false
+                    },
+                    onMultiDelete = {
+                        showMorePanel = false
+                        isMultiSelectMode = true
+                        selectedFolderIds = emptySet()
                     },
                     onMore = {
                         showMorePanel = false
@@ -262,13 +375,10 @@ fun VideoLibraryScreen(
 @Composable
 private fun VideoHeader(
     isSearching: Boolean,
-    searchKeyword: String,
-    onSearchKeywordChange: (String) -> Unit,
+    isGridMode: Boolean,
     onToggleSearch: () -> Unit,
     onAddFolder: () -> Unit,
-    isGridMode: Boolean,
     onToggleViewMode: () -> Unit,
-    onRescanVideo: () -> Unit,
     onMore: () -> Unit
 ) {
     Column(
@@ -276,7 +386,7 @@ private fun VideoHeader(
             .fillMaxWidth()
             .background(VideoBackground)
             .padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -309,23 +419,14 @@ private fun VideoHeader(
                 IconButton(onClick = onToggleViewMode) {
                     Icon(
                         imageVector = if (isGridMode) Icons.Filled.ViewList else Icons.Filled.GridView,
-                        contentDescription = if (isGridMode) "列表视图" else "网格视图",
+                        contentDescription = "切换视图",
                         tint = Color.White
                     )
-                }
-                IconButton(onClick = onRescanVideo) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "重新扫描", tint = Color.White)
                 }
                 IconButton(onClick = onMore) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
                 }
             }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            VideoQuickPill(icon = Icons.Filled.Movie, text = "本地")
-            VideoQuickPill(icon = Icons.Filled.Add, text = "添加文件夹", onClick = onAddFolder)
-            VideoQuickPill(icon = Icons.Filled.Refresh, text = "刷新", onClick = onRescanVideo)
         }
     }
 }
@@ -333,13 +434,33 @@ private fun VideoHeader(
 @Composable
 private fun VideoLibraryMorePanel(
     isGridMode: Boolean,
+    sortMode: VideoLibrarySortMode,
     onDismiss: () -> Unit,
+    onSearch: () -> Unit,
     onListMode: () -> Unit,
     onGridMode: () -> Unit,
     onAddFolder: () -> Unit,
     onRescan: () -> Unit,
+    onSortByName: () -> Unit,
+    onSortByCount: () -> Unit,
+    onMultiDelete: () -> Unit,
     onMore: () -> Unit
 ) {
+    var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
+    var showThumbnail by rememberSaveable { mutableStateOf(true) }
+    var showDuration by rememberSaveable { mutableStateOf(true) }
+    var showExtension by rememberSaveable { mutableStateOf(false) }
+    var showPlayTime by rememberSaveable { mutableStateOf(false) }
+    var showResolution by rememberSaveable { mutableStateOf(false) }
+    var showFrameRate by rememberSaveable { mutableStateOf(false) }
+    var showPath by rememberSaveable { mutableStateOf(false) }
+    var showSize by rememberSaveable { mutableStateOf(false) }
+    var showDate by rememberSaveable { mutableStateOf(false) }
+    var showDurationOnThumbnail by rememberSaveable { mutableStateOf(true) }
+    var showHiddenFiles by rememberSaveable { mutableStateOf(false) }
+    var recognizeNoMedia by rememberSaveable { mutableStateOf(true) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -351,11 +472,13 @@ private fun VideoLibraryMorePanel(
             modifier = Modifier
                 .width(314.dp)
                 .clickable(onClick = {}),
-            shape = RoundedCornerShape(2.dp),
+            shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF282828))
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
+                modifier = Modifier
+                    .padding(horizontal = 18.dp, vertical = 18.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -363,16 +486,16 @@ private fun VideoLibraryMorePanel(
                         Text("视图模式", color = VideoTextPrimary, style = MaterialTheme.typography.titleMedium)
                         Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
                             MorePanelOption(
-                                icon = Icons.Filled.Folder,
-                                label = "所有文件夹",
+                                icon = Icons.Filled.Search,
+                                label = "搜索",
                                 selected = true,
-                                onClick = onMore
+                                onClick = onSearch
                             )
                             MorePanelOption(
-                                icon = Icons.Filled.Description,
-                                label = "文件",
+                                icon = Icons.Filled.CreateNewFolder,
+                                label = "添加",
                                 selected = false,
-                                onClick = onMore
+                                onClick = onAddFolder
                             )
                         }
                     }
@@ -400,19 +523,67 @@ private fun VideoLibraryMorePanel(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    MorePanelOption(Icons.Filled.SortByAlpha, "标题", false, onMore)
+                    MorePanelOption(Icons.Filled.SortByAlpha, "名称", sortMode == VideoLibrarySortMode.NAME, onSortByName)
+                    MorePanelOption(Icons.Filled.Movie, "数量", sortMode == VideoLibrarySortMode.COUNT, onSortByCount)
+                    MorePanelOption(Icons.Filled.Schedule, "多选", false, onMultiDelete)
                     MorePanelOption(Icons.Filled.DateRange, "日期", false, onMore)
-                    MorePanelOption(Icons.Filled.Schedule, "播放时间", false, onMore)
-                    MorePanelOption(Icons.Filled.PlayArrow, "状态", true, onMore)
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(22.dp)
                 ) {
-                    MorePanelOption(Icons.Filled.Storage, "大小", false, onMore)
-                    MorePanelOption(Icons.Filled.Movie, "类型", false, onMore)
-                    MorePanelOption(Icons.Filled.CreateNewFolder, "添加", false, onAddFolder)
-                    MorePanelOption(Icons.Filled.Refresh, "刷新", false, onRescan)
+                    MorePanelOption(Icons.Filled.Refresh, "重扫", false, onRescan)
+                    MorePanelOption(Icons.Filled.MoreHoriz, "更多", false, onMore)
+                }
+                PanelDivider()
+                VideoPanelExpandableHeader(
+                    title = "字段",
+                    expanded = fieldsExpanded,
+                    onClick = { fieldsExpanded = !fieldsExpanded }
+                )
+                if (fieldsExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            VideoPanelCheckOption("缩略图", showThumbnail) { showThumbnail = it }
+                            VideoPanelCheckOption("长度", showDuration) { showDuration = it }
+                            VideoPanelCheckOption("文件扩展名", showExtension) { showExtension = it }
+                        }
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            VideoPanelCheckOption("播放时间", showPlayTime) { showPlayTime = it }
+                            VideoPanelCheckOption("分辨率", showResolution) { showResolution = it }
+                            VideoPanelCheckOption("帧率", showFrameRate) { showFrameRate = it }
+                        }
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            VideoPanelCheckOption("路径", showPath) { showPath = it }
+                            VideoPanelCheckOption("大小", showSize) { showSize = it }
+                            VideoPanelCheckOption("日期", showDate) { showDate = it }
+                        }
+                    }
+                }
+                PanelDivider()
+                VideoPanelExpandableHeader(
+                    title = "高级",
+                    expanded = advancedExpanded,
+                    onClick = { advancedExpanded = !advancedExpanded }
+                )
+                if (advancedExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        VideoPanelSwitchOption(
+                            label = "在缩略图上显示长度",
+                            checked = showDurationOnThumbnail,
+                            onCheckedChange = { showDurationOnThumbnail = it }
+                        )
+                        VideoPanelSwitchOption(
+                            label = "显示隐藏文件和文件夹",
+                            checked = showHiddenFiles,
+                            onCheckedChange = { showHiddenFiles = it }
+                        )
+                        VideoPanelSwitchOption(
+                            label = "识别 .nomedia",
+                            checked = recognizeNoMedia,
+                            onCheckedChange = { recognizeNoMedia = it }
+                        )
+                    }
                 }
                 PanelDivider()
                 Row(
@@ -439,6 +610,72 @@ private fun VideoLibraryMorePanel(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun VideoPanelExpandableHeader(
+    title: String,
+    expanded: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, color = VideoTextPrimary, style = MaterialTheme.typography.titleMedium)
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = VideoTextSecondary
+        )
+    }
+}
+
+@Composable
+private fun VideoPanelCheckOption(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .width(86.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Text(
+            text = label,
+            color = VideoTextSecondary,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun VideoPanelSwitchOption(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = VideoTextSecondary, style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -485,22 +722,51 @@ private fun PanelDivider() {
 }
 
 @Composable
-private fun VideoQuickPill(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String,
-    onClick: (() -> Unit)? = null
+private fun VideoFolderMultiSelectBar(
+    selectedCount: Int,
+    onCancel: () -> Unit,
+    onSelectAll: () -> Unit,
+    onRemoveSelected: () -> Unit
 ) {
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(VideoSurfaceSoft)
-            .clickable(enabled = onClick != null) { onClick?.invoke() }
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .fillMaxWidth()
+            .background(VideoBackground)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = VideoPrimarySoft, modifier = Modifier.size(18.dp))
-        Text(text = text, color = VideoTextSecondary, style = MaterialTheme.typography.labelMedium)
+        Text(
+            text = "已选择 $selectedCount 项",
+            color = VideoTextPrimary,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "取消",
+                color = VideoTextSecondary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onCancel)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+            Text(
+                text = "全选",
+                color = VideoPrimarySoft,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onSelectAll)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+            Text(
+                text = "移除",
+                color = Color(0xFFF97066),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onRemoveSelected)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+        }
     }
 }
 
@@ -527,7 +793,9 @@ private fun FloatingSearchBar(
     modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = {}),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xF2111722))
     ) {
@@ -573,15 +841,23 @@ private fun EmptyVideoState(text: String) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoFolderCard(
     item: VideoFolderUiModel,
     compact: Boolean,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelected: () -> Unit = {},
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = modifier.clickable(onClick = onClick),
+        modifier = modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick
+        ),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
@@ -605,10 +881,61 @@ private fun VideoFolderCard(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (isSelectionMode) {
+                    Checkbox(checked = isSelected, onCheckedChange = { onToggleSelected() })
+                }
                 FolderPreview(videoCount = item.videos.size, compact = false)
                 FolderText(item = item, compact = false, modifier = Modifier.weight(1f))
             }
         }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VideoFolderGridItem(
+    item: VideoFolderUiModel,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelected: () -> Unit,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .padding(horizontal = 2.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Box {
+            FolderPreview(videoCount = item.videos.size, compact = true)
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelected() },
+                    modifier = Modifier.align(Alignment.TopStart)
+                )
+            }
+        }
+        Text(
+            text = item.folder.name,
+            style = MaterialTheme.typography.titleSmall,
+            color = VideoTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "${item.videos.size} 个视频",
+            style = MaterialTheme.typography.bodySmall,
+            color = VideoTextSecondary,
+            maxLines = 1
+        )
     }
 }
 
@@ -672,10 +999,9 @@ private fun FolderText(
             style = MaterialTheme.typography.bodySmall,
             color = VideoTextSecondary
         )
-        Text(
-            text = item.source,
-            style = MaterialTheme.typography.labelSmall,
-            color = VideoTextMuted
-        )
     }
+}
+
+private fun Set<String>.toggle(value: String): Set<String> {
+    return if (value in this) this - value else this + value
 }

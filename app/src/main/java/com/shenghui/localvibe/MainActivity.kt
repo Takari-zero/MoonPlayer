@@ -132,6 +132,7 @@ private fun LocalVibeApp() {
     val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
     val bookProgressMap = remember { mutableStateMapOf<String, PersistedBookProgress>() }
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
+    var hiddenVideoFolderIds by remember { mutableStateOf(emptySet<String>()) }
     var currentFolder by remember { mutableStateOf<MediaFolderUiModel?>(null) }
     var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
     var currentAddTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
@@ -617,13 +618,35 @@ private fun LocalVibeApp() {
         }
     }
 
+    fun List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder>.filterHiddenVideoFolders(): List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder> {
+        return filterNot { it.folder.id.trim() in hiddenVideoFolderIds }
+    }
+
+    suspend fun hideVideoFolders(folders: List<MediaFolderUiModel>) {
+        val folderIds = folders.map { it.id.trim() }.filter { it.isNotBlank() }.toSet()
+        if (folderIds.isEmpty()) return
+        val autoFolderIds = folderIds.filter { it.startsWith("auto:") }.toSet()
+        val manualFolderIds = folderIds - autoFolderIds
+        if (autoFolderIds.isNotEmpty()) {
+            hiddenVideoFolderIds = hiddenVideoFolderIds + autoFolderIds
+            appStateStore.hideVideoFolderIds(autoFolderIds)
+        }
+        if (manualFolderIds.isNotEmpty()) {
+            appStateStore.removeFolders(LocalMediaType.VIDEO.name, manualFolderIds)
+        }
+        videoFolders.removeAll { it.id in folderIds }
+        folderIds.forEach { folderId ->
+            scannedFilesByFolder.remove(typedFolderKey(LocalMediaType.VIDEO, folderId))
+        }
+    }
+
     fun runAutoScan(targetType: LocalMediaType, showCompletionToast: Boolean = false) {
         coroutineScope.launch {
             when (targetType) {
                 LocalMediaType.VIDEO -> {
                     val folders = withContext(Dispatchers.IO) {
                         MediaStoreScanner.scanVideos(context.applicationContext)
-                    }
+                    }.filterHiddenVideoFolders()
                     videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
                     folders.forEach { result ->
                         videoFolders.add(result.folder)
@@ -870,6 +893,7 @@ private fun LocalVibeApp() {
         recentVideoUri = appStateStore.loadRecentVideoUri()
         recentAudioUri = appStateStore.loadRecentAudioUri()
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
+        hiddenVideoFolderIds = appStateStore.loadHiddenVideoFolderIds()
         bookProgressMap.clear()
         appStateStore.loadBookProgress().forEach { progress ->
             if (progress.totalParagraphs > 0) {
@@ -1134,6 +1158,11 @@ private fun LocalVibeApp() {
                                 appStateStore.saveRecentVideoUri(file.uri)
                             }
                             navController.navigate(LocalVibeRoute.VideoPlayer)
+                        },
+                        onRemoveFolders = { folders ->
+                            coroutineScope.launch {
+                                hideVideoFolders(folders.map { it.folder })
+                            }
                         },
                         onRescanVideo = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)

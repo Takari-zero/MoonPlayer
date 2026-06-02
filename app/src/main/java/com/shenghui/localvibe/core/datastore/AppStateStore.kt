@@ -43,6 +43,16 @@ class AppStateStore(private val context: Context) {
         saveFolders(emptyList())
     }
 
+    suspend fun removeFolders(targetType: String, folderIds: Collection<String>) {
+        val normalizedIds = folderIds.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (normalizedIds.isEmpty()) return
+        val next = loadFolders().filterNot { folder ->
+            folder.targetType == targetType &&
+                (folder.folderId.trim() in normalizedIds || folder.uri.trim() in normalizedIds)
+        }
+        saveFolders(next)
+    }
+
     suspend fun getPersistedBookFiles(): List<PersistedBookFile> {
         val json = context.appStateDataStore.data.first()[BookFilesKey].orEmpty()
         return decodeBookFiles(json)
@@ -154,6 +164,41 @@ class AppStateStore(private val context: Context) {
     suspend fun clearHiddenAudioUris() {
         context.appStateDataStore.edit { prefs ->
             prefs.remove(HiddenAudioUrisKey)
+        }
+    }
+
+    suspend fun loadHiddenVideoFolderIds(): Set<String> {
+        val json = context.appStateDataStore.data.first()[HiddenVideoFolderIdsKey].orEmpty()
+        if (json.isBlank()) return emptySet()
+        return runCatching {
+            val array = JSONArray(json)
+            buildSet {
+                repeat(array.length()) { index ->
+                    val value = array.opt(index)
+                    val folderId = when (value) {
+                        is JSONObject -> value.optString("folderId")
+                        else -> value?.toString().orEmpty()
+                    }.trim()
+                    if (folderId.isNotBlank()) add(folderId)
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun hideVideoFolderIds(folderIds: Collection<String>) {
+        val normalizedIds = folderIds.map { it.trim() }.filter { it.isNotBlank() }
+        if (normalizedIds.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeHiddenVideoFolderIds(prefs[HiddenVideoFolderIdsKey].orEmpty())
+                .plus(normalizedIds)
+                .toSet()
+            prefs[HiddenVideoFolderIdsKey] = encodeHiddenVideoFolderIds(next)
+        }
+    }
+
+    suspend fun clearHiddenVideoFolderIds() {
+        context.appStateDataStore.edit { prefs ->
+            prefs.remove(HiddenVideoFolderIdsKey)
         }
     }
 
@@ -358,11 +403,45 @@ class AppStateStore(private val context: Context) {
         return array.toString()
     }
 
+    private fun decodeHiddenVideoFolderIds(json: String): Set<String> {
+        if (json.isBlank()) return emptySet()
+        return runCatching {
+            val array = JSONArray(json)
+            buildSet {
+                repeat(array.length()) { index ->
+                    val value = array.opt(index)
+                    val folderId = when (value) {
+                        is JSONObject -> value.optString("folderId")
+                        else -> value?.toString().orEmpty()
+                    }.trim()
+                    if (folderId.isNotBlank()) add(folderId)
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    private fun encodeHiddenVideoFolderIds(folderIds: Set<String>): String {
+        val array = JSONArray()
+        folderIds.map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { folderId ->
+                array.put(
+                    JSONObject()
+                        .put("folderId", folderId)
+                        .put("mediaType", "VIDEO")
+                        .put("hiddenAt", System.currentTimeMillis())
+                )
+            }
+        return array.toString()
+    }
+
     private companion object {
         val FoldersKey = stringPreferencesKey("manual_folders_json")
         val BookFilesKey = stringPreferencesKey("book_files_json")
         val BookProgressKey = stringPreferencesKey("book_progress_json")
         val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
+        val HiddenVideoFolderIdsKey = stringPreferencesKey("hidden_video_folder_ids_json")
         val ProgressKey = stringPreferencesKey("playback_progress_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")
         val RecentAudioUriKey = stringPreferencesKey("recent_audio_uri")
