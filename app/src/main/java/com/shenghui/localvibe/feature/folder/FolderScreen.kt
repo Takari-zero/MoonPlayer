@@ -1,9 +1,12 @@
 package com.shenghui.localvibe.feature.folder
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.media.formatFileSize
@@ -65,6 +69,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private val Categories = listOf("全部", "视频", "音乐", "小说")
+
+private enum class VideoFolderSortMode {
+    NAME,
+    DURATION,
+    SIZE,
+    PROGRESS
+}
 
 @Composable
 fun FolderScreen(
@@ -94,16 +105,32 @@ fun FolderScreen(
     var isVideoSearching by rememberSaveable { mutableStateOf(false) }
     var videoSearchKeyword by rememberSaveable { mutableStateOf("") }
     var isVideoGridMode by rememberSaveable { mutableStateOf(false) }
+    var videoSortMode by rememberSaveable { mutableStateOf(VideoFolderSortMode.NAME) }
     val categoryFiles = remember(files, selectedCategory, targetType) {
         if (targetType != null) files.filter { it.type == targetType } else files.filterForCategory(selectedCategory)
     }
-    val visibleFiles = remember(categoryFiles, targetType, videoSearchKeyword) {
-        if (targetType == LocalMediaType.VIDEO && videoSearchKeyword.isNotBlank()) {
+    val visibleFiles = remember(categoryFiles, targetType, videoSearchKeyword, videoSortMode, videoMetadataCache, videoProgressMap) {
+        val filtered = if (targetType == LocalMediaType.VIDEO && videoSearchKeyword.isNotBlank()) {
             val keyword = videoSearchKeyword.trim()
             categoryFiles.filter { it.name.contains(keyword, ignoreCase = true) }
         } else {
             categoryFiles
         }
+        if (targetType == LocalMediaType.VIDEO) {
+            when (videoSortMode) {
+                VideoFolderSortMode.NAME -> filtered.sortedBy { it.name.lowercase() }
+                VideoFolderSortMode.DURATION -> filtered.sortedByDescending { videoMetadataCache[it.id]?.durationMs ?: 0L }
+                VideoFolderSortMode.SIZE -> filtered.sortedByDescending { it.size }
+                VideoFolderSortMode.PROGRESS -> filtered.sortedByDescending { videoProgressMap[it.uri] ?: 0L }
+            }
+        } else {
+            filtered
+        }
+    }
+
+    BackHandler(enabled = targetType == LocalMediaType.VIDEO && isVideoSearching) {
+        videoSearchKeyword = ""
+        isVideoSearching = false
     }
 
     Scaffold(
@@ -114,13 +141,10 @@ fun FolderScreen(
             MaterialTheme.colorScheme.background
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(innerPadding)
-                .padding(
-                    horizontal = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
-                    vertical = if (targetType == LocalMediaType.VIDEO) 12.dp else 20.dp
-                )
+                .fillMaxSize()
                 .background(
                     if (targetType == LocalMediaType.VIDEO) {
                         Color(0xFF05070D)
@@ -128,12 +152,19 @@ fun FolderScreen(
                         MaterialTheme.colorScheme.background
                     }
                 )
-                .verticalScroll(rememberScrollState())
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(
-                if (targetType == LocalMediaType.VIDEO) 10.dp else 16.dp
-            )
         ) {
+            Column(
+                modifier = Modifier
+                    .padding(
+                    horizontal = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
+                    vertical = if (targetType == LocalMediaType.VIDEO) 12.dp else 20.dp
+                )
+                    .verticalScroll(rememberScrollState())
+                    .fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (targetType == LocalMediaType.VIDEO) 10.dp else 16.dp
+                )
+            ) {
             if (isMultiSelectMode) {
                 MultiSelectHeader(
                     selectedCount = selectedUris.size,
@@ -164,19 +195,21 @@ fun FolderScreen(
                 if (targetType == LocalMediaType.VIDEO) {
                     VideoFolderTopBar(
                         folderName = folderName.ifBlank { "未命名文件夹" },
-                        isSearching = isVideoSearching,
-                        searchKeyword = videoSearchKeyword,
-                        onSearchKeywordChange = { videoSearchKeyword = it },
                         isGridMode = isVideoGridMode,
+                        sortMode = videoSortMode,
                         onBack = onBack,
                         onToggleSearch = {
                             if (isVideoSearching) videoSearchKeyword = ""
                             isVideoSearching = !isVideoSearching
                         },
                         onToggleViewMode = { isVideoGridMode = !isVideoGridMode },
+                        onSortChange = { videoSortMode = it },
                         onStartMultiSelect = {
                             isMultiSelectMode = true
                             selectedUris = emptySet()
+                        },
+                        onRescanFolder = {
+                            Toast.makeText(context, "已重新扫描当前文件夹", Toast.LENGTH_SHORT).show()
                         }
                     )
                 } else {
@@ -287,6 +320,10 @@ fun FolderScreen(
                                                 onOpenVideo(file)
                                             }
                                         },
+                                        onLongPress = {
+                                            isMultiSelectMode = true
+                                            selectedUris = setOf(file.uri)
+                                        },
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
@@ -314,6 +351,10 @@ fun FolderScreen(
                                         } else {
                                             onOpenVideo(file)
                                         }
+                                    },
+                                    onLongPress = {
+                                        isMultiSelectMode = true
+                                        selectedUris = setOf(file.uri)
                                     }
                                 )
 
@@ -359,6 +400,26 @@ fun FolderScreen(
                     }
                 }
             }
+            }
+            if (targetType == LocalMediaType.VIDEO && isVideoSearching) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(8f)
+                        .clickable {
+                            videoSearchKeyword = ""
+                            isVideoSearching = false
+                        }
+                )
+                VideoFolderSearchOverlay(
+                    value = videoSearchKeyword,
+                    onValueChange = { videoSearchKeyword = it },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = 18.dp, vertical = 76.dp)
+                        .zIndex(9f)
+                )
+            }
         }
     }
 
@@ -402,17 +463,27 @@ fun FolderScreen(
 @Composable
 private fun VideoFolderTopBar(
     folderName: String,
-    isSearching: Boolean,
-    searchKeyword: String,
-    onSearchKeywordChange: (String) -> Unit,
     isGridMode: Boolean,
+    sortMode: VideoFolderSortMode,
     onBack: () -> Unit,
     onToggleSearch: () -> Unit,
     onToggleViewMode: () -> Unit,
-    onStartMultiSelect: () -> Unit
+    onSortChange: (VideoFolderSortMode) -> Unit,
+    onStartMultiSelect: () -> Unit,
+    onRescanFolder: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(modifier = Modifier.fillMaxWidth()) {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF080D16))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
             IconButton(
                 onClick = onBack,
                 modifier = Modifier.align(Alignment.CenterStart)
@@ -458,33 +529,112 @@ private fun VideoFolderTopBar(
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         DropdownMenuItem(
+                            text = { Text("搜索", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onToggleSearch()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isGridMode) "列表视图" else "网格视图", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onToggleViewMode()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (sortMode == VideoFolderSortMode.NAME) "按名称 ✓" else "按名称", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onSortChange(VideoFolderSortMode.NAME)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (sortMode == VideoFolderSortMode.DURATION) "按时长 ✓" else "按时长", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onSortChange(VideoFolderSortMode.DURATION)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (sortMode == VideoFolderSortMode.SIZE) "按大小 ✓" else "按大小", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onSortChange(VideoFolderSortMode.SIZE)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (sortMode == VideoFolderSortMode.PROGRESS) "按进度 ✓" else "按进度", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onSortChange(VideoFolderSortMode.PROGRESS)
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("多选删除", color = Color(0xFFF5F7FA)) },
                             onClick = {
                                 expanded = false
                                 onStartMultiSelect()
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("重新扫描当前文件夹", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                onRescanFolder()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("更多功能", color = Color(0xFFF5F7FA)) },
+                            onClick = {
+                                expanded = false
+                                Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                            }
+                        )
                     }
                 }
             }
-        }
-        if (isSearching) {
-            androidx.compose.material3.OutlinedTextField(
-                value = searchKeyword,
-                onValueChange = onSearchKeywordChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (searchKeyword.isNotBlank()) {
-                        IconButton(onClick = { onSearchKeywordChange("") }) {
-                            Icon(Icons.Filled.Clear, contentDescription = "清空")
-                        }
-                    }
-                },
-                placeholder = { Text("搜索当前文件夹视频") }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.08f))
             )
         }
+    }
+}
+
+@Composable
+private fun VideoFolderSearchOverlay(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = {}),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xF2111722))
+    ) {
+        androidx.compose.material3.OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF8AB6FF)) },
+            trailingIcon = {
+                if (value.isNotBlank()) {
+                    IconButton(onClick = { onValueChange("") }) {
+                        Icon(Icons.Filled.Clear, contentDescription = "清空", tint = Color(0xFFA8B2C2))
+                    }
+                }
+            },
+            placeholder = { Text("搜索当前文件夹视频", color = Color(0xFF6F7A8A)) }
+        )
     }
 }
 
@@ -595,6 +745,7 @@ private fun TypedFileCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoFileCard(
     file: LocalMediaFile,
@@ -606,7 +757,8 @@ private fun VideoFileCard(
     onMetadataLoaded: (String, VideoMetadata) -> Unit,
     onRemove: () -> Unit,
     onDelete: () -> Unit,
-    onOpenVideo: () -> Unit
+    onOpenVideo: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     val context = LocalContext.current
     LaunchedEffect(file.id, metadata) {
@@ -620,7 +772,10 @@ private fun VideoFileCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpenVideo),
+            .combinedClickable(
+                onClick = onOpenVideo,
+                onLongClick = onLongPress
+            ),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
@@ -678,6 +833,7 @@ private fun VideoFileCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoGridFileCard(
     file: LocalMediaFile,
@@ -690,6 +846,7 @@ private fun VideoGridFileCard(
     onRemove: () -> Unit,
     onDelete: () -> Unit,
     onOpenVideo: () -> Unit,
+    onLongPress: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -702,7 +859,10 @@ private fun VideoGridFileCard(
     }
 
     Card(
-        modifier = modifier.clickable(onClick = onOpenVideo),
+        modifier = modifier.combinedClickable(
+            onClick = onOpenVideo,
+            onLongClick = onLongPress
+        ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
