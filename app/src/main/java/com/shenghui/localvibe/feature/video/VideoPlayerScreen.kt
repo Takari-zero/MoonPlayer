@@ -1,13 +1,16 @@
-package com.shenghui.localvibe.feature.video
+﻿package com.shenghui.localvibe.feature.video
 
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -15,6 +18,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +35,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Loop
@@ -44,10 +49,13 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -127,7 +135,7 @@ fun VideoPlayerScreen(
                 onClick = onBack,
                 modifier = Modifier.align(Alignment.TopStart)
             ) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+                Icon(Icons.Filled.ArrowBack, contentDescription = "杩斿洖", tint = Color.White)
             }
             return@Box
         }
@@ -164,7 +172,7 @@ private fun LocalVideoPlayer(
     }
     val player = remember(mediaFile.uri) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.parse(mediaFile.uri)))
+            setMediaItem(buildVideoMediaItem(mediaFile.uri, null))
             if (initialPositionMs > 0L) {
                 seekTo(initialPositionMs)
             }
@@ -190,6 +198,24 @@ private fun LocalVideoPlayer(
     var gestureSeekPreviewMs by remember { mutableLongStateOf(0L) }
     var startBrightness by remember { mutableFloatStateOf(activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f) }
     var startVolume by remember { mutableStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
+    var playbackSpeed by remember(mediaFile.uri) { mutableFloatStateOf(1f) }
+    var videoResizeMode by remember(mediaFile.uri) { mutableStateOf(VideoResizeMode.FIT) }
+    var isRepeatOne by remember(mediaFile.uri) { mutableStateOf(false) }
+    var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
+    var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
+    val subtitleLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        externalSubtitleUri = uri
+        Toast.makeText(context, "已加载外挂字幕", Toast.LENGTH_SHORT).show()
+    }
 
     fun saveCurrentProgress() {
         onProgressChanged(mediaFile.uri, player.savedPosition())
@@ -261,6 +287,15 @@ private fun LocalVideoPlayer(
         }
     }
 
+    LaunchedEffect(externalSubtitleUri) {
+        val subtitleUri = externalSubtitleUri ?: return@LaunchedEffect
+        val current = player.currentPosition.coerceAtLeast(0L)
+        val shouldPlay = player.playWhenReady
+        player.setMediaItem(buildVideoMediaItem(mediaFile.uri, subtitleUri), current)
+        player.prepare()
+        player.playWhenReady = shouldPlay
+    }
+
     Box(
         modifier = modifier
             .background(Color.Black)
@@ -283,7 +318,9 @@ private fun LocalVideoPlayer(
                         startVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     },
                     onDragEnd = {
-                        if (dragMode == VideoDragMode.SEEK) {
+                        if (dragMode == VideoDragMode.BACK) {
+                            onBack()
+                        } else if (dragMode == VideoDragMode.SEEK) {
                             val target = gestureSeekPreviewMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
                             currentPositionMs = target
                             player.seekTo(target)
@@ -302,7 +339,13 @@ private fun LocalVideoPlayer(
                             val absX = totalDragX.absoluteValue
                             val absY = totalDragY.absoluteValue
                             if (absX > 18f || absY > 18f) {
-                                dragMode = if (absX > absY * 1.25f) {
+                                dragMode = if (
+                                    gestureStart.x > size.width - 56.dp.toPx() &&
+                                    totalDragX < -40f &&
+                                    absX > absY * 1.25f
+                                ) {
+                                    VideoDragMode.BACK
+                                } else if (absX > absY * 1.25f) {
                                     VideoDragMode.SEEK
                                 } else {
                                     VideoDragMode.VERTICAL
@@ -327,7 +370,7 @@ private fun LocalVideoPlayer(
                                 if (gestureStart.x < size.width / 2f) {
                                     val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
                                     activity?.setScreenBrightness(brightness)
-                                    gestureOverlay = "亮度 ${(brightness * 100).toInt()}%"
+                                    gestureOverlay = "浜害 ${(brightness * 100).toInt()}%"
                                     showControls = true
                                 } else {
                                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -335,11 +378,14 @@ private fun LocalVideoPlayer(
                                     val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
                                     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
                                     val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
-                                    gestureOverlay = "音量 $percent%"
+                                    gestureOverlay = "闊抽噺 $percent%"
                                     showControls = true
                                 }
                             }
                             VideoDragMode.UNKNOWN -> Unit
+                            VideoDragMode.BACK -> {
+                                showControls = true
+                            }
                         }
                         change.consume()
                     }
@@ -353,12 +399,13 @@ private fun LocalVideoPlayer(
                     this.player = player
                     useController = true
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    resizeMode = videoResizeMode.playerResizeMode
                     setBackgroundColor(android.graphics.Color.BLACK)
                 }
             },
             update = { playerView ->
                 playerView.player = player
+                playerView.resizeMode = videoResizeMode.playerResizeMode
             }
         )
 
@@ -391,12 +438,51 @@ private fun LocalVideoPlayer(
                     isPlaying = player.isPlaying
                     showControls = true
                 },
-                onNext = { next() }
+                onNext = { next() },
+                playbackSpeed = playbackSpeed,
+                resizeMode = videoResizeMode,
+                isRepeatOne = isRepeatOne,
+                audioDelayMs = audioDelayMs,
+                onSpeedSelected = { speed ->
+                    val safeSpeed = speed.coerceIn(0.1f, 5f)
+                    playbackSpeed = safeSpeed
+                    player.setPlaybackSpeed(safeSpeed)
+                    Toast.makeText(context, "已切换到 ${safeSpeed.formatSpeed()}x", Toast.LENGTH_SHORT).show()
+                },
+                onResizeModeSelected = { mode ->
+                    videoResizeMode = mode
+                    Toast.makeText(context, "画面比例：${mode.label}", Toast.LENGTH_SHORT).show()
+                },
+                onToggleRepeat = {
+                    val nextRepeat = !isRepeatOne
+                    isRepeatOne = nextRepeat
+                    player.repeatMode = if (nextRepeat) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                    Toast.makeText(
+                        context,
+                        if (nextRepeat) "循环播放已开启" else "循环播放已关闭",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
+                onSubtitleSelect = {
+                    subtitleLauncher.launch(
+                        arrayOf(
+                            "application/x-subrip",
+                            "text/vtt",
+                            "text/x-ssa",
+                            "text/plain",
+                            "text/*",
+                            "application/octet-stream"
+                        )
+                    )
+                },
+                onAudioDelayChange = { nextDelayMs ->
+                    audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
+                }
             )
         }
 
         gestureOverlay?.let { text ->
-            val isBrightness = text.startsWith("亮度")
+            val isBrightness = text.startsWith("浜害")
             GestureValueOverlay(
                 text = text,
                 percent = text.substringAfter(" ").substringBefore("%").toIntOrNull() ?: 0,
@@ -501,12 +587,52 @@ private fun VideoControlOverlay(
     onSeekFinished: () -> Unit,
     onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
-    onNext: () -> Unit
+    onNext: () -> Unit,
+    playbackSpeed: Float,
+    resizeMode: VideoResizeMode,
+    isRepeatOne: Boolean,
+    audioDelayMs: Long,
+    onSpeedSelected: (Float) -> Unit,
+    onResizeModeSelected: (VideoResizeMode) -> Unit,
+    onToggleRepeat: () -> Unit,
+    onSubtitleSelect: () -> Unit,
+    onAudioDelayChange: (Long) -> Unit
 ) {
     val context = LocalContext.current
     var moreMenuExpanded by remember { mutableStateOf(false) }
+    var showSpeedPanel by remember { mutableStateOf(false) }
+    var showResizePanel by remember { mutableStateOf(false) }
+    var showAudioDelayPanel by remember { mutableStateOf(false) }
+    var showSubtitlePanel by remember { mutableStateOf(false) }
+    var showEqualizerPanel by remember { mutableStateOf(false) }
+    var eqBass by remember { mutableFloatStateOf(0f) }
+    var eqMid by remember { mutableFloatStateOf(0f) }
+    var eqTreble by remember { mutableFloatStateOf(0f) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    fun closePanelOrBack() {
+        when {
+            showAudioDelayPanel -> showAudioDelayPanel = false
+            showSubtitlePanel -> showSubtitlePanel = false
+            showEqualizerPanel -> showEqualizerPanel = false
+            showSpeedPanel -> showSpeedPanel = false
+            showResizePanel -> showResizePanel = false
+            moreMenuExpanded -> moreMenuExpanded = false
+            else -> onBack()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(showAudioDelayPanel, showSubtitlePanel, showEqualizerPanel, showSpeedPanel, showResizePanel, moreMenuExpanded) {
+                detectDragGestures { change, dragAmount ->
+                    if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
+                        closePanelOrBack()
+                        change.consume()
+                    }
+                }
+            }
+    ) {
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -525,28 +651,148 @@ private fun VideoControlOverlay(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .fillMaxWidth()
-                    .padding(horizontal = 64.dp),
+                    .padding(horizontal = 176.dp),
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
-            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-                IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                IconButton(onClick = { showAudioDelayPanel = true }) {
+                    Icon(Icons.Filled.Audiotrack, contentDescription = "音轨", tint = Color.White)
                 }
-                if (moreMenuExpanded) {
-                    VideoToolPanel(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 50.dp, end = 4.dp),
-                        onToolClick = { label ->
-                            moreMenuExpanded = false
-                            Toast.makeText(context, "$label 功能后续实现", Toast.LENGTH_SHORT).show()
-                        }
-                    )
+                IconButton(onClick = { showSubtitlePanel = true }) {
+                    Icon(Icons.Filled.Subtitles, contentDescription = "字幕", tint = Color.White)
+                }
+                Box {
+                    IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+                    }
                 }
             }
+        }
+
+        if (moreMenuExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { moreMenuExpanded = false }
+            )
+            VideoToolPanel(
+                playbackSpeed = playbackSpeed,
+                isRepeatOne = isRepeatOne,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 18.dp),
+                onToolClick = { label ->
+                    moreMenuExpanded = false
+                    when (label) {
+                        "倍速" -> showSpeedPanel = true
+                        "循环" -> onToggleRepeat()
+                        "解码" -> Toast.makeText(context, "解码方式后续实现", Toast.LENGTH_SHORT).show()
+                        "截图" -> Toast.makeText(context, "截图功能后续实现", Toast.LENGTH_SHORT).show()
+                        else -> Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        }
+
+        if (showSpeedPanel) {
+            VideoSpeedPanel(
+                speed = playbackSpeed,
+                onDismiss = { showSpeedPanel = false },
+                onSpeedChange = onSpeedSelected,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 18.dp)
+            )
+        }
+
+        if (showResizePanel) {
+            VideoChoicePanel(
+                title = "画面比例",
+                options = VideoResizeMode.entries.map { it.label },
+                selected = resizeMode.label,
+                onDismiss = { showResizePanel = false },
+                onSelect = { option ->
+                    VideoResizeMode.entries.firstOrNull { it.label == option }?.let(onResizeModeSelected)
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 18.dp)
+            )
+        }
+
+        if (showAudioDelayPanel) {
+            AudioDelayPanel(
+                delayMs = audioDelayMs,
+                onDismiss = { showAudioDelayPanel = false },
+                onChange = { nextDelayMs ->
+                    onAudioDelayChange(nextDelayMs)
+                    Toast.makeText(context, "音轨偏移 ${formatSignedDelay(nextDelayMs)}", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 18.dp)
+            )
+        }
+
+        if (showSubtitlePanel) {
+            SubtitlePanel(
+                onDismiss = { showSubtitlePanel = false },
+                onPickSubtitle = onSubtitleSelect,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 18.dp)
+            )
+        }
+
+        if (showEqualizerPanel) {
+            VideoEqualizerPanel(
+                bass = eqBass,
+                mid = eqMid,
+                treble = eqTreble,
+                onBassChange = { eqBass = it },
+                onMidChange = { eqMid = it },
+                onTrebleChange = { eqTreble = it },
+                onDismiss = { showEqualizerPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 18.dp)
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 42.dp, top = 72.dp),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            VideoQuickToolButton(
+                icon = Icons.Filled.Tune,
+                label = "均衡器",
+                onClick = { showEqualizerPanel = true }
+            )
+            VideoQuickToolButton(
+                icon = Icons.Filled.Speed,
+                label = "${playbackSpeed.formatSpeed()}X",
+                onClick = { showSpeedPanel = true }
+            )
+            VideoQuickToolButton(
+                icon = Icons.Filled.PhotoCamera,
+                label = "截图",
+                onClick = { Toast.makeText(context, "截图功能后续实现", Toast.LENGTH_SHORT).show() }
+            )
+            VideoQuickToolButton(
+                icon = Icons.Filled.MoreHoriz,
+                label = "更多",
+                onClick = { moreMenuExpanded = true }
+            )
         }
 
         Column(
@@ -579,12 +825,7 @@ private fun VideoControlOverlay(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
-                    Icon(
-                        Icons.Filled.SkipPrevious,
-                        contentDescription = "上一个",
-                        tint = Color.White,
-                        modifier = Modifier.size(32.dp)
-                    )
+                    Icon(Icons.Filled.SkipPrevious, contentDescription = "上一集", tint = Color.White, modifier = Modifier.size(32.dp))
                 }
                 IconButton(onClick = onPlayPause, modifier = Modifier.size(58.dp)) {
                     Icon(
@@ -595,61 +836,58 @@ private fun VideoControlOverlay(
                     )
                 }
                 IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
-                    Icon(
-                        Icons.Filled.SkipNext,
-                        contentDescription = "下一个",
-                        tint = Color.White,
-                        modifier = Modifier.size(32.dp)
-                    )
+                    Icon(Icons.Filled.SkipNext, contentDescription = "下一集", tint = Color.White, modifier = Modifier.size(32.dp))
+                }
+                IconButton(onClick = { showResizePanel = true }, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Filled.AspectRatio, contentDescription = "适应屏幕", tint = Color.White, modifier = Modifier.size(28.dp))
                 }
             }
         }
     }
 }
-
 @Composable
 private fun VideoToolPanel(
+    playbackSpeed: Float,
+    isRepeatOne: Boolean,
     onToolClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tools = listOf(
-        "音轨" to Icons.Filled.Audiotrack,
-        "字幕" to Icons.Filled.Subtitles,
-        "解码" to Icons.Filled.Settings,
-        "倍速" to Icons.Filled.Speed,
-        "画面" to Icons.Filled.AspectRatio,
-        "循环" to Icons.Filled.Loop,
-        "截图" to Icons.Filled.PhotoCamera,
-        "更多" to Icons.Filled.MoreHoriz
+        VideoToolAction("解码", "自动", Icons.Filled.Settings),
+        VideoToolAction("倍速", "${playbackSpeed.formatSpeed()}x", Icons.Filled.Speed),
+        VideoToolAction("循环", if (isRepeatOne) "开启" else "关闭", Icons.Filled.Loop),
+        VideoToolAction("截图", null, Icons.Filled.PhotoCamera),
+        VideoToolAction("更多", null, Icons.Filled.MoreHoriz)
     )
     Column(
         modifier = modifier
-            .width(292.dp)
+            .width(244.dp)
             .background(Color(0xE6101722), RoundedCornerShape(22.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        tools.chunked(4).forEach { row ->
+        tools.chunked(3).forEach { row ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                row.forEach { (label, icon) ->
+                row.forEach { tool ->
                     VideoToolItem(
-                        label = label,
-                        icon = icon,
-                        onClick = { onToolClick(label) }
+                        label = tool.label,
+                        value = tool.value,
+                        icon = tool.icon,
+                        onClick = { onToolClick(tool.label) }
                     )
                 }
             }
         }
     }
 }
-
 @Composable
 private fun VideoToolItem(
     label: String,
+    value: String? = null,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit
 ) {
@@ -676,11 +914,280 @@ private fun VideoToolItem(
             )
         }
         Text(
-            text = label,
+            text = value?.let { "$label\n$it" } ?: label,
             color = Color.White.copy(alpha = 0.86f),
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 1
+            maxLines = 2,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
+    }
+}
+
+@Composable
+private fun VideoQuickToolButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (label.endsWith("X")) {
+            Text(
+                text = label,
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = Color.White,
+                modifier = Modifier.size(25.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AudioDelayPanel(
+    delayMs: Long,
+    onDismiss: () -> Unit,
+    onChange: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(title = "音轨同步", onDismiss = onDismiss, modifier = modifier.width(260.dp)) {
+        Text(
+            text = "当前偏移 ${formatSignedDelay(delayMs)}",
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(-500L, -100L, 0L, 100L, 500L).forEach { delta ->
+                Text(
+                    text = if (delta == 0L) "归零" else formatSignedDelay(delta),
+                    color = if (delta == 0L) Color(0xFF8AB6FF) else Color.White,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable { if (delta == 0L) onChange(0L) else onChange(delayMs + delta) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+        Text(
+            text = "负数表示声音提前，正数表示声音延后。本版先保存偏移设置，底层真实延迟后续专项接入。",
+            color = Color.White.copy(alpha = 0.58f),
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+}
+
+@Composable
+private fun SubtitlePanel(
+    onDismiss: () -> Unit,
+    onPickSubtitle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(title = "字幕", onDismiss = onDismiss, modifier = modifier.width(240.dp)) {
+        Text(
+            text = "外挂字幕",
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            text = "选择 SRT / ASS / SSA / VTT 字幕文件",
+            color = Color.White.copy(alpha = 0.58f),
+            style = MaterialTheme.typography.labelSmall
+        )
+        Text(
+            text = "选择字幕",
+            color = Color(0xFF8AB6FF),
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.08f))
+                .clickable(onClick = onPickSubtitle)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.labelMedium
+        )
+        Text(
+            text = "字幕加减速与同步微调后续接入。",
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+}
+
+@Composable
+private fun VideoEqualizerPanel(
+    bass: Float,
+    mid: Float,
+    treble: Float,
+    onBassChange: (Float) -> Unit,
+    onMidChange: (Float) -> Unit,
+    onTrebleChange: (Float) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(title = "均衡器", onDismiss = onDismiss, modifier = modifier.width(250.dp)) {
+        EqualizerSlider("低频", bass, onBassChange)
+        EqualizerSlider("中频", mid, onMidChange)
+        EqualizerSlider("高频", treble, onTrebleChange)
+        Text(
+            text = "当前为播放器内调节面板，真实音效处理后续专项接入。",
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+}
+
+@Composable
+private fun VideoSpeedPanel(
+    speed: Float,
+    onDismiss: () -> Unit,
+    onSpeedChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var draftSpeed by remember(speed) { mutableFloatStateOf(speed.coerceIn(0.1f, 5f)) }
+    SidePanelShell(title = "播放速度", onDismiss = onDismiss, modifier = modifier.width(260.dp)) {
+        Text(
+            text = "${draftSpeed.formatSpeed()}x",
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Slider(
+            value = draftSpeed,
+            onValueChange = {
+                draftSpeed = it.coerceIn(0.1f, 5f)
+            },
+            onValueChangeFinished = {
+                onSpeedChange(draftSpeed)
+            },
+            valueRange = 0.1f..5f,
+            colors = videoSliderColors()
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 5f).chunked(4).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { option ->
+                        Text(
+                            text = "${option.formatSpeed()}x",
+                            color = if ((draftSpeed - option).absoluteValue < 0.01f) Color(0xFF8AB6FF) else Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .clickable {
+                                    draftSpeed = option
+                                    onSpeedChange(option)
+                                }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidePanelShell(
+    title: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xE6101722), RoundedCornerShape(18.dp))
+            .clickable(onClick = {})
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, color = Color.White, style = MaterialTheme.typography.titleSmall)
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Filled.Close, contentDescription = "关闭", tint = Color.White.copy(alpha = 0.78f))
+            }
+        }
+        content()
+    }
+}
+
+@Composable
+private fun EqualizerSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = Color.White.copy(alpha = 0.78f), style = MaterialTheme.typography.labelMedium)
+            Text("${value.toInt()} dB", color = Color(0xFF8AB6FF), style = MaterialTheme.typography.labelSmall)
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = -10f..10f,
+            colors = videoSliderColors()
+        )
+    }
+}
+
+@Composable
+private fun videoSliderColors() = SliderDefaults.colors(
+    thumbColor = Color(0xFF8AB6FF),
+    activeTrackColor = Color(0xFF4D8DFF),
+    inactiveTrackColor = Color(0xFF2E3445)
+)
+@Composable
+private fun VideoChoicePanel(
+    title: String,
+    options: List<String>,
+    selected: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(onClick = onDismiss)
+    )
+    Column(
+        modifier = modifier
+            .width(190.dp)
+            .background(Color(0xE6101722), RoundedCornerShape(18.dp))
+            .clickable(onClick = {})
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(title, color = Color.White, style = MaterialTheme.typography.titleSmall)
+        options.forEach { option ->
+            Text(
+                text = if (option == selected) "$option  ✓" else option,
+                color = if (option == selected) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.86f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onSelect(option) }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+        }
     }
 }
 
@@ -763,20 +1270,78 @@ private fun ExoPlayer.savedPosition(): Long {
     }
 }
 
+private fun buildVideoMediaItem(videoUri: String, subtitleUri: Uri?): MediaItem {
+    val builder = MediaItem.Builder().setUri(Uri.parse(videoUri))
+    if (subtitleUri != null) {
+        builder.setSubtitleConfigurations(
+            listOf(
+                MediaItem.SubtitleConfiguration.Builder(subtitleUri)
+                    .setMimeType(subtitleMimeType(subtitleUri))
+                    .setLanguage("und")
+                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                    .build()
+            )
+        )
+    }
+    return builder.build()
+}
+
+private fun subtitleMimeType(uri: Uri): String {
+    return when (uri.toString().substringAfterLast('.', "").lowercase()) {
+        "srt" -> "application/x-subrip"
+        "vtt" -> "text/vtt"
+        "ass", "ssa" -> "text/x-ssa"
+        else -> "text/vtt"
+    }
+}
+
 private enum class VideoDragMode {
     UNKNOWN,
+    BACK,
     VERTICAL,
     SEEK
 }
+
+private enum class VideoResizeMode(
+    val label: String,
+    val playerResizeMode: Int
+) {
+    FIT("适应", AspectRatioFrameLayout.RESIZE_MODE_FIT),
+    FILL("填充", AspectRatioFrameLayout.RESIZE_MODE_FILL),
+    ZOOM("缩放", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
+    STRETCH("拉伸", AspectRatioFrameLayout.RESIZE_MODE_FILL)
+}
+
+private data class VideoToolAction(
+    val label: String,
+    val value: String?,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+)
 
 private data class VideoSeekPreview(
     val targetMs: Long,
     val deltaMs: Long
 )
 
+private fun Float.formatSpeed(): String {
+    return if (this % 1f == 0f) {
+        "${toInt()}.0"
+    } else {
+        toString().trimEnd('0').trimEnd('.')
+    }
+}
+
 private fun formatSeekDelta(deltaMs: Long): String {
     val sign = if (deltaMs >= 0L) "+" else "-"
     return "$sign${formatDuration(deltaMs.absoluteValue)}"
+}
+
+private fun formatSignedDelay(delayMs: Long): String {
+    return when {
+        delayMs > 0L -> "+${delayMs}ms"
+        delayMs < 0L -> "${delayMs}ms"
+        else -> "0ms"
+    }
 }
 
 private tailrec fun Context.findActivity(): Activity? {
@@ -810,3 +1375,6 @@ private fun Activity.setScreenBrightness(value: Float) {
 }
 
 private const val FINISHED_THRESHOLD_MS = 5_000L
+
+
+
