@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,8 +94,10 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlin.math.absoluteValue
+import kotlin.math.round
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -1092,11 +1095,13 @@ private fun VideoSpeedPanel(
     modifier: Modifier = Modifier
 ) {
     var draftSpeed by remember(speed) { mutableFloatStateOf(speed.coerceIn(0.1f, 5f)) }
-    SidePanelShell(title = "播放速度", onDismiss = onDismiss, modifier = modifier.width(260.dp)) {
+    val speedOptions = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 5f)
+    SidePanelShell(title = "播放速度", onDismiss = onDismiss, modifier = modifier.width(280.dp)) {
         Text(
             text = "${draftSpeed.formatSpeed()}x",
             color = Color.White,
-            style = MaterialTheme.typography.titleMedium
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold
         )
         Slider(
             value = draftSpeed,
@@ -1109,23 +1114,43 @@ private fun VideoSpeedPanel(
             valueRange = 0.1f..5f,
             colors = videoSliderColors()
         )
+        Text(
+            text = "常用速度",
+            color = Color.White.copy(alpha = 0.62f),
+            style = MaterialTheme.typography.labelSmall
+        )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 5f).chunked(4).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            speedOptions.chunked(4).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     row.forEach { option ->
-                        Text(
-                            text = "${option.formatSpeed()}x",
-                            color = if ((draftSpeed - option).absoluteValue < 0.01f) Color(0xFF8AB6FF) else Color.White,
+                        val selected = (draftSpeed - option).absoluteValue < 0.01f
+                        Box(
                             modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(Color.White.copy(alpha = 0.08f))
+                                .background(if (selected) Color(0xFF4D8DFF) else Color.White.copy(alpha = 0.08f))
                                 .clickable {
                                     draftSpeed = option
                                     onSpeedChange(option)
-                                }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            style = MaterialTheme.typography.labelSmall
-                        )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "${option.formatSpeed()}x",
+                                color = if (selected) Color.White else Color.White.copy(alpha = 0.84f),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    repeat(4 - row.size) {
+                        Box(modifier = Modifier.weight(1f))
                     }
                 }
             }
@@ -1366,11 +1391,10 @@ private data class VideoSeekPreview(
 )
 
 private fun Float.formatSpeed(): String {
-    return if (this % 1f == 0f) {
-        "${toInt()}.0"
-    } else {
-        toString().trimEnd('0').trimEnd('.')
-    }
+    val rounded = round(this * 100f) / 100f
+    return String.format(Locale.US, "%.2f", rounded)
+        .trimEnd('0')
+        .trimEnd('.')
 }
 
 private fun formatSeekDelta(deltaMs: Long): String {
