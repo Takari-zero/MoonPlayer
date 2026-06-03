@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -53,12 +54,15 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -77,8 +81,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -212,6 +218,7 @@ private fun LocalVideoPlayer(
     var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
     var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
+    var isSpeedPanelVisible by remember { mutableStateOf(false) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -275,10 +282,12 @@ private fun LocalVideoPlayer(
             seekPreviewOverlay = null
         }
     }
-    LaunchedEffect(showControls) {
-        if (showControls) {
+    LaunchedEffect(showControls, isSpeedPanelVisible) {
+        if (showControls && !isSpeedPanelVisible) {
             delay(2_000)
-            showControls = false
+            if (!isSpeedPanelVisible) {
+                showControls = false
+            }
         }
     }
     LaunchedEffect(player) {
@@ -467,7 +476,7 @@ private fun LocalVideoPlayer(
                 isRepeatOne = isRepeatOne,
                 audioDelayMs = audioDelayMs,
                 onSpeedSelected = { speed ->
-                    val safeSpeed = speed.coerceIn(0.1f, 5f)
+                    val safeSpeed = speed.normalizeVideoSpeed()
                     playbackSpeed = safeSpeed
                     player.setPlaybackSpeed(safeSpeed)
                     Toast.makeText(context, "已切换到 ${safeSpeed.formatSpeed()}x", Toast.LENGTH_SHORT).show()
@@ -500,7 +509,8 @@ private fun LocalVideoPlayer(
                 },
                 onAudioDelayChange = { nextDelayMs ->
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
-                }
+                },
+                onSpeedPanelVisibilityChange = { isSpeedPanelVisible = it }
             )
         }
 
@@ -636,7 +646,8 @@ private fun VideoControlOverlay(
     onResizeModeSelected: (VideoResizeMode) -> Unit,
     onToggleRepeat: () -> Unit,
     onSubtitleSelect: () -> Unit,
-    onAudioDelayChange: (Long) -> Unit
+    onAudioDelayChange: (Long) -> Unit,
+    onSpeedPanelVisibilityChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     var moreMenuExpanded by remember { mutableStateOf(false) }
@@ -648,6 +659,20 @@ private fun VideoControlOverlay(
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
     var eqTreble by remember { mutableFloatStateOf(0f) }
+
+    BackHandler(enabled = showSpeedPanel) {
+        showSpeedPanel = false
+    }
+
+    LaunchedEffect(showSpeedPanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            onSpeedPanelVisibilityChange(false)
+        }
+    }
 
     fun closePanelOrBack() {
         when {
@@ -673,50 +698,52 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.34f))
-                .padding(horizontal = 10.dp, vertical = 6.dp)
-        ) {
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.align(Alignment.CenterStart)
-            ) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
-            }
-            Text(
-                text = title,
+        if (!showSpeedPanel) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
+                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 176.dp),
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-            Row(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    .background(Color.Black.copy(alpha = 0.34f))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
             ) {
-                IconButton(onClick = { showAudioDelayPanel = true }) {
-                    Icon(Icons.Filled.Audiotrack, contentDescription = "音轨", tint = Color.White)
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                ) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
                 }
-                IconButton(onClick = { showSubtitlePanel = true }) {
-                    Icon(Icons.Filled.Subtitles, contentDescription = "字幕", tint = Color.White)
-                }
-                Box {
-                    IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+                Text(
+                    text = title,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .padding(horizontal = 176.dp),
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Row(
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    IconButton(onClick = { showAudioDelayPanel = true }) {
+                        Icon(Icons.Filled.Audiotrack, contentDescription = "音轨", tint = Color.White)
+                    }
+                    IconButton(onClick = { showSubtitlePanel = true }) {
+                        Icon(Icons.Filled.Subtitles, contentDescription = "字幕", tint = Color.White)
+                    }
+                    Box {
+                        IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+                        }
                     }
                 }
             }
         }
 
-        if (moreMenuExpanded) {
+        if (moreMenuExpanded && !showSpeedPanel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -742,13 +769,18 @@ private fun VideoControlOverlay(
         }
 
         if (showSpeedPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showSpeedPanel = false }
+            )
             VideoSpeedPanel(
                 speed = playbackSpeed,
                 onDismiss = { showSpeedPanel = false },
                 onSpeedChange = onSpeedSelected,
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 18.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 76.dp, end = 76.dp, bottom = 18.dp)
             )
         }
 
@@ -806,80 +838,82 @@ private fun VideoControlOverlay(
             )
         }
 
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 42.dp, top = 72.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            VideoQuickToolButton(
-                icon = Icons.Filled.Tune,
-                label = "均衡器",
-                onClick = { showEqualizerPanel = true }
-            )
-            VideoQuickToolButton(
-                icon = Icons.Filled.Speed,
-                label = "${playbackSpeed.formatSpeed()}X",
-                onClick = { showSpeedPanel = true }
-            )
-            VideoQuickToolButton(
-                icon = Icons.Filled.PhotoCamera,
-                label = "截图",
-                onClick = { Toast.makeText(context, "截图功能后续实现", Toast.LENGTH_SHORT).show() }
-            )
-            VideoQuickToolButton(
-                icon = Icons.Filled.MoreHoriz,
-                label = "更多",
-                onClick = { moreMenuExpanded = true }
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.24f))
-                .padding(horizontal = 14.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
+        if (!showSpeedPanel) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(formatDuration(currentPositionMs), color = Color.White)
-                ThinVideoProgressBar(
-                    currentPositionMs = currentPositionMs,
-                    durationMs = durationMs,
-                    onSeekStart = onSeekStart,
-                    onSeekPreview = onSeekPreview,
-                    onSeekFinished = onSeekFinished,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(formatDuration(durationMs), color = Color.White)
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 42.dp, top = 72.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Filled.SkipPrevious, contentDescription = "上一集", tint = Color.White, modifier = Modifier.size(32.dp))
-                }
-                IconButton(onClick = onPlayPause, modifier = Modifier.size(58.dp)) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
-                        tint = Color.White,
-                        modifier = Modifier.size(40.dp)
+                VideoQuickToolButton(
+                    icon = Icons.Filled.Tune,
+                    label = "均衡器",
+                    onClick = { showEqualizerPanel = true }
+                )
+                VideoQuickToolButton(
+                    icon = Icons.Filled.Speed,
+                    label = "${playbackSpeed.formatSpeed()}X",
+                    onClick = { showSpeedPanel = true }
+                )
+                VideoQuickToolButton(
+                    icon = Icons.Filled.PhotoCamera,
+                    label = "截图",
+                    onClick = { Toast.makeText(context, "截图功能后续实现", Toast.LENGTH_SHORT).show() }
+                )
+                VideoQuickToolButton(
+                    icon = Icons.Filled.MoreHoriz,
+                    label = "更多",
+                    onClick = { moreMenuExpanded = true }
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.24f))
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(formatDuration(currentPositionMs), color = Color.White)
+                    ThinVideoProgressBar(
+                        currentPositionMs = currentPositionMs,
+                        durationMs = durationMs,
+                        onSeekStart = onSeekStart,
+                        onSeekPreview = onSeekPreview,
+                        onSeekFinished = onSeekFinished,
+                        modifier = Modifier.weight(1f)
                     )
+                    Text(formatDuration(durationMs), color = Color.White)
                 }
-                IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Filled.SkipNext, contentDescription = "下一集", tint = Color.White, modifier = Modifier.size(32.dp))
-                }
-                IconButton(onClick = { onResizeModeSelected(resizeMode.next()) }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Filled.AspectRatio, contentDescription = "适应屏幕", tint = Color.White, modifier = Modifier.size(28.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Filled.SkipPrevious, contentDescription = "上一集", tint = Color.White, modifier = Modifier.size(32.dp))
+                    }
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(58.dp)) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (isPlaying) "暂停" else "播放",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                    IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Filled.SkipNext, contentDescription = "下一集", tint = Color.White, modifier = Modifier.size(32.dp))
+                    }
+                    IconButton(onClick = { onResizeModeSelected(resizeMode.next()) }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Filled.AspectRatio, contentDescription = "适应屏幕", tint = Color.White, modifier = Modifier.size(28.dp))
+                    }
                 }
             }
         }
@@ -1094,67 +1128,186 @@ private fun VideoSpeedPanel(
     onSpeedChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var draftSpeed by remember(speed) { mutableFloatStateOf(speed.coerceIn(0.1f, 5f)) }
-    val speedOptions = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 5f)
-    SidePanelShell(title = "播放速度", onDismiss = onDismiss, modifier = modifier.width(280.dp)) {
-        Text(
-            text = "${draftSpeed.formatSpeed()}x",
-            color = Color.White,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold
-        )
+    val context = LocalContext.current
+    var draftSpeed by remember(speed) { mutableFloatStateOf(speed.normalizeVideoSpeed()) }
+    var showInputDialog by remember { mutableStateOf(false) }
+    var inputText by remember(draftSpeed) { mutableStateOf(draftSpeed.formatSpeed()) }
+    val keySpeeds = listOf(0.25f, 1f, 2f, 3f, 5f)
+
+    fun applySpeed(nextSpeed: Float) {
+        val normalized = nextSpeed.normalizeVideoSpeed()
+        draftSpeed = normalized
+        onSpeedChange(normalized)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth(0.82f)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xE6101722))
+            .clickable(onClick = {})
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "播放速度",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "关闭",
+                    tint = Color.White.copy(alpha = 0.82f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            VideoSpeedStepButton(text = "-", onClick = { applySpeed(draftSpeed - VIDEO_SPEED_STEP) })
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.White.copy(alpha = 0.1f))
+                    .clickable {
+                        inputText = draftSpeed.formatSpeed()
+                        showInputDialog = true
+                    }
+                    .padding(horizontal = 18.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "${draftSpeed.formatSpeed()}x",
+                    color = Color.White,
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "编辑",
+                    color = Color(0xFF8AB6FF),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+
+            VideoSpeedStepButton(text = "+", onClick = { applySpeed(draftSpeed + VIDEO_SPEED_STEP) })
+        }
+
         Slider(
             value = draftSpeed,
-            onValueChange = {
-                draftSpeed = it.coerceIn(0.1f, 5f)
+            onValueChange = { next ->
+                draftSpeed = next.normalizeVideoSpeed()
             },
-            onValueChangeFinished = {
-                onSpeedChange(draftSpeed)
-            },
-            valueRange = 0.1f..5f,
-            colors = videoSliderColors()
+            onValueChangeFinished = { applySpeed(draftSpeed) },
+            valueRange = MIN_VIDEO_SPEED..MAX_VIDEO_SPEED,
+            colors = videoSliderColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(28.dp)
         )
-        Text(
-            text = "常用速度",
-            color = Color.White.copy(alpha = 0.62f),
-            style = MaterialTheme.typography.labelSmall
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            speedOptions.chunked(4).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            keySpeeds.forEach { option ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.clickable { applySpeed(option) }
                 ) {
-                    row.forEach { option ->
-                        val selected = (draftSpeed - option).absoluteValue < 0.01f
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(36.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (selected) Color(0xFF4D8DFF) else Color.White.copy(alpha = 0.08f))
-                                .clickable {
-                                    draftSpeed = option
-                                    onSpeedChange(option)
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "${option.formatSpeed()}x",
-                                color = if (selected) Color.White else Color.White.copy(alpha = 0.84f),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                    repeat(4 - row.size) {
-                        Box(modifier = Modifier.weight(1f))
-                    }
+                    Box(
+                        modifier = Modifier
+                            .size(4.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.68f))
+                    )
+                    Text(
+                        text = "${option.formatSpeed()}x",
+                        color = Color.White.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
                 }
             }
         }
+    }
+
+    if (showInputDialog) {
+        AlertDialog(
+            onDismissRequest = { showInputDialog = false },
+            title = { Text("输入播放速度") },
+            text = {
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    label = { Text("0.25 - 5") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val parsed = inputText.trim().removeSuffix("x").removeSuffix("X").toFloatOrNull()
+                        if (parsed == null) {
+                            Toast.makeText(context, "请输入有效倍速", Toast.LENGTH_SHORT).show()
+                        } else {
+                            applySpeed(parsed)
+                            showInputDialog = false
+                        }
+                    }
+                ) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInputDialog = false }) {
+                    Text("取消")
+                }
+            },
+            containerColor = Color(0xFF101722),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+}
+
+@Composable
+private fun VideoSpeedStepButton(
+    text: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.1f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1397,6 +1550,12 @@ private fun Float.formatSpeed(): String {
         .trimEnd('.')
 }
 
+private fun Float.normalizeVideoSpeed(): Float {
+    val coerced = coerceIn(MIN_VIDEO_SPEED, MAX_VIDEO_SPEED)
+    return (round(coerced / VIDEO_SPEED_STEP) * VIDEO_SPEED_STEP)
+        .coerceIn(MIN_VIDEO_SPEED, MAX_VIDEO_SPEED)
+}
+
 private fun formatSeekDelta(deltaMs: Long): String {
     val sign = if (deltaMs >= 0L) "+" else "-"
     return "$sign${formatDuration(deltaMs.absoluteValue)}"
@@ -1441,6 +1600,6 @@ private fun Activity.setScreenBrightness(value: Float) {
 }
 
 private const val FINISHED_THRESHOLD_MS = 5_000L
-
-
-
+private const val MIN_VIDEO_SPEED = 0.25f
+private const val MAX_VIDEO_SPEED = 5f
+private const val VIDEO_SPEED_STEP = 0.05f
