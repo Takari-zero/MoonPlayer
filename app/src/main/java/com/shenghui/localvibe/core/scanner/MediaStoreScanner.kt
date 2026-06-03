@@ -157,9 +157,33 @@ object MediaStoreScanner {
         dataPath: String,
         fallbackFolderName: String
     ): String {
-        return bucketDisplayName.trim()
-            .ifBlank { relativePath.toFolderName() }
+        val pathFolderName = relativePath.toFolderName()
             .ifBlank { dataPath.toParentFolderKey().toFolderName() }
+
+        return bucketDisplayName.toMeaningfulBucketName(
+            fallbackFolderName = fallbackFolderName,
+            pathFolderName = pathFolderName
+        )
+            .ifBlank { pathFolderName }
             .ifBlank { fallbackFolderName }
+    }
+
+    private fun String.toMeaningfulBucketName(
+        fallbackFolderName: String,
+        pathFolderName: String
+    ): String {
+        val bucketName = trim()
+        if (bucketName.isBlank()) return ""
+        if (pathFolderName.isBlank()) return bucketName
+
+        val lowerBucketName = bucketName.lowercase()
+        val lowerFallbackName = fallbackFolderName.lowercase()
+        val genericVideoNames = setOf("video", "videos", "movie", "movies", "影片", "视频")
+
+        return when {
+            lowerBucketName == lowerFallbackName && !bucketName.equals(pathFolderName, ignoreCase = true) -> ""
+            lowerBucketName in genericVideoNames && !bucketName.equals(pathFolderName, ignoreCase = true) -> ""
+            else -> bucketName
+        }
     }
 }
