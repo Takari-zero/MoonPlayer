@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
@@ -219,6 +221,7 @@ private fun LocalVideoPlayer(
     var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
+    var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -282,13 +285,29 @@ private fun LocalVideoPlayer(
             seekPreviewOverlay = null
         }
     }
-    LaunchedEffect(showControls, isSpeedPanelVisible) {
-        if (showControls && !isSpeedPanelVisible) {
+    LaunchedEffect(showControls, isSpeedPanelVisible, isScreenLocked) {
+        if (showControls && !isSpeedPanelVisible && !isScreenLocked) {
             delay(2_000)
-            if (!isSpeedPanelVisible) {
+            if (!isSpeedPanelVisible && !isScreenLocked) {
                 showControls = false
             }
         }
+    }
+    LaunchedEffect(isScreenLocked) {
+        if (isScreenLocked) {
+            showControls = false
+            isSpeedPanelVisible = false
+            isSeekingByUser = false
+            dragMode = VideoDragMode.UNKNOWN
+            gestureOverlay = null
+            seekPreviewOverlay = null
+            resizeModeOverlay = null
+        }
+    }
+    BackHandler(enabled = isScreenLocked) {
+        isScreenLocked = false
+        showControls = true
+        Toast.makeText(context, "已解锁", Toast.LENGTH_SHORT).show()
     }
     LaunchedEffect(player) {
         while (true) {
@@ -331,97 +350,109 @@ private fun LocalVideoPlayer(
     Box(
         modifier = modifier
             .background(Color.Black)
-            .pointerInput(Unit) {
+            .pointerInput(isScreenLocked, isSpeedPanelVisible) {
                 detectTapGestures(
-                    onTap = { showControls = !showControls }
+                    onTap = {
+                        if (isScreenLocked) {
+                            return@detectTapGestures
+                        }
+                        if (isSpeedPanelVisible) {
+                            isSpeedPanelVisible = false
+                            showControls = true
+                        } else {
+                            showControls = !showControls
+                        }
+                    }
                 )
             }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        gestureStart = offset
-                        dragMode = VideoDragMode.UNKNOWN
-                        totalDragX = 0f
-                        totalDragY = 0f
-                        gestureSeekStartMs = player.currentPosition.coerceAtLeast(0L)
-                        gestureSeekPreviewMs = gestureSeekStartMs
-                        startBrightness = activity?.window?.attributes?.screenBrightness
-                            ?.takeIf { it >= 0f } ?: 0.5f
-                        startVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                    },
-                    onDragEnd = {
-                        if (dragMode == VideoDragMode.BACK) {
-                            requestBack()
-                        } else if (dragMode == VideoDragMode.SEEK) {
-                            val target = gestureSeekPreviewMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
-                            currentPositionMs = target
-                            player.seekTo(target)
-                            seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
-                            showControls = true
-                        }
-                        dragMode = VideoDragMode.UNKNOWN
-                    },
-                    onDragCancel = {
-                        dragMode = VideoDragMode.UNKNOWN
-                    },
-                    onDrag = { change, dragAmount ->
-                        totalDragX += dragAmount.x
-                        totalDragY += dragAmount.y
-                        if (dragMode == VideoDragMode.UNKNOWN) {
-                            val absX = totalDragX.absoluteValue
-                            val absY = totalDragY.absoluteValue
-                            if (absX > 18f || absY > 18f) {
-                                dragMode = if (
-                                    gestureStart.x > size.width - 56.dp.toPx() &&
-                                    totalDragX < -40f &&
-                                    absX > absY * 1.25f
-                                ) {
-                                    VideoDragMode.BACK
-                                } else if (absX > absY * 1.25f) {
-                                    VideoDragMode.SEEK
-                                } else {
-                                    VideoDragMode.VERTICAL
-                                }
-                            }
-                        }
-                        when (dragMode) {
-                            VideoDragMode.SEEK -> {
-                                val width = size.width.toFloat().coerceAtLeast(1f)
-                                val deltaMs = ((totalDragX / (width * 0.5f)) * 60_000L)
-                                    .toLong()
-                                    .coerceIn(-300_000L, 300_000L)
-                                val target = (gestureSeekStartMs + deltaMs)
-                                    .coerceIn(0L, durationMs.coerceAtLeast(1L))
-                                gestureSeekPreviewMs = target
+            .pointerInput(isScreenLocked, isSpeedPanelVisible) {
+                if (!isScreenLocked && !isSpeedPanelVisible) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            gestureStart = offset
+                            dragMode = VideoDragMode.UNKNOWN
+                            totalDragX = 0f
+                            totalDragY = 0f
+                            gestureSeekStartMs = player.currentPosition.coerceAtLeast(0L)
+                            gestureSeekPreviewMs = gestureSeekStartMs
+                            startBrightness = activity?.window?.attributes?.screenBrightness
+                                ?.takeIf { it >= 0f } ?: 0.5f
+                            startVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                        },
+                        onDragEnd = {
+                            if (dragMode == VideoDragMode.BACK) {
+                                requestBack()
+                            } else if (dragMode == VideoDragMode.SEEK) {
+                                val target = gestureSeekPreviewMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+                                currentPositionMs = target
+                                player.seekTo(target)
                                 seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
                                 showControls = true
                             }
-                            VideoDragMode.VERTICAL -> {
-                                val height = size.height.toFloat().coerceAtLeast(1f)
-                                val percentDelta = (-totalDragY / height) * 1.8f
-                                if (gestureStart.x < size.width / 2f) {
-                                    val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
-                                    activity?.setScreenBrightness(brightness)
-                                    gestureOverlay = "浜害 ${(brightness * 100).toInt()}%"
+                            dragMode = VideoDragMode.UNKNOWN
+                        },
+                        onDragCancel = {
+                            dragMode = VideoDragMode.UNKNOWN
+                        },
+                        onDrag = { change, dragAmount ->
+                            totalDragX += dragAmount.x
+                            totalDragY += dragAmount.y
+                            if (dragMode == VideoDragMode.UNKNOWN) {
+                                val absX = totalDragX.absoluteValue
+                                val absY = totalDragY.absoluteValue
+                                if (absX > 18f || absY > 18f) {
+                                    dragMode = if (
+                                        gestureStart.x > size.width - 56.dp.toPx() &&
+                                        totalDragX < -40f &&
+                                        absX > absY * 1.25f
+                                    ) {
+                                        VideoDragMode.BACK
+                                    } else if (absX > absY * 1.25f) {
+                                        VideoDragMode.SEEK
+                                    } else {
+                                        VideoDragMode.VERTICAL
+                                    }
+                                }
+                            }
+                            when (dragMode) {
+                                VideoDragMode.SEEK -> {
+                                    val width = size.width.toFloat().coerceAtLeast(1f)
+                                    val deltaMs = ((totalDragX / (width * 0.5f)) * 60_000L)
+                                        .toLong()
+                                        .coerceIn(-300_000L, 300_000L)
+                                    val target = (gestureSeekStartMs + deltaMs)
+                                        .coerceIn(0L, durationMs.coerceAtLeast(1L))
+                                    gestureSeekPreviewMs = target
+                                    seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
                                     showControls = true
-                                } else {
-                                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                                    val volumeDelta = (percentDelta * maxVolume).toInt()
-                                    val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
-                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
-                                    val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
-                                    gestureOverlay = "闊抽噺 $percent%"
+                                }
+                                VideoDragMode.VERTICAL -> {
+                                    val height = size.height.toFloat().coerceAtLeast(1f)
+                                    val percentDelta = (-totalDragY / height) * 1.8f
+                                    if (gestureStart.x < size.width / 2f) {
+                                        val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
+                                        activity?.setScreenBrightness(brightness)
+                                        gestureOverlay = "浜害 ${(brightness * 100).toInt()}%"
+                                        showControls = true
+                                    } else {
+                                        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                        val volumeDelta = (percentDelta * maxVolume).toInt()
+                                        val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
+                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
+                                        val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
+                                        gestureOverlay = "闊抽噺 $percent%"
+                                        showControls = true
+                                    }
+                                }
+                                VideoDragMode.UNKNOWN -> Unit
+                                VideoDragMode.BACK -> {
                                     showControls = true
                                 }
                             }
-                            VideoDragMode.UNKNOWN -> Unit
-                            VideoDragMode.BACK -> {
-                                showControls = true
-                            }
+                            change.consume()
                         }
-                        change.consume()
-                    }
-                )
+                    )
+                }
             }
     ) {
         AndroidView(
@@ -441,7 +472,7 @@ private fun LocalVideoPlayer(
             }
         )
 
-        if (showControls) {
+        if (showControls && !isScreenLocked) {
             VideoControlOverlay(
                 title = mediaFile.name,
                 currentPositionMs = if (isSeekingByUser) draggingPositionMs else currentPositionMs,
@@ -479,7 +510,6 @@ private fun LocalVideoPlayer(
                     val safeSpeed = speed.normalizeVideoSpeed()
                     playbackSpeed = safeSpeed
                     player.setPlaybackSpeed(safeSpeed)
-                    Toast.makeText(context, "已切换到 ${safeSpeed.formatSpeed()}x", Toast.LENGTH_SHORT).show()
                 },
                 onResizeModeSelected = { mode ->
                     videoResizeMode = mode
@@ -510,7 +540,25 @@ private fun LocalVideoPlayer(
                 onAudioDelayChange = { nextDelayMs ->
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
                 },
+                onLockScreen = {
+                    isScreenLocked = true
+                    Toast.makeText(context, "已锁定", Toast.LENGTH_SHORT).show()
+                },
                 onSpeedPanelVisibilityChange = { isSpeedPanelVisible = it }
+            )
+        }
+
+        if (isScreenLocked) {
+            VideoScreenLockButton(
+                locked = true,
+                onClick = {
+                    isScreenLocked = false
+                    showControls = true
+                    Toast.makeText(context, "已解锁", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 56.dp, bottom = 20.dp)
             )
         }
 
@@ -626,6 +674,29 @@ private fun SeekPreviewOverlay(
 }
 
 @Composable
+private fun VideoScreenLockButton(
+    locked: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = if (locked) 0.62f else 0.42f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = if (locked) Icons.Filled.LockOpen else Icons.Filled.Lock,
+            contentDescription = if (locked) "解锁屏幕" else "锁定屏幕",
+            tint = Color.White,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
+@Composable
 private fun VideoControlOverlay(
     title: String,
     currentPositionMs: Long,
@@ -647,6 +718,7 @@ private fun VideoControlOverlay(
     onToggleRepeat: () -> Unit,
     onSubtitleSelect: () -> Unit,
     onAudioDelayChange: (Long) -> Unit,
+    onLockScreen: () -> Unit,
     onSpeedPanelVisibilityChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -893,10 +965,20 @@ private fun VideoControlOverlay(
                     Text(formatDuration(durationMs), color = Color.White)
                 }
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 54.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = onLockScreen, modifier = Modifier.size(48.dp)) {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = "锁定屏幕",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                     IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Filled.SkipPrevious, contentDescription = "上一集", tint = Color.White, modifier = Modifier.size(32.dp))
                     }
@@ -1132,7 +1214,8 @@ private fun VideoSpeedPanel(
     var draftSpeed by remember(speed) { mutableFloatStateOf(speed.normalizeVideoSpeed()) }
     var showInputDialog by remember { mutableStateOf(false) }
     var inputText by remember(draftSpeed) { mutableStateOf(draftSpeed.formatSpeed()) }
-    val keySpeeds = listOf(0.25f, 1f, 2f, 3f, 5f)
+    val speedInputPattern = remember { Regex("""^\d{0,2}(\.\d{0,2})?$""") }
+    val keySpeeds = listOf(1f, 2f, 3f, 4f, 5f)
 
     fun applySpeed(nextSpeed: Float) {
         val normalized = nextSpeed.normalizeVideoSpeed()
@@ -1223,7 +1306,12 @@ private fun VideoSpeedPanel(
             text = {
                 OutlinedTextField(
                     value = inputText,
-                    onValueChange = { inputText = it },
+                    onValueChange = { next ->
+                        val cleaned = next.trim().removeSuffix("x").removeSuffix("X")
+                        if (cleaned.isEmpty() || speedInputPattern.matches(cleaned)) {
+                            inputText = cleaned
+                        }
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     label = { Text("0.25 - 5") }
@@ -1352,7 +1440,7 @@ private fun VideoSpeedSlider(
                     modifier = Modifier
                         .size(4.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.68f))
+                        .background(Color.White)
                 )
                 Text(
                     text = "${option.formatSpeed()}x",
@@ -1679,4 +1767,4 @@ private fun Activity.setScreenBrightness(value: Float) {
 private const val FINISHED_THRESHOLD_MS = 5_000L
 private const val MIN_VIDEO_SPEED = 0.25f
 private const val MAX_VIDEO_SPEED = 5f
-private const val VIDEO_SPEED_STEP = 0.05f
+private const val VIDEO_SPEED_STEP = 0.01f
