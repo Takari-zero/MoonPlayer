@@ -43,7 +43,8 @@ object MediaStoreScanner {
             MediaStore.MediaColumns._ID,
             MediaStore.MediaColumns.DISPLAY_NAME,
             MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.RELATIVE_PATH
+            MediaStore.MediaColumns.RELATIVE_PATH,
+            MediaStore.MediaColumns.DATA
         )
         val groupedFiles = linkedMapOf<String, MutableList<LocalMediaFile>>()
 
@@ -59,17 +60,24 @@ object MediaStoreScanner {
                 val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
                 val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
                 val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+                val dataColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
 
                 while (cursor.moveToNext()) {
                     val mediaId = cursor.getLong(idColumn)
                     val name = cursor.getString(nameColumn).orEmpty()
                     val size = cursor.getLong(sizeColumn)
                     val relativePath = cursor.getString(pathColumn).orEmpty()
-                    val folderName = relativePath
-                        .trimEnd('/')
-                        .substringAfterLast('/', missingDelimiterValue = "")
+                    val dataPath = dataColumn
+                        .takeIf { it >= 0 }
+                        ?.let { cursor.getString(it).orEmpty() }
+                        .orEmpty()
+                    val folderKey = relativePath.toFolderKey()
+                        .ifBlank { dataPath.toParentFolderKey() }
                         .ifBlank { fallbackFolderName }
-                    val folderId = "$folderPrefix:$relativePath"
+                    val folderName = folderKey
+                        .toFolderName()
+                        .ifBlank { fallbackFolderName }
+                    val folderId = "$folderPrefix:$folderKey"
                     val uri = ContentUris.withAppendedId(collectionUri, mediaId)
                     val extension = name.substringAfterLast('.', missingDelimiterValue = "")
                         .lowercase()
@@ -104,5 +112,25 @@ object MediaStoreScanner {
                 files = files
             )
         }
+    }
+
+    private fun String.toFolderKey(): String {
+        return trim()
+            .replace('\\', '/')
+            .trimEnd('/')
+    }
+
+    private fun String.toParentFolderKey(): String {
+        return trim()
+            .replace('\\', '/')
+            .substringBeforeLast('/', missingDelimiterValue = "")
+            .trimEnd('/')
+    }
+
+    private fun String.toFolderName(): String {
+        return trim()
+            .replace('\\', '/')
+            .trimEnd('/')
+            .substringAfterLast('/', missingDelimiterValue = "")
     }
 }
