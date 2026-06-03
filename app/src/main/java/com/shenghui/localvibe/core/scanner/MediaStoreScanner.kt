@@ -39,13 +39,18 @@ object MediaStoreScanner {
         folderPrefix: String,
         fallbackFolderName: String
     ): List<ScannedMediaFolder> {
-        val projection = arrayOf(
-            MediaStore.MediaColumns._ID,
-            MediaStore.MediaColumns.DISPLAY_NAME,
-            MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.RELATIVE_PATH,
-            MediaStore.MediaColumns.DATA
-        )
+        val includeVideoBucketColumns = type == LocalMediaType.VIDEO
+        val projection = buildList {
+            add(MediaStore.MediaColumns._ID)
+            add(MediaStore.MediaColumns.DISPLAY_NAME)
+            add(MediaStore.MediaColumns.SIZE)
+            add(MediaStore.MediaColumns.RELATIVE_PATH)
+            add(MediaStore.MediaColumns.DATA)
+            if (includeVideoBucketColumns) {
+                add(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                add(MediaStore.Video.Media.BUCKET_ID)
+            }
+        }.toTypedArray()
         val groupedFiles = linkedMapOf<String, MutableList<LocalMediaFile>>()
 
         runCatching {
@@ -61,6 +66,11 @@ object MediaStoreScanner {
                 val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
                 val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
                 val dataColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                val bucketNameColumn = if (includeVideoBucketColumns) {
+                    cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                } else {
+                    -1
+                }
 
                 while (cursor.moveToNext()) {
                     val mediaId = cursor.getLong(idColumn)
@@ -71,12 +81,19 @@ object MediaStoreScanner {
                         .takeIf { it >= 0 }
                         ?.let { cursor.getString(it).orEmpty() }
                         .orEmpty()
+                    val bucketDisplayName = bucketNameColumn
+                        .takeIf { it >= 0 }
+                        ?.let { cursor.getString(it).orEmpty() }
+                        .orEmpty()
                     val folderKey = relativePath.toFolderKey()
                         .ifBlank { dataPath.toParentFolderKey() }
                         .ifBlank { fallbackFolderName }
-                    val folderName = folderKey
-                        .toFolderName()
-                        .ifBlank { fallbackFolderName }
+                    val folderName = resolveFolderDisplayName(
+                        bucketDisplayName = bucketDisplayName,
+                        relativePath = relativePath,
+                        dataPath = dataPath,
+                        fallbackFolderName = fallbackFolderName
+                    )
                     val folderId = "$folderPrefix:$folderKey"
                     val uri = ContentUris.withAppendedId(collectionUri, mediaId)
                     val extension = name.substringAfterLast('.', missingDelimiterValue = "")
@@ -132,5 +149,17 @@ object MediaStoreScanner {
             .replace('\\', '/')
             .trimEnd('/')
             .substringAfterLast('/', missingDelimiterValue = "")
+    }
+
+    private fun resolveFolderDisplayName(
+        bucketDisplayName: String,
+        relativePath: String,
+        dataPath: String,
+        fallbackFolderName: String
+    ): String {
+        return bucketDisplayName.trim()
+            .ifBlank { relativePath.toFolderName() }
+            .ifBlank { dataPath.toParentFolderKey().toFolderName() }
+            .ifBlank { fallbackFolderName }
     }
 }
