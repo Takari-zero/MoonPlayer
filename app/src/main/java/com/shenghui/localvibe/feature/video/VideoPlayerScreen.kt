@@ -1205,47 +1205,15 @@ private fun VideoSpeedPanel(
             VideoSpeedStepButton(text = "+", onClick = { applySpeed(draftSpeed + VIDEO_SPEED_STEP) })
         }
 
-        Slider(
-            value = draftSpeed,
-            onValueChange = { next ->
-                draftSpeed = next.normalizeVideoSpeed()
-            },
-            onValueChangeFinished = { applySpeed(draftSpeed) },
-            valueRange = MIN_VIDEO_SPEED..MAX_VIDEO_SPEED,
-            colors = videoSliderColors(),
+        VideoSpeedSlider(
+            speed = draftSpeed,
+            keySpeeds = keySpeeds,
+            onSpeedPreview = { draftSpeed = it },
+            onSpeedCommit = ::applySpeed,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(28.dp)
+                .height(58.dp)
         )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            keySpeeds.forEach { option ->
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.clickable { applySpeed(option) }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(4.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.68f))
-                    )
-                    Text(
-                        text = "${option.formatSpeed()}x",
-                        color = Color.White.copy(alpha = 0.72f),
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1
-                    )
-                }
-            }
-        }
     }
 
     if (showInputDialog) {
@@ -1285,6 +1253,115 @@ private fun VideoSpeedPanel(
             titleContentColor = Color.White,
             textContentColor = Color.White
         )
+    }
+}
+
+@Composable
+private fun VideoSpeedSlider(
+    speed: Float,
+    keySpeeds: List<Float>,
+    onSpeedPreview: (Float) -> Unit,
+    onSpeedCommit: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    fun speedToFraction(value: Float): Float {
+        return ((value.normalizeVideoSpeed() - MIN_VIDEO_SPEED) / (MAX_VIDEO_SPEED - MIN_VIDEO_SPEED))
+            .coerceIn(0f, 1f)
+    }
+
+    fun xToSpeed(x: Float, width: Int): Float {
+        val fraction = (x / width.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+        return (MIN_VIDEO_SPEED + fraction * (MAX_VIDEO_SPEED - MIN_VIDEO_SPEED)).normalizeVideoSpeed()
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .pointerInput(Unit) {
+                var pendingSpeed = speed.normalizeVideoSpeed()
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        pendingSpeed = xToSpeed(offset.x, size.width)
+                        onSpeedPreview(pendingSpeed)
+                    },
+                    onDrag = { change, _ ->
+                        pendingSpeed = xToSpeed(change.position.x, size.width)
+                        onSpeedPreview(pendingSpeed)
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        onSpeedCommit(pendingSpeed)
+                    },
+                    onDragCancel = {
+                        onSpeedPreview(speed.normalizeVideoSpeed())
+                    }
+                )
+            }
+    ) {
+        val thumbSize = 12.dp
+        val trackHeight = 5.dp
+        val labelWidth = 48.dp
+        val sliderWidth = maxWidth
+        val fraction = speedToFraction(speed)
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(30.dp)
+                .align(Alignment.TopCenter),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(trackHeight)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFF2E3445))
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction)
+                    .height(trackHeight)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFF4D8DFF))
+            )
+            Box(
+                modifier = Modifier
+                    .offset(x = (sliderWidth - thumbSize) * fraction)
+                    .size(thumbSize)
+                    .clip(CircleShape)
+                    .background(Color(0xFF8AB6FF))
+            )
+        }
+
+        keySpeeds.forEach { option ->
+            val optionFraction = speedToFraction(option)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier
+                    .width(labelWidth)
+                    .offset(x = (sliderWidth - labelWidth) * optionFraction)
+                    .align(Alignment.BottomStart)
+                    .clickable {
+                        val normalized = option.normalizeVideoSpeed()
+                        onSpeedPreview(normalized)
+                        onSpeedCommit(normalized)
+                    }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(4.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.68f))
+                )
+                Text(
+                    text = "${option.formatSpeed()}x",
+                    color = Color.White.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 
