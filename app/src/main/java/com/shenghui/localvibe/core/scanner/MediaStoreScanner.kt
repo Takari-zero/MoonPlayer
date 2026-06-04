@@ -85,14 +85,20 @@ object MediaStoreScanner {
                         .takeIf { it >= 0 }
                         ?.let { cursor.getString(it).orEmpty() }
                         .orEmpty()
-                    val folderKey = relativePath.toFolderKey()
+                    val rawFolderKey = relativePath.toFolderKey()
                         .ifBlank { dataPath.toParentFolderKey() }
                         .ifBlank { fallbackFolderName }
+                    val folderKey = if (type == LocalMediaType.VIDEO) {
+                        rawFolderKey.toCanonicalFolderKey().ifBlank { rawFolderKey }
+                    } else {
+                        rawFolderKey
+                    }
                     val folderName = resolveFolderDisplayName(
                         bucketDisplayName = bucketDisplayName,
                         relativePath = relativePath,
                         dataPath = dataPath,
-                        fallbackFolderName = fallbackFolderName
+                        fallbackFolderName = fallbackFolderName,
+                        preferSpecificVideoFolderName = type == LocalMediaType.VIDEO
                     )
                     val folderId = "$folderPrefix:$folderKey"
                     val uri = ContentUris.withAppendedId(collectionUri, mediaId)
@@ -115,7 +121,7 @@ object MediaStoreScanner {
         }
 
         return groupedFiles.map { (folderId, files) ->
-            val folderName = files.firstOrNull()?.parentFolderName ?: fallbackFolderName
+            val folderName = files.toBestFolderDisplayName(fallbackFolderName)
             ScannedMediaFolder(
                 folder = MediaFolderUiModel(
                     id = folderId,
@@ -137,6 +143,16 @@ object MediaStoreScanner {
             .trimEnd('/')
     }
 
+    private fun String.toCanonicalFolderKey(): String {
+        return trim()
+            .replace('\\', '/')
+            .split('/')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .joinToString("/")
+            .lowercase()
+    }
+
     private fun String.toParentFolderKey(): String {
         return trim()
             .replace('\\', '/')
@@ -151,14 +167,52 @@ object MediaStoreScanner {
             .substringAfterLast('/', missingDelimiterValue = "")
     }
 
+    private fun List<LocalMediaFile>.toBestFolderDisplayName(fallbackFolderName: String): String {
+        val names = mapNotNull { it.parentFolderName?.trim()?.takeIf { name -> name.isNotBlank() } }
+        if (names.isEmpty()) return fallbackFolderName
+
+        val dominantKey = names
+            .groupingBy { it.lowercase() }
+            .eachCount()
+            .maxWithOrNull(
+                compareBy<Map.Entry<String, Int>> { it.value }
+                    .thenBy { it.key }
+            )
+            ?.key
+            ?: return names.first()
+
+        return names
+            .filter { it.equals(dominantKey, ignoreCase = true) }
+            .maxWithOrNull(
+                compareBy<String> { it.folderDisplayNameScore(fallbackFolderName) }
+                    .thenBy { it }
+            )
+            ?: names.first()
+    }
+
+    private fun String.folderDisplayNameScore(fallbackFolderName: String): Int {
+        var score = 0
+        if (isNotBlank()) score += 1
+        if (!isGenericVideoFolderName(fallbackFolderName)) score += 2
+        if (firstOrNull()?.isUpperCase() == true) score += 1
+        return score
+    }
+
     private fun resolveFolderDisplayName(
         bucketDisplayName: String,
         relativePath: String,
         dataPath: String,
-        fallbackFolderName: String
+        fallbackFolderName: String,
+        preferSpecificVideoFolderName: Boolean
     ): String {
+        val dataFolderName = dataPath.toParentFolderKey().toFolderName()
         val pathFolderName = relativePath.toFolderName()
-            .ifBlank { dataPath.toParentFolderKey().toFolderName() }
+            .toSpecificFolderName(
+                fallbackFolderName = fallbackFolderName,
+                dataFolderName = dataFolderName,
+                preferSpecificVideoFolderName = preferSpecificVideoFolderName
+            )
+            .ifBlank { dataFolderName }
 
         return bucketDisplayName.toMeaningfulBucketName(
             fallbackFolderName = fallbackFolderName,
@@ -166,6 +220,24 @@ object MediaStoreScanner {
         )
             .ifBlank { pathFolderName }
             .ifBlank { fallbackFolderName }
+    }
+
+    private fun String.toSpecificFolderName(
+        fallbackFolderName: String,
+        dataFolderName: String,
+        preferSpecificVideoFolderName: Boolean
+    ): String {
+        val folderName = trim()
+        if (folderName.isBlank()) return ""
+        if (!preferSpecificVideoFolderName || dataFolderName.isBlank()) return folderName
+        return if (
+            folderName.isGenericVideoFolderName(fallbackFolderName) &&
+            !folderName.equals(dataFolderName, ignoreCase = true)
+        ) {
+            ""
+        } else {
+            folderName
+        }
     }
 
     private fun String.toMeaningfulBucketName(
@@ -185,5 +257,12 @@ object MediaStoreScanner {
             lowerBucketName in genericVideoNames && !bucketName.equals(pathFolderName, ignoreCase = true) -> ""
             else -> bucketName
         }
+    }
+
+    private fun String.isGenericVideoFolderName(fallbackFolderName: String): Boolean {
+        val normalizedName = trim().lowercase()
+        val fallbackName = fallbackFolderName.trim().lowercase()
+        return normalizedName == fallbackName ||
+            normalizedName in setOf("video", "videos", "movie", "movies", "影片", "视频")
     }
 }
