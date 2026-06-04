@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -222,6 +223,7 @@ private fun LocalVideoPlayer(
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
+    var isPortraitPlayback by remember(mediaFile.uri) { mutableStateOf(false) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -309,6 +311,16 @@ private fun LocalVideoPlayer(
         showControls = true
         Toast.makeText(context, "已解锁", Toast.LENGTH_SHORT).show()
     }
+
+    LaunchedEffect(activity, isPortraitPlayback) {
+        activity?.requestedOrientation =
+            if (isPortraitPlayback) {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+    }
+
     LaunchedEffect(player) {
         while (true) {
             if (!isSeekingByUser) {
@@ -540,6 +552,16 @@ private fun LocalVideoPlayer(
                 onAudioDelayChange = { nextDelayMs ->
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
                 },
+                isPortraitPlayback = isPortraitPlayback,
+                onToggleOrientation = {
+                    val nextPortrait = !isPortraitPlayback
+                    isPortraitPlayback = nextPortrait
+                    Toast.makeText(
+                        context,
+                        if (nextPortrait) "已切换竖屏" else "已切换横屏",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                },
                 onLockScreen = {
                     isScreenLocked = true
                     Toast.makeText(context, "已锁定", Toast.LENGTH_SHORT).show()
@@ -718,6 +740,8 @@ private fun VideoControlOverlay(
     onToggleRepeat: () -> Unit,
     onSubtitleSelect: () -> Unit,
     onAudioDelayChange: (Long) -> Unit,
+    isPortraitPlayback: Boolean,
+    onToggleOrientation: () -> Unit,
     onLockScreen: () -> Unit,
     onSpeedPanelVisibilityChange: (Boolean) -> Unit
 ) {
@@ -915,7 +939,7 @@ private fun VideoControlOverlay(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(start = 42.dp, top = 72.dp),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 VideoQuickToolButton(
@@ -927,6 +951,11 @@ private fun VideoControlOverlay(
                     icon = Icons.Filled.Speed,
                     label = "${playbackSpeed.formatSpeed()}X",
                     onClick = { showSpeedPanel = true }
+                )
+                VideoQuickToolButton(
+                    icon = Icons.Filled.ScreenRotation,
+                    label = if (isPortraitPlayback) "横屏" else "竖屏",
+                    onClick = onToggleOrientation
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.PhotoCamera,
