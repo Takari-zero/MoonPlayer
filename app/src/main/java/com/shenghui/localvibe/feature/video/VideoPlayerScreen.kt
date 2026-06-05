@@ -18,6 +18,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -105,6 +107,7 @@ import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlin.math.absoluteValue
 import kotlin.math.round
 
@@ -949,7 +952,7 @@ private fun VideoControlOverlay(
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.Speed,
-                    label = "${playbackSpeed.formatSpeed()}X",
+                    label = "${playbackSpeed.formatSpeed()}x",
                     onClick = { showSpeedPanel = true }
                 )
                 VideoQuickToolButton(
@@ -996,7 +999,7 @@ private fun VideoControlOverlay(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 54.dp),
+                        .padding(start = 60.dp, end = 34.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1287,7 +1290,7 @@ private fun VideoSpeedPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            VideoSpeedStepButton(text = "-", onClick = { applySpeed(draftSpeed - VIDEO_SPEED_STEP) })
+            VideoSpeedStepButton(text = "-", onStep = { applySpeed(draftSpeed - VIDEO_SPEED_STEP) })
 
             Row(
                 modifier = Modifier
@@ -1314,13 +1317,16 @@ private fun VideoSpeedPanel(
                 )
             }
 
-            VideoSpeedStepButton(text = "+", onClick = { applySpeed(draftSpeed + VIDEO_SPEED_STEP) })
+            VideoSpeedStepButton(text = "+", onStep = { applySpeed(draftSpeed + VIDEO_SPEED_STEP) })
         }
 
         VideoSpeedSlider(
             speed = draftSpeed,
             keySpeeds = keySpeeds,
-            onSpeedPreview = { draftSpeed = it },
+            onSpeedPreview = { previewSpeed ->
+                draftSpeed = previewSpeed
+                onSpeedChange(previewSpeed)
+            },
             onSpeedCommit = ::applySpeed,
             modifier = Modifier
                 .fillMaxWidth()
@@ -1419,6 +1425,8 @@ private fun VideoSpeedSlider(
         val labelWidth = 48.dp
         val sliderWidth = maxWidth
         val fraction = speedToFraction(speed)
+        val thumbOffset = ((sliderWidth * fraction) - (thumbSize / 2))
+            .coerceIn(0.dp, sliderWidth - thumbSize)
 
         Box(
             modifier = Modifier
@@ -1443,7 +1451,7 @@ private fun VideoSpeedSlider(
             )
             Box(
                 modifier = Modifier
-                    .offset(x = (sliderWidth - thumbSize) * fraction)
+                    .offset(x = thumbOffset)
                     .size(thumbSize)
                     .clip(CircleShape)
                     .background(Color(0xFF8AB6FF))
@@ -1452,12 +1460,14 @@ private fun VideoSpeedSlider(
 
         keySpeeds.forEach { option ->
             val optionFraction = speedToFraction(option)
+            val optionOffset = ((sliderWidth * optionFraction) - (labelWidth / 2))
+                .coerceIn(0.dp, sliderWidth - labelWidth)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 modifier = Modifier
                     .width(labelWidth)
-                    .offset(x = (sliderWidth - labelWidth) * optionFraction)
+                    .offset(x = optionOffset)
                     .align(Alignment.BottomStart)
                     .clickable {
                         val normalized = option.normalizeVideoSpeed()
@@ -1485,14 +1495,33 @@ private fun VideoSpeedSlider(
 @Composable
 private fun VideoSpeedStepButton(
     text: String,
-    onClick: () -> Unit
+    onStep: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val currentOnStep by rememberUpdatedState(onStep)
+
+    LaunchedEffect(isPressed) {
+        if (!isPressed) return@LaunchedEffect
+
+        currentOnStep()
+        delay(450)
+        while (isActive) {
+            currentOnStep()
+            delay(100)
+        }
+    }
+
     Box(
         modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
             .background(Color.White.copy(alpha = 0.1f))
-            .clickable(onClick = onClick),
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = {}
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(
