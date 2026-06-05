@@ -120,7 +120,7 @@ object MediaStoreScanner {
             }
         }
 
-        return groupedFiles.map { (folderId, files) ->
+        val scannedFolders = groupedFiles.map { (folderId, files) ->
             val folderName = files.toBestFolderDisplayName(fallbackFolderName)
             ScannedMediaFolder(
                 folder = MediaFolderUiModel(
@@ -134,6 +134,12 @@ object MediaStoreScanner {
                 ),
                 files = files
             )
+        }
+
+        return if (type == LocalMediaType.VIDEO) {
+            scannedFolders.mergeCaseVariantVideoFolders(fallbackFolderName)
+        } else {
+            scannedFolders
         }
     }
 
@@ -196,6 +202,43 @@ object MediaStoreScanner {
         if (!isGenericVideoFolderName(fallbackFolderName)) score += 2
         if (firstOrNull()?.isUpperCase() == true) score += 1
         return score
+    }
+
+    private fun List<ScannedMediaFolder>.mergeCaseVariantVideoFolders(
+        fallbackFolderName: String
+    ): List<ScannedMediaFolder> {
+        return groupBy { it.folder.name.trim().lowercase() }
+            .flatMap { (_, folders) ->
+                val displayNames = folders
+                    .map { it.folder.name.trim() }
+                    .filter { it.isNotBlank() }
+                    .toSet()
+                val shouldMerge = folders.size > 1 &&
+                    displayNames.size > 1 &&
+                    displayNames.none { it.isGenericVideoFolderName(fallbackFolderName) }
+
+                if (!shouldMerge) {
+                    folders
+                } else {
+                    val files = folders
+                        .flatMap { it.files }
+                        .distinctBy { it.uri }
+                    val baseFolder = folders.first().folder
+                    val folderName = files.toBestFolderDisplayName(fallbackFolderName)
+
+                    listOf(
+                        ScannedMediaFolder(
+                            folder = baseFolder.copy(
+                                name = folderName,
+                                videoCount = files.count { it.type == LocalMediaType.VIDEO },
+                                audioCount = files.count { it.type == LocalMediaType.AUDIO },
+                                bookCount = files.count { it.type == LocalMediaType.BOOK }
+                            ),
+                            files = files
+                        )
+                    )
+                }
+            }
     }
 
     private fun resolveFolderDisplayName(
