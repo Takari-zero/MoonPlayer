@@ -1793,6 +1793,20 @@ private fun LocalVibeApp() {
                             Toast.makeText(context, "已恢复隐藏音乐，请稍后查看", Toast.LENGTH_SHORT).show()
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
                         }
+                    },
+                    onRestoreHiddenVideo = {
+                        coroutineScope.launch {
+                            if (hiddenVideoUris.isEmpty() && hiddenVideoFolderIds.isEmpty()) {
+                                Toast.makeText(context, "暂无隐藏视频", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            appStateStore.clearHiddenVideoUris()
+                            appStateStore.clearHiddenVideoFolderIds()
+                            hiddenVideoUris = emptySet()
+                            hiddenVideoFolderIds = emptySet()
+                            Toast.makeText(context, "已恢复隐藏视频", Toast.LENGTH_SHORT).show()
+                            autoScanVideoAndAudio(force = true)
+                        }
                     }
                 )
             }
