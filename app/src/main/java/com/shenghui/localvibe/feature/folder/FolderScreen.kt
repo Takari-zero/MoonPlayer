@@ -2,6 +2,7 @@ package com.shenghui.localvibe.feature.folder
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -182,6 +183,7 @@ fun FolderScreen(
             if (isMultiSelectMode) {
                 MultiSelectHeader(
                     selectedCount = selectedUris.size,
+                    isVideoMode = targetType == LocalMediaType.VIDEO,
                     onCancel = {
                         isMultiSelectMode = false
                         selectedUris = emptySet()
@@ -435,7 +437,40 @@ fun FolderScreen(
         }
     }
 
-    if (showBatchRemoveConfirm) {
+    if (showBatchRemoveConfirm && targetType == LocalMediaType.VIDEO) {
+        val selectedCountForDialog = visibleFiles.count { it.uri in selectedUris }
+        AlertDialog(
+            onDismissRequest = { showBatchRemoveConfirm = false },
+            title = { Text("从列表移除？") },
+            text = {
+                Text(
+                    if (selectedCountForDialog > 1) {
+                        "将隐藏选中的 $selectedCountForDialog 个视频，不会删除本地文件。可在设置中通过“恢复隐藏视频”重新显示。"
+                    } else {
+                        "将隐藏选中的视频，不会删除本地文件。可在设置中通过“恢复隐藏视频”重新显示。"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedFiles = visibleFiles.filter { it.uri in selectedUris }
+                        showBatchRemoveConfirm = false
+                        onRemoveFiles(selectedFiles)
+                        selectedUris = emptySet()
+                        isMultiSelectMode = false
+                    }
+                ) {
+                    Text("移除列表")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchRemoveConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showBatchRemoveConfirm && targetType != LocalMediaType.VIDEO) {
         AlertDialog(
             onDismissRequest = { showBatchRemoveConfirm = false },
             title = { Text("从列表移除？") },
@@ -467,7 +502,38 @@ fun FolderScreen(
         )
     }
 
-    if (showBatchDeleteConfirm) {
+    if (showBatchDeleteConfirm && targetType == LocalMediaType.VIDEO) {
+        val selectedCountForDialog = visibleFiles.count { it.uri in selectedUris }
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteConfirm = false },
+            title = { Text("永久删除视频？") },
+            text = {
+                Text(
+                    if (selectedCountForDialog > 1) {
+                        "将从本机删除选中的 $selectedCountForDialog 个视频文件，此操作不可撤销。"
+                    } else {
+                        "将从本机删除选中的视频文件，此操作不可撤销。"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedFiles = visibleFiles.filter { it.uri in selectedUris }
+                        showBatchDeleteConfirm = false
+                        onDeleteFiles(selectedFiles)
+                    }
+                ) {
+                    Text("永久删除", color = Color(0xFFF97066))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showBatchDeleteConfirm && targetType != LocalMediaType.VIDEO) {
         val title = when (targetType) {
             LocalMediaType.VIDEO -> "永久删除视频？"
             LocalMediaType.AUDIO -> "永久删除音乐？"
@@ -683,11 +749,53 @@ private fun VideoFolderSearchOverlay(
 @Composable
 private fun MultiSelectHeader(
     selectedCount: Int,
+    isVideoMode: Boolean = false,
     onCancel: () -> Unit,
     onSelectAll: () -> Unit,
     onRemoveSelected: () -> Unit,
     onDeleteSelected: () -> Unit
 ) {
+    if (isVideoMode) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF101722))
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "已选 $selectedCount 项",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFFF5F7FA)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = onSelectAll) { Text("全选") }
+                        TextButton(onClick = onCancel) { Text("取消") }
+                    }
+                }
+                SelectionActionItem(
+                    title = "移除列表",
+                    description = "不删除本地文件，仅从列表隐藏",
+                    onClick = onRemoveSelected
+                )
+                SelectionActionItem(
+                    title = "永久删除",
+                    description = "删除本地文件，此操作不可撤销",
+                    danger = true,
+                    onClick = onDeleteSelected
+                )
+            }
+        }
+        return
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -703,6 +811,53 @@ private fun MultiSelectHeader(
             TextButton(onClick = onSelectAll) { Text("全选") }
             TextButton(onClick = onRemoveSelected) { Text("移除") }
             TextButton(onClick = onDeleteSelected) { Text("删除") }
+        }
+    }
+}
+
+@Composable
+private fun SelectionActionItem(
+    title: String,
+    description: String,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (danger) Color(0xFF2A1418) else Color(0xFF151E2B)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (danger) Color(0xFFF97066) else Color(0xFFF5F7FA)
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFA8B2C2)
+                )
+            }
+            Text(
+                text = if (danger) "删除" else "隐藏",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (danger) Color(0xFFF97066) else Color(0xFF8AB6FF)
+            )
         }
     }
 }
@@ -730,7 +885,8 @@ private fun TypedFileCard(
             } else {
                 Color.Transparent
             }
-        )
+        ),
+        border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
@@ -821,11 +977,12 @@ private fun VideoFileCard(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                Color(0x33264D8D)
+                Color(0x44264D8D)
             } else {
                 Color.Transparent
             }
-        )
+        ),
+        border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 0.dp, vertical = 5.dp),
@@ -908,11 +1065,12 @@ private fun VideoGridFileCard(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                Color(0x33264D8D)
+                Color(0x44264D8D)
             } else {
                 Color(0xFF101722)
             }
-        )
+        ),
+        border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
     ) {
         Column(
             modifier = Modifier.padding(10.dp),
@@ -1048,7 +1206,30 @@ private fun FileMoreMenu(
         }
     }
 
-    if (showRemoveConfirm) {
+    if (showRemoveConfirm && file.type == LocalMediaType.VIDEO) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirm = false },
+            title = { Text("从列表移除？") },
+            text = {
+                Text("将隐藏选中的视频，不会删除本地文件。可在设置中通过“恢复隐藏视频”重新显示。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRemoveConfirm = false
+                        onRemove()
+                    }
+                ) {
+                    Text("移除列表")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showRemoveConfirm && file.type != LocalMediaType.VIDEO) {
         AlertDialog(
             onDismissRequest = { showRemoveConfirm = false },
             title = { Text("从列表移除？") },
@@ -1077,7 +1258,28 @@ private fun FileMoreMenu(
         )
     }
 
-    if (showDeleteConfirm) {
+    if (showDeleteConfirm && file.type == LocalMediaType.VIDEO) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("永久删除视频？") },
+            text = { Text("将从本机删除选中的视频文件，此操作不可撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }
+                ) {
+                    Text("永久删除", color = Color(0xFFF97066))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showDeleteConfirm && file.type != LocalMediaType.VIDEO) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = {
