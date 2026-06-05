@@ -140,6 +140,9 @@ private fun LocalVibeApp() {
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoFolderIds by remember { mutableStateOf(emptySet<String>()) }
+    var isVideoVisibilityReady by remember { mutableStateOf(false) }
+    var isVideoInitialScanComplete by remember { mutableStateOf(false) }
+    var isVideoAutoScanning by remember { mutableStateOf(false) }
     var currentFolder by remember { mutableStateOf<MediaFolderUiModel?>(null) }
     var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
     var currentAddTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
@@ -833,23 +836,34 @@ private fun LocalVibeApp() {
     }
 
     fun runAutoScan(targetType: LocalMediaType, showCompletionToast: Boolean = false) {
+        if (targetType == LocalMediaType.VIDEO && !isVideoVisibilityReady) {
+            return
+        }
+        if (targetType == LocalMediaType.VIDEO) {
+            isVideoAutoScanning = true
+        }
         coroutineScope.launch {
             when (targetType) {
                 LocalMediaType.VIDEO -> {
-                    val folders = withContext(Dispatchers.IO) {
-                        MediaStoreScanner.scanVideos(context.applicationContext)
-                    }.filterHiddenVideoFolders()
-                    videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
-                    folders.forEach { result ->
-                        videoFolders.add(result.folder)
-                        scannedFilesByFolder[typedFolderKey(LocalMediaType.VIDEO, result.folder.id)] =
-                            result.files
-                    }
-                    if (showCompletionToast && folders.isEmpty()) {
-                        Toast.makeText(context, "没有扫描到视频文件", Toast.LENGTH_SHORT).show()
-                    }
-                    if (showCompletionToast) {
-                        Toast.makeText(context, "媒体扫描已完成", Toast.LENGTH_SHORT).show()
+                    try {
+                        val folders = withContext(Dispatchers.IO) {
+                            MediaStoreScanner.scanVideos(context.applicationContext)
+                        }.filterHiddenVideoFolders()
+                        videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
+                        folders.forEach { result ->
+                            videoFolders.add(result.folder)
+                            scannedFilesByFolder[typedFolderKey(LocalMediaType.VIDEO, result.folder.id)] =
+                                result.files
+                        }
+                        if (showCompletionToast && folders.isEmpty()) {
+                            Toast.makeText(context, "没有扫描到视频文件", Toast.LENGTH_SHORT).show()
+                        }
+                        if (showCompletionToast) {
+                            Toast.makeText(context, "媒体扫描已完成", Toast.LENGTH_SHORT).show()
+                        }
+                    } finally {
+                        isVideoInitialScanComplete = true
+                        isVideoAutoScanning = false
                     }
                 }
 
@@ -895,7 +909,11 @@ private fun LocalVibeApp() {
             ?.let { grants[it] == true || hasPermission(context, it) } ?: true
         videoPermissionDenied = !canScanVideo
         audioPermissionDenied = !canScanAudio
-        if (canScanVideo) runAutoScan(LocalMediaType.VIDEO)
+        if (canScanVideo && isVideoVisibilityReady) runAutoScan(LocalMediaType.VIDEO)
+        if (!canScanVideo) {
+            isVideoInitialScanComplete = true
+            isVideoAutoScanning = false
+        }
         if (canScanAudio) runAutoScan(LocalMediaType.AUDIO)
         if (!canScanVideo || !canScanAudio) {
             Toast.makeText(context, "没有媒体权限时可以使用手动添加文件夹。", Toast.LENGTH_SHORT).show()
@@ -1091,6 +1109,7 @@ private fun LocalVibeApp() {
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
         hiddenVideoUris = appStateStore.loadHiddenVideoUris()
         hiddenVideoFolderIds = appStateStore.loadHiddenVideoFolderIds()
+        isVideoVisibilityReady = true
         bookProgressMap.clear()
         appStateStore.loadBookProgress().forEach { progress ->
             if (progress.totalParagraphs > 0) {
@@ -1331,6 +1350,9 @@ private fun LocalVibeApp() {
                     }
                     VideoLibraryScreen(
                         videoFolders = videoFolderGroups,
+                        isLoading = !isVideoVisibilityReady ||
+                            !isVideoInitialScanComplete ||
+                            isVideoAutoScanning,
                         permissionDeniedMessage = if (videoPermissionDenied) {
                             "没有媒体权限，无法自动扫描视频。你仍然可以手动添加文件夹。"
                         } else {

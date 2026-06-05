@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -90,6 +91,7 @@ private enum class VideoLibrarySortMode {
 @Composable
 fun VideoLibraryScreen(
     videoFolders: List<VideoFolderUiModel>,
+    isLoading: Boolean,
     permissionDeniedMessage: String?,
     recentVideoFile: LocalMediaFile?,
     onAddFolder: () -> Unit,
@@ -221,7 +223,11 @@ fun VideoLibraryScreen(
                         }
                     }
 
-                    if (shownFolders.isEmpty()) {
+                    if (isLoading && searchKeyword.isBlank()) {
+                        item {
+                            LoadingVideoState()
+                        }
+                    } else if (shownFolders.isEmpty()) {
                         item {
                             EmptyVideoState(
                                 text = if (searchKeyword.isBlank()) {
@@ -815,6 +821,28 @@ private fun FloatingSearchBar(
                 }
             },
             placeholder = { Text(placeholder, color = VideoTextMuted) }
+        )
+    }
+}
+
+@Composable
+private fun LoadingVideoState() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 54.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(28.dp),
+            color = VideoPrimary,
+            strokeWidth = 2.dp
+        )
+        Text(
+            text = "正在扫描本地视频…",
+            color = VideoTextSecondary,
+            style = MaterialTheme.typography.bodyMedium
         )
     }
 }
