@@ -8,3 +8,6 @@ local.properties
 test-results/
 
 .kotlin/
+
+# Local CodeGraph index
+.codegraph/
