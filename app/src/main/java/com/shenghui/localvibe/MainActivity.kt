@@ -132,6 +132,7 @@ private fun LocalVibeApp() {
     val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
     val bookProgressMap = remember { mutableStateMapOf<String, PersistedBookProgress>() }
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
+    var hiddenVideoUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoFolderIds by remember { mutableStateOf(emptySet<String>()) }
     var currentFolder by remember { mutableStateOf<MediaFolderUiModel?>(null) }
     var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
@@ -189,6 +190,12 @@ private fun LocalVibeApp() {
         }.distinctBy { it.normalizedUri() }
     }
 
+    fun List<LocalMediaFile>.filterVisibleVideos(): List<LocalMediaFile> {
+        return filterNot {
+            it.type == LocalMediaType.VIDEO && it.normalizedUri() in hiddenVideoUris
+        }.distinctBy { it.normalizedUri() }
+    }
+
     fun List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder>.filterHiddenAudioFolders(): List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder> {
         return mapNotNull { result ->
             val visibleFiles = result.files.filterVisibleAudios()
@@ -214,6 +221,17 @@ private fun LocalVibeApp() {
         if (uris.isEmpty()) return
         hiddenAudioUris = hiddenAudioUris + uris
         appStateStore.hideAudioUris(uris)
+    }
+
+    suspend fun hideVideoFiles(files: List<LocalMediaFile>) {
+        val uris = files
+            .filter { it.type == LocalMediaType.VIDEO }
+            .map { it.normalizedUri() }
+            .filter { it.isNotBlank() }
+            .toSet()
+        if (uris.isEmpty()) return
+        hiddenVideoUris = hiddenVideoUris + uris
+        appStateStore.hideVideoUris(uris)
     }
 
     fun playAudioQueue(queue: List<LocalMediaFile>, file: LocalMediaFile, shuffle: Boolean = false) {
@@ -409,6 +427,7 @@ private fun LocalVibeApp() {
                 importedBookFiles.any { it.normalizedBookKey() == bookKey }
             removeMediaFromMemory(file)
             if (file.type == LocalMediaType.VIDEO) {
+                hideVideoFiles(listOf(file))
                 appStateStore.saveProgress(
                     PersistedPlaybackProgress(
                         mediaUri = file.uri,
@@ -432,6 +451,8 @@ private fun LocalVibeApp() {
                 context,
                 if (file.type == LocalMediaType.BOOK) {
                     "已从书架移除"
+                } else if (file.type == LocalMediaType.VIDEO) {
+                    "已从列表移除"
                 } else {
                     "已从当前列表移除，重新扫描后可能恢复"
                 },
@@ -451,6 +472,7 @@ private fun LocalVibeApp() {
                 .filter { it.type == LocalMediaType.AUDIO }
                 .map { it.normalizedUri() }
                 .toSet()
+            hideVideoFiles(uniqueFiles)
             hideAudioFiles(uniqueFiles)
             uniqueFiles.forEach { file ->
                 val wasImportedBook = file.type == LocalMediaType.BOOK &&
@@ -607,10 +629,10 @@ private fun LocalVibeApp() {
             else -> return
         }
         targetFolders.upsertFolder(folder.id) { folder }
-        val visibleFiles = if (targetType == LocalMediaType.AUDIO) {
-            files.filterVisibleAudios()
-        } else {
-            files
+        val visibleFiles = when (targetType) {
+            LocalMediaType.VIDEO -> files.filterVisibleVideos()
+            LocalMediaType.AUDIO -> files.filterVisibleAudios()
+            else -> files
         }
         scannedFilesByFolder[typedFolderKey(targetType, folder.id)] = visibleFiles
         if (targetType == LocalMediaType.BOOK) {
@@ -620,6 +642,19 @@ private fun LocalVibeApp() {
 
     fun List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder>.filterHiddenVideoFolders(): List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder> {
         return filterNot { it.folder.id.trim() in hiddenVideoFolderIds }
+            .mapNotNull { result ->
+                val visibleFiles = result.files.filterVisibleVideos()
+                if (visibleFiles.isEmpty()) {
+                    null
+                } else {
+                    result.copy(
+                        folder = result.folder.copy(
+                            videoCount = visibleFiles.count { it.type == LocalMediaType.VIDEO }
+                        ),
+                        files = visibleFiles
+                    )
+                }
+            }
     }
 
     suspend fun hideVideoFolders(folders: List<MediaFolderUiModel>) {
@@ -751,7 +786,11 @@ private fun LocalVibeApp() {
             }
             val typedFiles = scannedFiles.filter { it.type == targetType }
                 .let { files ->
-                    if (targetType == LocalMediaType.AUDIO) files.filterVisibleAudios() else files
+                    when (targetType) {
+                        LocalMediaType.VIDEO -> files.filterVisibleVideos()
+                        LocalMediaType.AUDIO -> files.filterVisibleAudios()
+                        else -> files
+                    }
                 }
 
             if (typedFiles.isEmpty()) {
@@ -893,6 +932,7 @@ private fun LocalVibeApp() {
         recentVideoUri = appStateStore.loadRecentVideoUri()
         recentAudioUri = appStateStore.loadRecentAudioUri()
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
+        hiddenVideoUris = appStateStore.loadHiddenVideoUris()
         hiddenVideoFolderIds = appStateStore.loadHiddenVideoFolderIds()
         bookProgressMap.clear()
         appStateStore.loadBookProgress().forEach { progress ->
@@ -971,7 +1011,11 @@ private fun LocalVibeApp() {
                 }
                 val typedFiles = scannedFiles.filter { it.type == targetType }
                     .let { files ->
-                        if (targetType == LocalMediaType.AUDIO) files.filterVisibleAudios() else files
+                        when (targetType) {
+                            LocalMediaType.VIDEO -> files.filterVisibleVideos()
+                            LocalMediaType.AUDIO -> files.filterVisibleAudios()
+                            else -> files
+                        }
                     }
                 if (typedFiles.isNotEmpty()) {
                     if (targetType == LocalMediaType.BOOK) {

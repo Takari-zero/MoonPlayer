@@ -167,6 +167,29 @@ class AppStateStore(private val context: Context) {
         }
     }
 
+    suspend fun loadHiddenVideoUris(): Set<String> {
+        val json = context.appStateDataStore.data.first()[HiddenVideoUrisKey].orEmpty()
+        if (json.isBlank()) return emptySet()
+        return decodeHiddenVideoUris(json)
+    }
+
+    suspend fun hideVideoUris(uris: Collection<String>) {
+        val normalizedUris = uris.map { it.trim() }.filter { it.isNotBlank() }
+        if (normalizedUris.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeHiddenVideoUris(prefs[HiddenVideoUrisKey].orEmpty())
+                .plus(normalizedUris)
+                .toSet()
+            prefs[HiddenVideoUrisKey] = encodeHiddenVideoUris(next)
+        }
+    }
+
+    suspend fun clearHiddenVideoUris() {
+        context.appStateDataStore.edit { prefs ->
+            prefs.remove(HiddenVideoUrisKey)
+        }
+    }
+
     suspend fun loadHiddenVideoFolderIds(): Set<String> {
         val json = context.appStateDataStore.data.first()[HiddenVideoFolderIdsKey].orEmpty()
         if (json.isBlank()) return emptySet()
@@ -399,6 +422,39 @@ class AppStateStore(private val context: Context) {
                         .put("mediaType", "AUDIO")
                         .put("hiddenAt", System.currentTimeMillis())
                 )
+        }
+        return array.toString()
+    }
+
+    private fun decodeHiddenVideoUris(json: String): Set<String> {
+        if (json.isBlank()) return emptySet()
+        return runCatching {
+            val array = JSONArray(json)
+            buildSet {
+                repeat(array.length()) { index ->
+                    val value = array.opt(index)
+                    val uri = when (value) {
+                        is JSONObject -> value.optString("uri")
+                        else -> value?.toString().orEmpty()
+                    }.trim()
+                    if (uri.isNotBlank()) add(uri)
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    private fun encodeHiddenVideoUris(uris: Set<String>): String {
+        val array = JSONArray()
+        uris.map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { uri ->
+                array.put(
+                    JSONObject()
+                        .put("uri", uri)
+                        .put("mediaType", "VIDEO")
+                        .put("hiddenAt", System.currentTimeMillis())
+                )
             }
         return array.toString()
     }
@@ -441,6 +497,7 @@ class AppStateStore(private val context: Context) {
         val BookFilesKey = stringPreferencesKey("book_files_json")
         val BookProgressKey = stringPreferencesKey("book_progress_json")
         val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
+        val HiddenVideoUrisKey = stringPreferencesKey("hidden_video_uris_json")
         val HiddenVideoFolderIdsKey = stringPreferencesKey("hidden_video_folder_ids_json")
         val ProgressKey = stringPreferencesKey("playback_progress_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")

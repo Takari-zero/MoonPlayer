@@ -101,6 +101,7 @@ fun FolderScreen(
     }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var showBatchRemoveConfirm by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var isVideoSearching by rememberSaveable { mutableStateOf(false) }
     var videoSearchKeyword by rememberSaveable { mutableStateOf("") }
@@ -131,6 +132,11 @@ fun FolderScreen(
     BackHandler(enabled = targetType == LocalMediaType.VIDEO && isVideoSearching) {
         videoSearchKeyword = ""
         isVideoSearching = false
+    }
+
+    BackHandler(enabled = targetType == LocalMediaType.VIDEO && isMultiSelectMode && !isVideoSearching) {
+        selectedUris = emptySet()
+        isMultiSelectMode = false
     }
 
     Scaffold(
@@ -178,9 +184,7 @@ fun FolderScreen(
                         if (selectedFiles.isEmpty()) {
                             Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
                         } else {
-                            onRemoveFiles(selectedFiles)
-                            selectedUris = emptySet()
-                            isMultiSelectMode = false
+                            showBatchRemoveConfirm = true
                         }
                     },
                     onDeleteSelected = {
@@ -421,6 +425,38 @@ fun FolderScreen(
                 )
             }
         }
+    }
+
+    if (showBatchRemoveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showBatchRemoveConfirm = false },
+            title = { Text("从列表移除？") },
+            text = {
+                Text(
+                    if (targetType == LocalMediaType.VIDEO) {
+                        "不会删除本地文件，只会在 Moon播放器 中隐藏选中的视频。"
+                    } else {
+                        "不会删除本地文件，只会从当前列表移除选中的项目。"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedFiles = visibleFiles.filter { it.uri in selectedUris }
+                        showBatchRemoveConfirm = false
+                        onRemoveFiles(selectedFiles)
+                        selectedUris = emptySet()
+                        isMultiSelectMode = false
+                    }
+                ) {
+                    Text("移除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchRemoveConfirm = false }) { Text("取消") }
+            }
+        )
     }
 
     if (showBatchDeleteConfirm) {
@@ -978,6 +1014,7 @@ private fun FileMoreMenu(
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var showRemoveConfirm by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -992,7 +1029,7 @@ private fun FileMoreMenu(
                 text = { Text("从列表移除") },
                 onClick = {
                     expanded = false
-                    onRemove()
+                    showRemoveConfirm = true
                 }
             )
             DropdownMenuItem(
@@ -1003,6 +1040,35 @@ private fun FileMoreMenu(
                 }
             )
         }
+    }
+
+    if (showRemoveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirm = false },
+            title = { Text("从列表移除？") },
+            text = {
+                Text(
+                    if (file.type == LocalMediaType.VIDEO) {
+                        "不会删除本地文件，只会在 Moon播放器 中隐藏这个视频。"
+                    } else {
+                        "不会删除本地文件，只会从当前列表移除这个项目。"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRemoveConfirm = false
+                        onRemove()
+                    }
+                ) {
+                    Text("移除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveConfirm = false }) { Text("取消") }
+            }
+        )
     }
 
     if (showDeleteConfirm) {
