@@ -537,7 +537,6 @@ private fun LocalVibeApp() {
             }
             if (uniqueDeletedFiles.size == requestedCount && requestedCount > 0) {
                 folderVideoDeleteSuccessSignal = System.currentTimeMillis()
-                Toast.makeText(context, "已删除 ${uniqueDeletedFiles.size} 项", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(context, "删除失败，请检查系统权限", Toast.LENGTH_SHORT).show()
             }
