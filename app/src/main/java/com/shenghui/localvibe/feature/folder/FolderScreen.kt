@@ -92,6 +92,7 @@ fun FolderScreen(
     onDeleteFile: (LocalMediaFile) -> Unit,
     onRemoveFiles: (List<LocalMediaFile>) -> Unit,
     onDeleteFiles: (List<LocalMediaFile>) -> Unit,
+    deleteSuccessSignal: Long = 0L,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -137,6 +138,13 @@ fun FolderScreen(
     BackHandler(enabled = targetType == LocalMediaType.VIDEO && isMultiSelectMode && !isVideoSearching) {
         selectedUris = emptySet()
         isMultiSelectMode = false
+    }
+
+    LaunchedEffect(deleteSuccessSignal) {
+        if (deleteSuccessSignal > 0L) {
+            selectedUris = emptySet()
+            isMultiSelectMode = false
+        }
     }
 
     Scaffold(
@@ -467,7 +475,7 @@ fun FolderScreen(
             else -> "永久删除文件？"
         }
         val text = when (targetType) {
-            LocalMediaType.VIDEO -> "将删除选中的本地视频文件，此操作无法从 Moon播放器 恢复。"
+            LocalMediaType.VIDEO -> "将从本机删除选中的视频文件，此操作不可撤销。"
             LocalMediaType.AUDIO -> "将删除选中的本地音乐文件，此操作无法从 Moon播放器 恢复。"
             LocalMediaType.BOOK -> "将删除选中的 TXT 文件，此操作无法从 Moon播放器 恢复。"
             else -> "将删除选中的本地文件，此操作无法从 Moon播放器 恢复。"
@@ -482,11 +490,9 @@ fun FolderScreen(
                         val selectedFiles = visibleFiles.filter { it.uri in selectedUris }
                         showBatchDeleteConfirm = false
                         onDeleteFiles(selectedFiles)
-                        selectedUris = emptySet()
-                        isMultiSelectMode = false
                     }
                 ) {
-                    Text("删除")
+                    Text(if (targetType == LocalMediaType.VIDEO) "永久删除" else "删除")
                 }
             },
             dismissButton = {
@@ -1074,13 +1080,21 @@ private fun FileMoreMenu(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text(if (file.type == LocalMediaType.BOOK) "永久删除小说？" else "永久删除？") },
+            title = {
+                Text(
+                    when (file.type) {
+                        LocalMediaType.VIDEO -> "永久删除视频？"
+                        LocalMediaType.BOOK -> "永久删除小说？"
+                        else -> "永久删除？"
+                    }
+                )
+            },
             text = {
                 Text(
-                    if (file.type == LocalMediaType.BOOK) {
-                        "此操作会删除本地 TXT 文件，无法从 Moon播放器 恢复。"
-                    } else {
-                        "此操作会删除本地文件，无法从 Moon播放器 恢复。"
+                    when (file.type) {
+                        LocalMediaType.VIDEO -> "将从本机删除选中的视频文件，此操作不可撤销。"
+                        LocalMediaType.BOOK -> "此操作会删除本地 TXT 文件，无法从 Moon播放器 恢复。"
+                        else -> "此操作会删除本地文件，无法从 Moon播放器 恢复。"
                     }
                 )
             },
@@ -1091,7 +1105,7 @@ private fun FileMoreMenu(
                         onDelete()
                     }
                 ) {
-                    Text("删除")
+                    Text(if (file.type == LocalMediaType.VIDEO) "永久删除" else "删除")
                 }
             },
             dismissButton = {

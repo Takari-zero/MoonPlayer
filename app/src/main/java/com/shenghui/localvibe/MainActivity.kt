@@ -1,18 +1,24 @@
 ﻿package com.shenghui.localvibe
 
 import android.Manifest
+import android.app.Activity
+import android.app.RecoverableSecurityException
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -157,6 +163,11 @@ private fun LocalVibeApp() {
     var musicCurrentPositionMs by remember { mutableStateOf(0L) }
     var musicDurationMs by remember { mutableStateOf(0L) }
     var musicIsPlaying by remember { mutableStateOf(false) }
+    var pendingFolderVideoDeleteFiles by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
+    var pendingFolderVideoDeleteMode by remember { mutableStateOf<FolderVideoDeleteMode?>(null) }
+    var folderVideoDeleteSuccessSignal by remember { mutableStateOf(0L) }
+    lateinit var folderVideoDeleteLauncher:
+        ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -502,6 +513,153 @@ private fun LocalVibeApp() {
             appStateStore.saveRecentAudioUri(recentAudioUri)
             refreshMusicControllerAfterAudioRemoval(removedAudioUris)
             Toast.makeText(context, "已移除 ${uniqueFiles.size} 项", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun completeFolderVideoDelete(deletedFiles: List<LocalMediaFile>, requestedCount: Int) {
+        coroutineScope.launch {
+            val uniqueDeletedFiles = deletedFiles
+                .filter { it.type == LocalMediaType.VIDEO }
+                .distinctBy { it.normalizedUri() }
+            uniqueDeletedFiles.forEach { file ->
+                removeMediaFromMemory(file)
+                appStateStore.saveProgress(
+                    PersistedPlaybackProgress(
+                        mediaUri = file.uri,
+                        mediaType = LocalMediaType.VIDEO.name,
+                        positionMs = 0L,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            if (uniqueDeletedFiles.isNotEmpty()) {
+                appStateStore.saveRecentVideoUri(recentVideoUri)
+            }
+            if (uniqueDeletedFiles.size == requestedCount && requestedCount > 0) {
+                folderVideoDeleteSuccessSignal = System.currentTimeMillis()
+                Toast.makeText(context, "已删除 ${uniqueDeletedFiles.size} 项", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "删除失败，请检查系统权限", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun launchFolderVideoDeleteRequest(
+        files: List<LocalMediaFile>,
+        mode: FolderVideoDeleteMode,
+        intentSender: android.content.IntentSender
+    ) {
+        val uniqueFiles = files
+            .filter { it.type == LocalMediaType.VIDEO }
+            .distinctBy { it.normalizedUri() }
+        if (uniqueFiles.isEmpty()) {
+            Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingFolderVideoDeleteFiles = uniqueFiles
+        pendingFolderVideoDeleteMode = mode
+        runCatching {
+            folderVideoDeleteLauncher.launch(
+                IntentSenderRequest.Builder(intentSender).build()
+            )
+        }.onFailure {
+            pendingFolderVideoDeleteFiles = emptyList()
+            pendingFolderVideoDeleteMode = null
+            Toast.makeText(context, "删除失败，请检查系统权限", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun requestFolderVideoPermanentDelete(files: List<LocalMediaFile>) {
+        val uniqueFiles = files
+            .filter { it.type == LocalMediaType.VIDEO }
+            .distinctBy { it.normalizedUri() }
+        if (uniqueFiles.isEmpty()) {
+            Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val uris = uniqueFiles.map { Uri.parse(it.uri) }
+            runCatching {
+                MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender
+            }.onSuccess { intentSender ->
+                launchFolderVideoDeleteRequest(
+                    files = uniqueFiles,
+                    mode = FolderVideoDeleteMode.SystemDelete,
+                    intentSender = intentSender
+                )
+            }.onFailure {
+                Toast.makeText(context, "删除失败，请检查系统权限", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        coroutineScope.launch {
+            val deletedFiles = mutableListOf<LocalMediaFile>()
+            var recoverableIntentSender: android.content.IntentSender? = null
+            var recoverableFiles: List<LocalMediaFile> = emptyList()
+            var failedCount = 0
+            withContext(Dispatchers.IO) {
+                for ((index, file) in uniqueFiles.withIndex()) {
+                    try {
+                        if (deleteContentUriDirect(context.applicationContext, file.uri)) {
+                            deletedFiles += file
+                        } else {
+                            failedCount += 1
+                        }
+                    } catch (exception: RecoverableSecurityException) {
+                        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                            recoverableIntentSender =
+                                exception.userAction.actionIntent.intentSender
+                            recoverableFiles = uniqueFiles.drop(index)
+                            break
+                        } else {
+                            failedCount += 1
+                        }
+                    } catch (exception: SecurityException) {
+                        failedCount += 1
+                    }
+                }
+            }
+            if (deletedFiles.isNotEmpty()) {
+                completeFolderVideoDelete(deletedFiles, deletedFiles.size)
+            }
+            val intentSender = recoverableIntentSender
+            if (intentSender != null) {
+                launchFolderVideoDeleteRequest(
+                    files = recoverableFiles,
+                    mode = FolderVideoDeleteMode.RetryAfterGrant,
+                    intentSender = intentSender
+                )
+            } else if (failedCount > 0) {
+                Toast.makeText(context, "删除失败，请检查系统权限", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    folderVideoDeleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val pendingFiles = pendingFolderVideoDeleteFiles
+        val pendingMode = pendingFolderVideoDeleteMode
+        pendingFolderVideoDeleteFiles = emptyList()
+        pendingFolderVideoDeleteMode = null
+        if (pendingFiles.isEmpty() || pendingMode == null) {
+            return@rememberLauncherForActivityResult
+        }
+        if (result.resultCode != Activity.RESULT_OK) {
+            Toast.makeText(context, "已取消删除", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        coroutineScope.launch {
+            val deletedFiles = if (pendingMode == FolderVideoDeleteMode.RetryAfterGrant) {
+                withContext(Dispatchers.IO) {
+                    pendingFiles.filter { file ->
+                        deleteContentUriDirect(context.applicationContext, file.uri)
+                    }
+                }
+            } else {
+                pendingFiles
+            }
+            completeFolderVideoDelete(deletedFiles, pendingFiles.size)
         }
     }
 
@@ -1429,14 +1587,23 @@ private fun LocalVibeApp() {
                         removeMediaFromList(file)
                     },
                     onDeleteFile = { file ->
-                        permanentlyDeleteMedia(file)
+                        if (file.type == LocalMediaType.VIDEO) {
+                            requestFolderVideoPermanentDelete(listOf(file))
+                        } else {
+                            permanentlyDeleteMedia(file)
+                        }
                     },
                     onRemoveFiles = { files ->
                         removeMediaFromList(files)
                     },
                     onDeleteFiles = { files ->
-                        permanentlyDeleteMedia(files)
+                        if (currentFolderTargetType == LocalMediaType.VIDEO) {
+                            requestFolderVideoPermanentDelete(files)
+                        } else {
+                            permanentlyDeleteMedia(files)
+                        }
                     },
+                    deleteSuccessSignal = folderVideoDeleteSuccessSignal,
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -1759,6 +1926,11 @@ private val MainTabs = listOf(
     MainTab(LocalVibeRoute.Profile, "我的", "我")
 )
 
+private enum class FolderVideoDeleteMode {
+    SystemDelete,
+    RetryAfterGrant
+}
+
 private const val AUTO_SCAN_THROTTLE_MS = 10_000L
 private const val BOOK_LOG_TAG = "LocalVibeBooks"
 
@@ -1781,6 +1953,13 @@ private fun hasPermission(
         context,
         permission
     ) == PackageManager.PERMISSION_GRANTED
+}
+
+private fun deleteContentUriDirect(
+    context: android.content.Context,
+    uriString: String
+): Boolean {
+    return context.contentResolver.delete(Uri.parse(uriString), null, null) > 0
 }
 
 private fun typedFolderKey(
