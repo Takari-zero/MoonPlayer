@@ -1505,10 +1505,10 @@ private fun VideoSpeedStepButton(
         if (!isPressed) return@LaunchedEffect
 
         currentOnStep()
-        delay(450)
+        delay(VIDEO_SPEED_REPEAT_INITIAL_DELAY_MS)
         while (isActive) {
             currentOnStep()
-            delay(100)
+            delay(VIDEO_SPEED_REPEAT_INTERVAL_MS)
         }
     }
 
@@ -1826,3 +1826,5 @@ private const val FINISHED_THRESHOLD_MS = 5_000L
 private const val MIN_VIDEO_SPEED = 0.25f
 private const val MAX_VIDEO_SPEED = 5f
 private const val VIDEO_SPEED_STEP = 0.01f
+private const val VIDEO_SPEED_REPEAT_INITIAL_DELAY_MS = 120L
+private const val VIDEO_SPEED_REPEAT_INTERVAL_MS = 100L
