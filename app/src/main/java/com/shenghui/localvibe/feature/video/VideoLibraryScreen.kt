@@ -1,8 +1,14 @@
 package com.shenghui.localvibe.feature.video
 
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -35,6 +41,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -60,28 +67,43 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-private val VideoBackground = Color(0xFF0B0D14)
-private val VideoSurface = Color(0xFF101722)
-private val VideoSurfaceSoft = Color(0xFF151E2B)
-private val VideoPrimary = Color(0xFF4D8DFF)
-private val VideoPrimarySoft = Color(0xFF8AB6FF)
-private val VideoTextPrimary = Color(0xFFF5F7FA)
-private val VideoTextSecondary = Color(0xFFA8B2C2)
-private val VideoTextMuted = Color(0xFF6F7A8A)
+private val VideoBackground = Color(0xFF000204)
+private val VideoSurface = Color(0xFF101012)
+private val VideoSurfaceSoft = Color(0xFF15141A)
+private val VideoCard = Color(0xFF08090B)
+private val VideoPrimary = Color(0xFF8B5CFF)
+private val VideoPrimarySoft = Color(0xFFD5C8FF)
+private val VideoAccent = Color(0xFF8D55FF)
+private val VideoAccentSoft = Color(0xFFBDA7FF)
+private val VideoTextPrimary = Color(0xFFF8F7FB)
+private val VideoTextSecondary = Color(0xFFBBB5C8)
+private val VideoTextMuted = Color(0xFF7B7785)
+private val VideoDivider = Color(0xFF18181D)
 
 private enum class VideoLibrarySortMode {
     NAME,
@@ -147,14 +169,15 @@ fun VideoLibraryScreen(
                         Toast.makeText(context, "暂无可继续播放的视频", Toast.LENGTH_SHORT).show()
                     }
                 },
-                containerColor = VideoPrimary,
-                contentColor = Color.White,
+                modifier = Modifier.size(44.dp),
+                containerColor = VideoAccent.copy(alpha = 0.78f),
+                contentColor = VideoTextPrimary,
                 shape = CircleShape
             ) {
                 Icon(
                     Icons.Filled.PlayArrow,
                     contentDescription = "继续播放",
-                    modifier = Modifier.size(34.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             }
         }
@@ -212,10 +235,10 @@ fun VideoLibraryScreen(
                     contentPadding = PaddingValues(
                         start = 20.dp,
                         end = 20.dp,
-                        top = 8.dp,
-                        bottom = 104.dp
+                        top = 2.dp,
+                        bottom = 96.dp
                     ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     if (!permissionDeniedMessage.isNullOrBlank()) {
                         item {
@@ -245,12 +268,12 @@ fun VideoLibraryScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(
-                                        ((shownFolders.size + 2) / 3 * 132)
-                                            .coerceAtLeast(132)
+                                        ((shownFolders.size + 2) / 3 * 142)
+                                            .coerceAtLeast(142)
                                             .dp
                                     ),
-                                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                                verticalArrangement = Arrangement.spacedBy(24.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
                                 userScrollEnabled = false
                             ) {
                                 items(
@@ -325,7 +348,7 @@ fun VideoLibraryScreen(
                     placeholder = "搜索视频或文件夹",
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(horizontal = 16.dp, vertical = 76.dp)
+                        .padding(horizontal = 16.dp, vertical = 58.dp)
                         .zIndex(9f)
                 )
             }
@@ -391,48 +414,83 @@ private fun VideoHeader(
         modifier = Modifier
             .fillMaxWidth()
             .background(VideoBackground)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
                     text = "视频",
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = 29.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
                     color = VideoTextPrimary
                 )
                 Text(
                     text = "本地视频",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
                     color = VideoTextMuted
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                IconButton(onClick = onToggleSearch) {
-                    Icon(
-                        Icons.Filled.Search,
-                        contentDescription = if (isSearching) "关闭搜索" else "搜索",
-                        tint = Color.White
-                    )
-                }
-                IconButton(onClick = onAddFolder) {
-                    Icon(Icons.Filled.CreateNewFolder, contentDescription = "添加文件夹", tint = Color.White)
-                }
-                IconButton(onClick = onToggleViewMode) {
-                    Icon(
-                        imageVector = if (isGridMode) Icons.Filled.ViewList else Icons.Filled.GridView,
-                        contentDescription = "切换视图",
-                        tint = Color.White
-                    )
-                }
-                IconButton(onClick = onMore) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                HeaderIconButton(
+                    icon = Icons.Filled.Search,
+                    contentDescription = if (isSearching) "关闭搜索" else "搜索",
+                    selected = isSearching,
+                    onClick = onToggleSearch
+                )
+                HeaderIconButton(
+                    icon = Icons.Filled.CreateNewFolder,
+                    contentDescription = "添加文件夹",
+                    onClick = onAddFolder
+                )
+                HeaderIconButton(
+                    icon = if (isGridMode) Icons.Filled.ViewList else Icons.Filled.GridView,
+                    contentDescription = "切换视图",
+                    selected = isGridMode,
+                    onClick = onToggleViewMode
+                )
+                HeaderIconButton(
+                    icon = Icons.Filled.MoreVert,
+                    contentDescription = "更多",
+                    onClick = onMore
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun HeaderIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    selected: Boolean = false,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.size(if (selected) 36.dp else 32.dp),
+        shape = if (selected) CircleShape else RoundedCornerShape(13.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) VideoPrimary.copy(alpha = 0.34f) else Color.Transparent
+        ),
+        border = if (selected) {
+            BorderStroke(1.dp, VideoAccentSoft.copy(alpha = 0.2f))
+        } else {
+            null
+        }
+    ) {
+        IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (selected) VideoPrimarySoft else VideoTextSecondary.copy(alpha = 0.92f),
+                modifier = Modifier.size(if (selected) 18.dp else 17.dp)
+            )
         }
     }
 }
@@ -476,21 +534,22 @@ private fun VideoLibraryMorePanel(
     ) {
         Card(
             modifier = Modifier
-                .width(314.dp)
+                .width(326.dp)
                 .clickable(onClick = {}),
-            shape = RoundedCornerShape(22.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF282828))
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = VideoSurface),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.065f))
         ) {
             Column(
                 modifier = Modifier
-                    .padding(horizontal = 18.dp, vertical = 18.dp)
+                    .padding(horizontal = 16.dp, vertical = 16.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("视图模式", color = VideoTextPrimary, style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("视图模式", color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                             MorePanelOption(
                                 icon = Icons.Filled.Search,
                                 label = "搜索",
@@ -505,9 +564,9 @@ private fun VideoLibraryMorePanel(
                             )
                         }
                     }
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("布局", color = VideoTextPrimary, style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("布局", color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                             MorePanelOption(
                                 icon = Icons.Filled.ViewList,
                                 label = "列表",
@@ -524,7 +583,7 @@ private fun VideoLibraryMorePanel(
                     }
                 }
                 PanelDivider()
-                Text("排序", color = VideoTextPrimary, style = MaterialTheme.typography.titleMedium)
+                Text("排序", color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -536,7 +595,7 @@ private fun VideoLibraryMorePanel(
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(22.dp)
+                    horizontalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
                     MorePanelOption(Icons.Filled.Refresh, "重扫", false, onRescan)
                     MorePanelOption(Icons.Filled.MoreHoriz, "更多", false, onMore)
@@ -630,11 +689,12 @@ private fun VideoPanelExpandableHeader(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
+            .background(Color.White.copy(alpha = 0.04f))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, color = VideoTextPrimary, style = MaterialTheme.typography.titleMedium)
+        Text(title, color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
         Icon(
             imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
             contentDescription = null,
@@ -694,22 +754,23 @@ private fun MorePanelOption(
 ) {
     Column(
         modifier = Modifier
-            .width(52.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .width(50.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) VideoPrimary.copy(alpha = 0.11f) else Color.White.copy(alpha = 0.03f))
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
+            .padding(vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(7.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (selected) VideoPrimary else Color.White,
-            modifier = Modifier.size(26.dp)
+            tint = if (selected) VideoPrimarySoft else VideoTextSecondary.copy(alpha = 0.88f),
+            modifier = Modifier.size(22.dp)
         )
         Text(
             text = label,
-            color = if (selected) VideoPrimary else VideoTextSecondary,
+            color = if (selected) VideoPrimarySoft else VideoTextMuted,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -723,7 +784,7 @@ private fun PanelDivider() {
         modifier = Modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(Color.White.copy(alpha = 0.12f))
+            .background(VideoDivider.copy(alpha = 0.9f))
     )
 }
 
@@ -738,7 +799,10 @@ private fun VideoFolderMultiSelectBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(VideoBackground)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(VideoSurfaceSoft.copy(alpha = 0.86f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -803,14 +867,15 @@ private fun FloatingSearchBar(
             .fillMaxWidth()
             .clickable(onClick = {}),
         shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xF2111722))
+        colors = CardDefaults.cardColors(containerColor = VideoSurface.copy(alpha = 0.98f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.075f))
     ) {
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             singleLine = true,
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = VideoPrimarySoft) },
             trailingIcon = {
@@ -827,45 +892,68 @@ private fun FloatingSearchBar(
 
 @Composable
 private fun LoadingVideoState() {
-    Column(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 54.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(top = 40.dp, start = 18.dp, end = 18.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = VideoCard.copy(alpha = 0.86f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.065f))
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(28.dp),
-            color = VideoPrimary,
-            strokeWidth = 2.dp
-        )
-        Text(
-            text = "正在扫描本地视频…",
-            color = VideoTextSecondary,
-            style = MaterialTheme.typography.bodyMedium
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(28.dp),
+                color = VideoPrimarySoft,
+                strokeWidth = 2.dp
+            )
+            Text(
+                text = "正在扫描本地视频…",
+                color = VideoTextSecondary,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
     }
 }
 
 @Composable
 private fun EmptyVideoState(text: String) {
-    Column(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 50.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(top = 38.dp, start = 18.dp, end = 18.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = VideoCard.copy(alpha = 0.84f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.065f))
     ) {
-        Box(
+        Column(
             modifier = Modifier
-                .size(64.dp)
-                .clip(CircleShape)
-                .background(VideoSurfaceSoft),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(Icons.Filled.Movie, contentDescription = null, tint = VideoPrimarySoft, modifier = Modifier.size(30.dp))
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(VideoPrimary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Movie, contentDescription = null, tint = VideoPrimarySoft, modifier = Modifier.size(30.dp))
+            }
+            Text(
+                text = text.replace("，", "，\n"),
+                color = VideoTextSecondary,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center
+            )
         }
-        Text(text = text, color = VideoTextSecondary, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -881,40 +969,66 @@ private fun VideoFolderCard(
     onLongClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    Card(
-        modifier = modifier.combinedClickable(
-            onClick = onClick,
-            onLongClick = onLongClick
-        ),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) VideoPrimary.copy(alpha = 0.08f) else Color.Transparent)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
     ) {
         if (compact) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(VideoSurface)
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (isSelected) VideoPrimary.copy(alpha = 0.1f) else VideoSurface.copy(alpha = 0.68f))
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                FolderPreview(videoCount = item.videos.size, compact = true)
+                FolderPreview(
+                    folderName = item.folder.name,
+                    previewUri = item.videos.firstOrNull()?.uri,
+                    videoCount = item.videos.size,
+                    compact = true
+                )
                 FolderText(item = item, compact = true)
             }
         } else {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(VideoBackground)
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    .padding(vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isSelectionMode) {
                     Checkbox(checked = isSelected, onCheckedChange = { onToggleSelected() })
                 }
-                FolderPreview(videoCount = item.videos.size, compact = false)
+                FolderPreview(
+                    folderName = item.folder.name,
+                    previewUri = item.videos.firstOrNull()?.uri,
+                    videoCount = item.videos.size,
+                    compact = false
+                )
                 FolderText(item = item, compact = false, modifier = Modifier.weight(1f))
+                Icon(
+                    Icons.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = VideoTextMuted.copy(alpha = 0.64f),
+                    modifier = Modifier.size(17.dp)
+                )
             }
+        }
+        if (!compact) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .padding(start = if (isSelectionMode) 44.dp else 0.dp)
+                    .background(VideoDivider.copy(alpha = 0.42f))
+            )
         }
     }
 }
@@ -929,76 +1043,130 @@ private fun VideoFolderGridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    Column(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
-            )
-            .padding(horizontal = 2.dp, vertical = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(7.dp)
+            ),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) VideoPrimary.copy(alpha = 0.1f) else VideoCard.copy(alpha = 0.9f)
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (isSelected) VideoPrimary.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.04f)
+        )
     ) {
-        Box {
-            FolderPreview(videoCount = item.videos.size, compact = true)
-            if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onToggleSelected() },
-                    modifier = Modifier.align(Alignment.TopStart)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 9.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box {
+                FolderPreview(
+                    folderName = item.folder.name,
+                    previewUri = item.videos.firstOrNull()?.uri,
+                    videoCount = item.videos.size,
+                    compact = true
                 )
+                if (isSelectionMode) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onToggleSelected() },
+                        modifier = Modifier.align(Alignment.TopStart)
+                    )
+                }
             }
+            Text(
+                text = item.folder.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = VideoTextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = folderMetaText(item),
+                style = MaterialTheme.typography.bodySmall,
+                color = VideoTextSecondary,
+                maxLines = 1
+            )
         }
-        Text(
-            text = item.folder.name,
-            style = MaterialTheme.typography.titleSmall,
-            color = VideoTextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = "${item.videos.size} 个视频",
-            style = MaterialTheme.typography.bodySmall,
-            color = VideoTextSecondary,
-            maxLines = 1
-        )
     }
 }
 
 @Composable
 private fun FolderPreview(
+    folderName: String,
+    previewUri: String?,
     videoCount: Int,
     compact: Boolean
 ) {
+    val coverKind = remember(folderName) { folderCoverKind(folderName) }
+    val context = LocalContext.current
+    val thumbnail by produceState<Bitmap?>(initialValue = null, previewUri, compact) {
+        value = if (compact || previewUri.isNullOrBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                loadFolderPreviewBitmap(context, previewUri)
+            }
+        }
+    }
     Box(
         modifier = Modifier
-            .size(width = if (compact) 94.dp else 76.dp, height = if (compact) 62.dp else 52.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF263244)),
+            .size(width = if (compact) 88.dp else 104.dp, height = if (compact) 56.dp else 58.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = folderCoverGradient(coverKind)
+                )
+            ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            Icons.Filled.Folder,
-            contentDescription = null,
-            tint = Color(0xFF4D5967),
-            modifier = Modifier.size(if (compact) 40.dp else 34.dp)
-        )
-        if (videoCount > 0) {
+        if (thumbnail != null) {
+            Image(
+                bitmap = thumbnail!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(VideoPrimary),
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.06f))
+            )
+        } else {
+            FolderPreviewArtwork(coverKind = coverKind, compact = compact)
+        }
+        Icon(
+            Icons.Filled.PlayArrow,
+            contentDescription = null,
+            tint = VideoTextPrimary.copy(alpha = if (compact) 0.1f else 0.08f),
+            modifier = Modifier.size(if (compact) 20.dp else 18.dp)
+        )
+        if (compact && videoCount > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(5.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .height(16.dp)
+                    .padding(horizontal = 5.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = videoCount.coerceAtMost(99).toString(),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall
+                    text = if (videoCount >= 100) "99+" else videoCount.toString(),
+                    color = VideoPrimarySoft.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 )
             }
         }
@@ -1013,20 +1181,170 @@ private fun FolderText(
 ) {
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
             text = item.folder.name,
-            style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+            style = if (compact) {
+                MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+            } else {
+                MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            },
             color = VideoTextPrimary,
             maxLines = if (compact) 2 else 1,
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = "${item.videos.size} 个视频",
-            style = MaterialTheme.typography.bodySmall,
+            text = folderMetaText(item),
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             color = VideoTextSecondary
         )
+    }
+}
+
+@Composable
+private fun FolderPreviewArtwork(coverKind: FolderCoverKind, compact: Boolean) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        when (coverKind) {
+            FolderCoverKind.Lens -> {
+                drawCircle(Color(0xFFE86BCD).copy(alpha = 0.24f), radius = size.minDimension * 0.48f, center = Offset(size.width * 0.33f, size.height * 0.52f))
+                drawCircle(Color(0xFF4CD7EA).copy(alpha = 0.18f), radius = size.minDimension * 0.38f, center = Offset(size.width * 0.52f, size.height * 0.48f))
+                drawCircle(Color.Black.copy(alpha = 0.6f), radius = size.minDimension * 0.28f, center = Offset(size.width * 0.45f, size.height * 0.5f))
+                drawCircle(Color.White.copy(alpha = 0.24f), radius = size.minDimension * 0.22f, center = Offset(size.width * 0.45f, size.height * 0.5f), style = Stroke(width = 1.6f))
+                drawCircle(Color.White.copy(alpha = 0.2f), radius = size.minDimension * 0.055f, center = Offset(size.width * 0.39f, size.height * 0.42f))
+                drawRect(Color.Black.copy(alpha = 0.22f), topLeft = Offset(size.width * 0.72f, 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.28f, size.height))
+            }
+            FolderCoverKind.Theater -> {
+                drawCircle(Color(0xFFFFC06A).copy(alpha = 0.3f), radius = size.minDimension * 0.38f, center = Offset(size.width * 0.52f, size.height * 0.08f))
+                drawRect(Color.Black.copy(alpha = 0.18f), topLeft = Offset(0f, size.height * 0.32f), size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.68f))
+                repeat(5) { line ->
+                    val y = size.height * (0.42f + line * 0.085f)
+                    drawLine(Color(0xFFFF8A45).copy(alpha = 0.16f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+                }
+                repeat(3) { row ->
+                    val y = size.height * (0.54f + row * 0.11f)
+                    repeat(5) { col ->
+                        val x = size.width * (0.08f + col * 0.19f)
+                        drawRoundRect(
+                            Color(0xFFD45B37).copy(alpha = 0.28f),
+                            topLeft = Offset(x, y),
+                            size = androidx.compose.ui.geometry.Size(size.width * 0.14f, size.height * 0.07f),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f)
+                        )
+                    }
+                }
+            }
+            FolderCoverKind.Mountain -> {
+                drawCircle(Color(0xFFD7E2FF).copy(alpha = 0.14f), radius = size.minDimension * 0.16f, center = Offset(size.width * 0.8f, size.height * 0.24f))
+                drawLine(Color(0xFFE4EAFF).copy(alpha = 0.32f), Offset(size.width * 0.02f, size.height * 0.74f), Offset(size.width * 0.33f, size.height * 0.34f), strokeWidth = 2.6f)
+                drawLine(Color(0xFFE4EAFF).copy(alpha = 0.32f), Offset(size.width * 0.33f, size.height * 0.34f), Offset(size.width * 0.58f, size.height * 0.72f), strokeWidth = 2.6f)
+                drawLine(Color(0xFFBDA7FF).copy(alpha = 0.26f), Offset(size.width * 0.34f, size.height * 0.74f), Offset(size.width * 0.66f, size.height * 0.32f), strokeWidth = 2.5f)
+                drawLine(Color(0xFFBDA7FF).copy(alpha = 0.26f), Offset(size.width * 0.66f, size.height * 0.32f), Offset(size.width * 0.98f, size.height * 0.74f), strokeWidth = 2.5f)
+                drawRect(Color.Black.copy(alpha = 0.2f), topLeft = Offset(0f, size.height * 0.72f), size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.28f))
+            }
+            FolderCoverKind.Night -> {
+                drawCircle(Color(0xFFE3DFFF).copy(alpha = 0.28f), radius = size.minDimension * 0.14f, center = Offset(size.width * 0.78f, size.height * 0.24f))
+                drawCircle(Color(0xFF172653).copy(alpha = 0.94f), radius = size.minDimension * 0.11f, center = Offset(size.width * 0.73f, size.height * 0.2f))
+                repeat(5) { index ->
+                    val x = size.width * (0.08f + index * 0.18f)
+                    drawRect(
+                        Color(0xFF262B42).copy(alpha = 0.82f),
+                        topLeft = Offset(x, size.height * (0.5f - index % 2 * 0.08f)),
+                        size = androidx.compose.ui.geometry.Size(size.width * 0.1f, size.height * 0.28f)
+                    )
+                }
+                drawLine(Color(0xFFBDA7FF).copy(alpha = 0.22f), Offset(0f, size.height * 0.78f), Offset(size.width, size.height * 0.78f), strokeWidth = 1.4f)
+            }
+        }
+        if (!compact) {
+            drawRect(
+                Color.Black.copy(alpha = 0.14f),
+                topLeft = Offset(0f, 0f),
+                size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.16f)
+            )
+            drawRect(
+                Color.Black.copy(alpha = 0.18f),
+                topLeft = Offset(0f, size.height * 0.84f),
+                size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.16f)
+            )
+        }
+    }
+}
+
+private enum class FolderCoverKind {
+    Lens,
+    Theater,
+    Mountain,
+    Night
+}
+
+private fun folderCoverKind(folderName: String): FolderCoverKind {
+    val name = folderName.lowercase()
+    return when {
+        "camera" in name || "相机" in folderName -> FolderCoverKind.Lens
+        "download" in name || "movie" in name || "电影" in folderName -> FolderCoverKind.Theater
+        "夜" in folderName -> FolderCoverKind.Night
+        else -> FolderCoverKind.Mountain
+    }
+}
+
+private fun folderCoverGradient(kind: FolderCoverKind): List<Color> {
+    return when (kind) {
+        FolderCoverKind.Lens -> listOf(Color(0xFF4A183D), Color(0xFF0D333A), Color(0xFF050506))
+        FolderCoverKind.Theater -> listOf(Color(0xFF402412), Color(0xFF171011), Color(0xFF050506))
+        FolderCoverKind.Mountain -> listOf(Color(0xFF293752), Color(0xFF12182A), Color(0xFF050506))
+        FolderCoverKind.Night -> listOf(Color(0xFF172653), Color(0xFF12111D), Color(0xFF050506))
+    }
+}
+
+private fun folderMetaText(item: VideoFolderUiModel): String {
+    val totalSize = item.videos.sumOf { it.size.coerceAtLeast(0L) }
+    return "${item.videos.size} 个视频 · ${formatByteCount(totalSize)}"
+}
+
+private fun formatByteCount(bytes: Long): String {
+    if (bytes <= 0L) return "0 KB"
+    val units = listOf("B", "KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unitIndex = 0
+    while (value >= 1024 && unitIndex < units.lastIndex) {
+        value /= 1024
+        unitIndex += 1
+    }
+    return if (unitIndex == 0) {
+        "${bytes} B"
+    } else {
+        "${"%.1f".format(value)} ${units[unitIndex]}"
+    }
+}
+
+private fun loadFolderPreviewBitmap(
+    context: android.content.Context,
+    uri: String
+): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, Uri.parse(uri))
+        val durationMs = retriever
+            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLongOrNull()
+            ?: 0L
+        val targetUs = when {
+            durationMs >= 8_000L -> 3_000_000L
+            durationMs > 0L -> (durationMs / 2) * 1_000L
+            else -> 1_000_000L
+        }
+        retriever.getFrameAtTime(
+            targetUs,
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+        ) ?: retriever.getFrameAtTime(
+            0L,
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+        )
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
     }
 }
 

@@ -56,9 +56,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -1926,7 +1928,10 @@ private fun MainBottomBar(navController: NavController) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
-    NavigationBar {
+    NavigationBar(
+        containerColor = Color(0xFF08080C),
+        tonalElevation = 0.dp
+    ) {
         MainTabs.forEach { tab ->
             NavigationBarItem(
                 selected = currentRoute == tab.route,
@@ -1942,7 +1947,14 @@ private fun MainBottomBar(navController: NavController) {
                     }
                 },
                 icon = { Text(tab.iconText) },
-                label = { Text(tab.label) }
+                label = { Text(tab.label) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = Color(0xFFF6F3FF),
+                    selectedTextColor = Color(0xFFF6F3FF),
+                    indicatorColor = Color(0xFF6F4BEF).copy(alpha = 0.84f),
+                    unselectedIconColor = Color(0xFFA8A1B8),
+                    unselectedTextColor = Color(0xFFA8A1B8)
+                )
             )
         }
     }
