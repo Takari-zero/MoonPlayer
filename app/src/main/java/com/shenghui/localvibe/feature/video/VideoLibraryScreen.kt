@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -268,12 +269,12 @@ fun VideoLibraryScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(
-                                        ((shownFolders.size + 2) / 3 * 142)
-                                            .coerceAtLeast(142)
+                                        ((shownFolders.size + 2) / 3 * 176)
+                                            .coerceAtLeast(176)
                                             .dp
                                     ),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(24.dp),
                                 userScrollEnabled = false
                             ) {
                                 items(
@@ -1043,57 +1044,58 @@ private fun VideoFolderGridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) VideoPrimary.copy(alpha = 0.08f) else Color.Transparent)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
-            ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) VideoPrimary.copy(alpha = 0.1f) else VideoCard.copy(alpha = 0.9f)
-        ),
-        border = BorderStroke(
-            1.dp,
-            if (isSelected) VideoPrimary.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.04f)
-        )
+            )
     ) {
+        Box {
+            FolderPreview(
+                folderName = item.folder.name,
+                previewUri = item.videos.firstOrNull()?.uri,
+                videoCount = item.videos.size,
+                compact = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.12f),
+                useDefaultSize = false
+            )
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelected() },
+                    modifier = Modifier.align(Alignment.TopStart)
+                )
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 9.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(top = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Box {
-                FolderPreview(
-                    folderName = item.folder.name,
-                    previewUri = item.videos.firstOrNull()?.uri,
-                    videoCount = item.videos.size,
-                    compact = true
-                )
-                if (isSelectionMode) {
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = { onToggleSelected() },
-                        modifier = Modifier.align(Alignment.TopStart)
-                    )
-                }
-            }
             Text(
                 text = item.folder.name,
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = VideoTextPrimary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Start
             )
             Text(
                 text = folderMetaText(item),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                 color = VideoTextSecondary,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -1104,12 +1106,15 @@ private fun FolderPreview(
     folderName: String,
     previewUri: String?,
     videoCount: Int,
-    compact: Boolean
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    useDefaultSize: Boolean = true,
+    showCountBadge: Boolean = false
 ) {
     val coverKind = remember(folderName) { folderCoverKind(folderName) }
     val context = LocalContext.current
     val thumbnail by produceState<Bitmap?>(initialValue = null, previewUri, compact) {
-        value = if (compact || previewUri.isNullOrBlank()) {
+        value = if (previewUri.isNullOrBlank()) {
             null
         } else {
             withContext(Dispatchers.IO) {
@@ -1118,8 +1123,17 @@ private fun FolderPreview(
         }
     }
     Box(
-        modifier = Modifier
-            .size(width = if (compact) 88.dp else 104.dp, height = if (compact) 56.dp else 58.dp)
+        modifier = modifier
+            .then(
+                if (useDefaultSize) {
+                    Modifier.size(
+                        width = if (compact) 88.dp else 104.dp,
+                        height = if (compact) 56.dp else 58.dp
+                    )
+                } else {
+                    Modifier
+                }
+            )
             .clip(RoundedCornerShape(9.dp))
             .background(
                 Brush.linearGradient(
@@ -1149,7 +1163,7 @@ private fun FolderPreview(
             tint = VideoTextPrimary.copy(alpha = if (compact) 0.1f else 0.08f),
             modifier = Modifier.size(if (compact) 20.dp else 18.dp)
         )
-        if (compact && videoCount > 0) {
+        if (showCountBadge && videoCount > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
