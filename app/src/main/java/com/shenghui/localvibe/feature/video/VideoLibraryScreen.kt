@@ -170,7 +170,9 @@ fun VideoLibraryScreen(
                         Toast.makeText(context, "暂无可继续播放的视频", Toast.LENGTH_SHORT).show()
                     }
                 },
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier
+                    .padding(end = 10.dp)
+                    .size(44.dp),
                 containerColor = VideoAccent.copy(alpha = 0.78f),
                 contentColor = VideoTextPrimary,
                 shape = CircleShape
@@ -192,6 +194,8 @@ fun VideoLibraryScreen(
             Column(modifier = Modifier.fillMaxSize()) {
                 VideoHeader(
                     isSearching = isSearching,
+                    searchKeyword = searchKeyword,
+                    onSearchKeywordChange = { searchKeyword = it },
                     isGridMode = isGridMode,
                     onToggleSearch = {
                         if (isSearching) searchKeyword = ""
@@ -337,24 +341,16 @@ fun VideoLibraryScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .padding(top = 78.dp)
                         .zIndex(8f)
                         .clickable {
                             searchKeyword = ""
                             isSearching = false
                         }
                 )
-                FloatingSearchBar(
-                    value = searchKeyword,
-                    onValueChange = { searchKeyword = it },
-                    placeholder = "搜索视频或文件夹",
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 16.dp, vertical = 58.dp)
-                        .zIndex(9f)
-                )
             }
             if (showMorePanel) {
-                VideoLibraryMorePanel(
+                VideoLibraryMorePanelV2(
                     isGridMode = isGridMode,
                     sortMode = sortMode,
                     onDismiss = { showMorePanel = false },
@@ -405,6 +401,8 @@ fun VideoLibraryScreen(
 @Composable
 private fun VideoHeader(
     isSearching: Boolean,
+    searchKeyword: String,
+    onSearchKeywordChange: (String) -> Unit,
     isGridMode: Boolean,
     onToggleSearch: () -> Unit,
     onAddFolder: () -> Unit,
@@ -414,6 +412,7 @@ private fun VideoHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .zIndex(2f)
             .background(VideoBackground)
             .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -423,21 +422,12 @@ private fun VideoHeader(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(
-                    text = "视频",
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontSize = 29.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    color = VideoTextPrimary
-                )
-                Text(
-                    text = "本地视频",
-                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
-                    color = VideoTextMuted
-                )
-            }
+            VideoHeaderTitleOrSearch(
+                isSearching = isSearching,
+                searchKeyword = searchKeyword,
+                onSearchKeywordChange = onSearchKeywordChange,
+                modifier = Modifier.weight(1f)
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 HeaderIconButton(
                     icon = Icons.Filled.Search,
@@ -462,6 +452,51 @@ private fun VideoHeader(
                     onClick = onMore
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun VideoHeaderTitleOrSearch(
+    isSearching: Boolean,
+    searchKeyword: String,
+    onSearchKeywordChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (isSearching) {
+        androidx.compose.material3.OutlinedTextField(
+            value = searchKeyword,
+            onValueChange = onSearchKeywordChange,
+            modifier = modifier
+                .padding(end = 10.dp)
+                .height(48.dp),
+            singleLine = true,
+            placeholder = {
+                Text(
+                    text = "\u641c\u7d22\u89c6\u9891\u6216\u6587\u4ef6\u5939",
+                    color = VideoTextMuted,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        )
+    } else {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = "\u89c6\u9891",
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    fontSize = 29.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = VideoTextPrimary
+            )
+            Text(
+                text = "\u672c\u5730\u89c6\u9891",
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
+                color = VideoTextMuted
+            )
         }
     }
 }
@@ -787,6 +822,236 @@ private fun PanelDivider() {
             .height(1.dp)
             .background(VideoDivider.copy(alpha = 0.9f))
     )
+}
+
+@Composable
+private fun VideoLibraryMorePanelV2(
+    isGridMode: Boolean,
+    sortMode: VideoLibrarySortMode,
+    onDismiss: () -> Unit,
+    onSearch: () -> Unit,
+    onListMode: () -> Unit,
+    onGridMode: () -> Unit,
+    onAddFolder: () -> Unit,
+    onRescan: () -> Unit,
+    onSortByName: () -> Unit,
+    onSortByCount: () -> Unit,
+    onMultiDelete: () -> Unit,
+    onMore: () -> Unit
+) {
+    var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
+    var showThumbnail by rememberSaveable { mutableStateOf(true) }
+    var showDuration by rememberSaveable { mutableStateOf(true) }
+    var showExtension by rememberSaveable { mutableStateOf(false) }
+    var showPlayTime by rememberSaveable { mutableStateOf(false) }
+    var showPath by rememberSaveable { mutableStateOf(false) }
+    var showSize by rememberSaveable { mutableStateOf(false) }
+    var showDurationOnThumbnail by rememberSaveable { mutableStateOf(true) }
+    var showHiddenFiles by rememberSaveable { mutableStateOf(false) }
+    var recognizeNoMedia by rememberSaveable { mutableStateOf(true) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.72f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .width(304.dp)
+                .clickable(onClick = {}),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xF214141C)),
+            border = BorderStroke(1.dp, Color(0xFF5B526F).copy(alpha = 0.72f))
+        ) {
+            Column {
+                Column(
+                    modifier = Modifier
+                        .padding(start = 16.dp, top = 18.dp, end = 16.dp, bottom = 10.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = "\u66f4\u591a",
+                            color = VideoTextPrimary,
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Text(
+                            text = "\u89c6\u9891\u4e3b\u9875\u8bbe\u7f6e",
+                            color = VideoTextSecondary,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+
+                    MorePanelSectionTitle("\u89c6\u56fe")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        MorePanelOptionV2(Icons.Filled.ViewList, "\u5217\u8868", !isGridMode, onListMode, Modifier.weight(1f))
+                        MorePanelOptionV2(Icons.Filled.GridView, "\u7f51\u683c", isGridMode, onGridMode, Modifier.weight(1f))
+                    }
+
+                    PanelDivider()
+                    MorePanelSectionTitle("\u6392\u5e8f")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        MorePanelOptionV2(Icons.Filled.SortByAlpha, "\u540d\u79f0", sortMode == VideoLibrarySortMode.NAME, onSortByName, Modifier.weight(1f))
+                        MorePanelOptionV2(Icons.Filled.Movie, "\u6570\u91cf", sortMode == VideoLibrarySortMode.COUNT, onSortByCount, Modifier.weight(1f))
+                    }
+
+                    PanelDivider()
+                    MorePanelSectionTitle("\u64cd\u4f5c")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        MorePanelOptionV2(Icons.Filled.Search, "\u641c\u7d22", false, onSearch, Modifier.weight(1f))
+                        MorePanelOptionV2(Icons.Filled.CreateNewFolder, "\u6dfb\u52a0", false, onAddFolder, Modifier.weight(1f))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        MorePanelOptionV2(Icons.Filled.Schedule, "\u591a\u9009", false, onMultiDelete, Modifier.weight(1f))
+                        MorePanelOptionV2(Icons.Filled.Refresh, "\u91cd\u626b", false, onRescan, Modifier.weight(1f))
+                    }
+                }
+
+                PanelDivider()
+                Row(modifier = Modifier.height(50.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("\u53d6\u6d88", color = VideoTextPrimary, style = MaterialTheme.typography.bodyLarge)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(50.dp)
+                            .background(VideoDivider.copy(alpha = 0.95f))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "\u5b8c\u6210",
+                            color = VideoPrimary,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MorePanelSectionTitle(text: String) {
+    Text(
+        text = text,
+        color = VideoTextSecondary,
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.padding(start = 2.dp, top = 1.dp)
+    )
+}
+
+@Composable
+private fun VideoPanelExpandableHeaderV2(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    expanded: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .background(Color.White.copy(alpha = 0.055f))
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, tint = VideoPrimarySoft, modifier = Modifier.size(17.dp))
+            Text(title, color = VideoTextPrimary, style = MaterialTheme.typography.bodyMedium)
+        }
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = VideoTextSecondary,
+            modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+@Composable
+private fun MorePanelOptionV2(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .height(66.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (selected) {
+                    VideoPrimary.copy(alpha = 0.26f)
+                } else {
+                    Color.White.copy(alpha = 0.055f)
+                }
+            )
+            .then(
+                if (selected) {
+                    Modifier
+                } else {
+                    Modifier
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (selected) VideoPrimarySoft else VideoTextSecondary.copy(alpha = 0.92f),
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = label,
+            color = if (selected) VideoPrimarySoft else VideoTextSecondary,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }
 
 @Composable
@@ -1157,12 +1422,6 @@ private fun FolderPreview(
         } else {
             FolderPreviewArtwork(coverKind = coverKind, compact = compact)
         }
-        Icon(
-            Icons.Filled.PlayArrow,
-            contentDescription = null,
-            tint = VideoTextPrimary.copy(alpha = if (compact) 0.1f else 0.08f),
-            modifier = Modifier.size(if (compact) 20.dp else 18.dp)
-        )
         if (showCountBadge && videoCount > 0) {
             Box(
                 modifier = Modifier
@@ -1219,57 +1478,79 @@ private fun FolderText(
 @Composable
 private fun FolderPreviewArtwork(coverKind: FolderCoverKind, compact: Boolean) {
     Canvas(modifier = Modifier.fillMaxSize()) {
-        when (coverKind) {
-            FolderCoverKind.Lens -> {
-                drawCircle(Color(0xFFE86BCD).copy(alpha = 0.24f), radius = size.minDimension * 0.48f, center = Offset(size.width * 0.33f, size.height * 0.52f))
-                drawCircle(Color(0xFF4CD7EA).copy(alpha = 0.18f), radius = size.minDimension * 0.38f, center = Offset(size.width * 0.52f, size.height * 0.48f))
-                drawCircle(Color.Black.copy(alpha = 0.6f), radius = size.minDimension * 0.28f, center = Offset(size.width * 0.45f, size.height * 0.5f))
-                drawCircle(Color.White.copy(alpha = 0.24f), radius = size.minDimension * 0.22f, center = Offset(size.width * 0.45f, size.height * 0.5f), style = Stroke(width = 1.6f))
-                drawCircle(Color.White.copy(alpha = 0.2f), radius = size.minDimension * 0.055f, center = Offset(size.width * 0.39f, size.height * 0.42f))
-                drawRect(Color.Black.copy(alpha = 0.22f), topLeft = Offset(size.width * 0.72f, 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.28f, size.height))
-            }
-            FolderCoverKind.Theater -> {
-                drawCircle(Color(0xFFFFC06A).copy(alpha = 0.3f), radius = size.minDimension * 0.38f, center = Offset(size.width * 0.52f, size.height * 0.08f))
-                drawRect(Color.Black.copy(alpha = 0.18f), topLeft = Offset(0f, size.height * 0.32f), size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.68f))
-                repeat(5) { line ->
-                    val y = size.height * (0.42f + line * 0.085f)
-                    drawLine(Color(0xFFFF8A45).copy(alpha = 0.16f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-                }
-                repeat(3) { row ->
-                    val y = size.height * (0.54f + row * 0.11f)
-                    repeat(5) { col ->
-                        val x = size.width * (0.08f + col * 0.19f)
-                        drawRoundRect(
-                            Color(0xFFD45B37).copy(alpha = 0.28f),
-                            topLeft = Offset(x, y),
-                            size = androidx.compose.ui.geometry.Size(size.width * 0.14f, size.height * 0.07f),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f)
-                        )
-                    }
-                }
-            }
-            FolderCoverKind.Mountain -> {
-                drawCircle(Color(0xFFD7E2FF).copy(alpha = 0.14f), radius = size.minDimension * 0.16f, center = Offset(size.width * 0.8f, size.height * 0.24f))
-                drawLine(Color(0xFFE4EAFF).copy(alpha = 0.32f), Offset(size.width * 0.02f, size.height * 0.74f), Offset(size.width * 0.33f, size.height * 0.34f), strokeWidth = 2.6f)
-                drawLine(Color(0xFFE4EAFF).copy(alpha = 0.32f), Offset(size.width * 0.33f, size.height * 0.34f), Offset(size.width * 0.58f, size.height * 0.72f), strokeWidth = 2.6f)
-                drawLine(Color(0xFFBDA7FF).copy(alpha = 0.26f), Offset(size.width * 0.34f, size.height * 0.74f), Offset(size.width * 0.66f, size.height * 0.32f), strokeWidth = 2.5f)
-                drawLine(Color(0xFFBDA7FF).copy(alpha = 0.26f), Offset(size.width * 0.66f, size.height * 0.32f), Offset(size.width * 0.98f, size.height * 0.74f), strokeWidth = 2.5f)
-                drawRect(Color.Black.copy(alpha = 0.2f), topLeft = Offset(0f, size.height * 0.72f), size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.28f))
-            }
-            FolderCoverKind.Night -> {
-                drawCircle(Color(0xFFE3DFFF).copy(alpha = 0.28f), radius = size.minDimension * 0.14f, center = Offset(size.width * 0.78f, size.height * 0.24f))
-                drawCircle(Color(0xFF172653).copy(alpha = 0.94f), radius = size.minDimension * 0.11f, center = Offset(size.width * 0.73f, size.height * 0.2f))
-                repeat(5) { index ->
-                    val x = size.width * (0.08f + index * 0.18f)
-                    drawRect(
-                        Color(0xFF262B42).copy(alpha = 0.82f),
-                        topLeft = Offset(x, size.height * (0.5f - index % 2 * 0.08f)),
-                        size = androidx.compose.ui.geometry.Size(size.width * 0.1f, size.height * 0.28f)
-                    )
-                }
-                drawLine(Color(0xFFBDA7FF).copy(alpha = 0.22f), Offset(0f, size.height * 0.78f), Offset(size.width, size.height * 0.78f), strokeWidth = 1.4f)
-            }
+        val center = Offset(size.width * 0.52f, size.height * 0.48f)
+        val moonRadius = size.minDimension * if (compact) 0.34f else 0.32f
+
+        drawRect(
+            Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF050509),
+                    Color(0xFF151023),
+                    Color(0xFF050509)
+                ),
+                start = Offset.Zero,
+                end = Offset(size.width, size.height)
+            )
+        )
+        drawCircle(
+            Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFBC74FF).copy(alpha = 0.5f),
+                    Color(0xFF7C4BEF).copy(alpha = 0.18f),
+                    Color.Transparent
+                ),
+                center = Offset(center.x + moonRadius * 0.28f, center.y),
+                radius = moonRadius * 1.75f
+            ),
+            radius = moonRadius * 1.75f,
+            center = Offset(center.x + moonRadius * 0.28f, center.y)
+        )
+        repeat(9) { index ->
+            val y = size.height * (0.18f + index * 0.07f)
+            val alpha = if (index % 2 == 0) 0.12f else 0.07f
+            drawLine(
+                Color(0xFFB78AFF).copy(alpha = alpha),
+                Offset(size.width * 0.12f, y),
+                Offset(size.width * 0.9f, y + size.height * 0.02f),
+                strokeWidth = 1f
+            )
         }
+        drawCircle(
+            Color(0xFF06050A),
+            radius = moonRadius,
+            center = center
+        )
+        drawCircle(
+            Color(0xFFE6B8FF).copy(alpha = 0.42f),
+            radius = moonRadius,
+            center = center,
+            style = Stroke(width = size.minDimension * 0.018f)
+        )
+        drawCircle(
+            Color(0xFFD787FF).copy(alpha = 0.28f),
+            radius = moonRadius * 1.05f,
+            center = center,
+            style = Stroke(width = size.minDimension * 0.012f)
+        )
+        drawCircle(
+            Color(0xFF06050A).copy(alpha = 0.88f),
+            radius = moonRadius * 0.96f,
+            center = Offset(center.x - moonRadius * 0.08f, center.y - moonRadius * 0.02f)
+        )
+        val frameColor = Color(0xFFC58AFF).copy(alpha = if (compact) 0.26f else 0.22f)
+        val insetX = size.width * 0.12f
+        val insetY = size.height * 0.14f
+        val frameW = size.width * 0.17f
+        val frameH = size.height * 0.16f
+        val stroke = size.minDimension * 0.012f
+        drawLine(frameColor, Offset(insetX, insetY), Offset(insetX + frameW, insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(insetX, insetY), Offset(insetX, insetY + frameH), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, insetY), Offset(size.width - insetX - frameW, insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, insetY), Offset(size.width - insetX, insetY + frameH), strokeWidth = stroke)
+        drawLine(frameColor, Offset(insetX, size.height - insetY), Offset(insetX + frameW, size.height - insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(insetX, size.height - insetY), Offset(insetX, size.height - insetY - frameH), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, size.height - insetY), Offset(size.width - insetX - frameW, size.height - insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, size.height - insetY), Offset(size.width - insetX, size.height - insetY - frameH), strokeWidth = stroke)
         if (!compact) {
             drawRect(
                 Color.Black.copy(alpha = 0.14f),
