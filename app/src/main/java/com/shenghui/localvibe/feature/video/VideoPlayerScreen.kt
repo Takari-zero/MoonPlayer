@@ -24,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +40,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,10 +51,11 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Loop
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -243,6 +246,8 @@ private fun LocalVideoPlayer(
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
     var isPortraitPlayback by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSavingScreenshot by remember { mutableStateOf(false) }
+    var isQuickToolsExpanded by remember { mutableStateOf(false) }
+    var showLockedUnlockButton by remember(mediaFile.uri) { mutableStateOf(false) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -327,10 +332,10 @@ private fun LocalVideoPlayer(
             seekPreviewOverlay = null
         }
     }
-    LaunchedEffect(showControls, isSpeedPanelVisible, isScreenLocked) {
-        if (showControls && !isSpeedPanelVisible && !isScreenLocked) {
+    LaunchedEffect(showControls, isSpeedPanelVisible, isScreenLocked, isQuickToolsExpanded) {
+        if (showControls && !isSpeedPanelVisible && !isScreenLocked && !isQuickToolsExpanded) {
             delay(2_000)
-            if (!isSpeedPanelVisible && !isScreenLocked) {
+            if (!isSpeedPanelVisible && !isScreenLocked && !isQuickToolsExpanded) {
                 showControls = false
             }
         }
@@ -344,10 +349,21 @@ private fun LocalVideoPlayer(
             gestureOverlay = null
             seekPreviewOverlay = null
             resizeModeOverlay = null
+            isQuickToolsExpanded = false
+            showLockedUnlockButton = true
+        } else {
+            showLockedUnlockButton = false
+        }
+    }
+    LaunchedEffect(isScreenLocked, showLockedUnlockButton) {
+        if (isScreenLocked && showLockedUnlockButton) {
+            delay(LOCKED_UNLOCK_HINT_MS)
+            showLockedUnlockButton = false
         }
     }
     BackHandler(enabled = isScreenLocked) {
         isScreenLocked = false
+        showLockedUnlockButton = false
         showControls = true
         showVideoPlayerToast(context, "已解锁")
     }
@@ -402,17 +418,21 @@ private fun LocalVideoPlayer(
     Box(
         modifier = modifier
             .background(Color.Black)
-            .pointerInput(isScreenLocked, isSpeedPanelVisible) {
+            .pointerInput(isScreenLocked, isSpeedPanelVisible, showControls, isQuickToolsExpanded) {
                 detectTapGestures(
                     onTap = {
                         if (isScreenLocked) {
+                            showLockedUnlockButton = true
                             return@detectTapGestures
                         }
                         if (isSpeedPanelVisible) {
                             isSpeedPanelVisible = false
                             showControls = true
+                        } else if (showControls) {
+                            showControls = false
+                            isQuickToolsExpanded = false
                         } else {
-                            showControls = !showControls
+                            showControls = true
                         }
                     }
                 )
@@ -603,17 +623,22 @@ private fun LocalVideoPlayer(
                 },
                 onLockScreen = {
                     isScreenLocked = true
+                    isQuickToolsExpanded = false
+                    showLockedUnlockButton = true
                     showVideoPlayerToast(context, "已锁定")
                 },
-                onSpeedPanelVisibilityChange = { isSpeedPanelVisible = it }
+                onSpeedPanelVisibilityChange = { isSpeedPanelVisible = it },
+                isQuickToolsExpanded = isQuickToolsExpanded,
+                onQuickToolsExpandedChange = { isQuickToolsExpanded = it }
             )
         }
 
-        if (isScreenLocked) {
+        if (isScreenLocked && showLockedUnlockButton) {
             VideoScreenLockButton(
                 locked = true,
                 onClick = {
                     isScreenLocked = false
+                    showLockedUnlockButton = false
                     showControls = true
                     showVideoPlayerToast(context, "已解锁")
                 },
@@ -783,10 +808,12 @@ private fun VideoControlOverlay(
     isPortraitPlayback: Boolean,
     onToggleOrientation: () -> Unit,
     onLockScreen: () -> Unit,
-    onSpeedPanelVisibilityChange: (Boolean) -> Unit
+    onSpeedPanelVisibilityChange: (Boolean) -> Unit,
+    isQuickToolsExpanded: Boolean,
+    onQuickToolsExpandedChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
-    var moreMenuExpanded by remember { mutableStateOf(false) }
+    val quickToolsScrollState = rememberScrollState()
     var showSpeedPanel by remember { mutableStateOf(false) }
     var showResizePanel by remember { mutableStateOf(false) }
     var showAudioDelayPanel by remember { mutableStateOf(false) }
@@ -817,7 +844,7 @@ private fun VideoControlOverlay(
             showEqualizerPanel -> showEqualizerPanel = false
             showSpeedPanel -> showSpeedPanel = false
             showResizePanel -> showResizePanel = false
-            moreMenuExpanded -> moreMenuExpanded = false
+            isQuickToolsExpanded -> onQuickToolsExpandedChange(false)
             else -> onBack()
         }
     }
@@ -825,7 +852,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showAudioDelayPanel, showSubtitlePanel, showEqualizerPanel, showSpeedPanel, showResizePanel, moreMenuExpanded) {
+            .pointerInput(showAudioDelayPanel, showSubtitlePanel, showEqualizerPanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -871,36 +898,12 @@ private fun VideoControlOverlay(
                         Icon(Icons.Filled.Subtitles, contentDescription = "外挂字幕", tint = Color.White)
                     }
                     Box {
-                        IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
+                        IconButton(onClick = { onQuickToolsExpandedChange(!isQuickToolsExpanded) }) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
                         }
                     }
                 }
             }
-        }
-
-        if (moreMenuExpanded && !showSpeedPanel) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable { moreMenuExpanded = false }
-            )
-            VideoToolPanel(
-                playbackSpeed = playbackSpeed,
-                isRepeatOne = isRepeatOne,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 18.dp),
-                onToolClick = { label ->
-                    moreMenuExpanded = false
-                    when (label) {
-                        "倍速" -> showSpeedPanel = true
-                        "循环" -> onToggleRepeat()
-                        "解码" -> showVideoPlayerToast(context, "解码方式后续实现")
-                        "截图" -> onScreenshot()
-                    }
-                }
-            )
         }
 
         if (showSpeedPanel) {
@@ -977,8 +980,9 @@ private fun VideoControlOverlay(
             Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 42.dp, top = 72.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(start = 42.dp, end = 16.dp, top = 72.dp)
+                    .horizontalScroll(quickToolsScrollState),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 VideoQuickToolButton(
@@ -989,23 +993,58 @@ private fun VideoControlOverlay(
                 VideoQuickToolButton(
                     icon = Icons.Filled.Speed,
                     label = "${playbackSpeed.formatSpeed()}x",
-                    onClick = { showSpeedPanel = true }
+                    onClick = {
+                        showSpeedPanel = true
+                    }
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.ScreenRotation,
                     label = if (isPortraitPlayback) "横屏" else "竖屏",
-                    onClick = onToggleOrientation
+                    onClick = {
+                        onToggleOrientation()
+                    }
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.PhotoCamera,
                     label = "截图",
-                    onClick = onScreenshot
+                    onClick = {
+                        onScreenshot()
+                    }
                 )
-                VideoQuickToolButton(
-                    icon = Icons.Filled.MoreHoriz,
-                    label = "更多",
-                    onClick = { moreMenuExpanded = true }
-                )
+                if (isQuickToolsExpanded) {
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Settings,
+                        label = "解码",
+                        onClick = {
+                            showVideoPlayerToast(context, "解码方式后续实现")
+                        }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Audiotrack,
+                        label = "音轨",
+                        onClick = {
+                            showAudioDelayPanel = true
+                        }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Subtitles,
+                        label = "字幕",
+                        onClick = {
+                            showSubtitlePanel = true
+                        }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.KeyboardArrowLeft,
+                        label = "收起",
+                        onClick = { onQuickToolsExpandedChange(false) }
+                    )
+                } else {
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.KeyboardArrowRight,
+                        label = "展开更多工具",
+                        onClick = { onQuickToolsExpandedChange(true) }
+                    )
+                }
             }
 
             Column(
@@ -1439,6 +1478,13 @@ private fun VideoSpeedSlider(
 
     BoxWithConstraints(
         modifier = modifier
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val nextSpeed = xToSpeed(offset.x, size.width)
+                    onSpeedPreview(nextSpeed)
+                    onSpeedCommit(nextSpeed)
+                }
+            }
             .pointerInput(Unit) {
                 var pendingSpeed = speed.normalizeVideoSpeed()
                 detectDragGestures(
@@ -2020,8 +2066,9 @@ private const val FINISHED_THRESHOLD_MS = 5_000L
 private const val MIN_VIDEO_SPEED = 0.25f
 private const val MAX_VIDEO_SPEED = 5f
 private const val VIDEO_SPEED_STEP = 0.01f
-private const val VIDEO_SPEED_REPEAT_INITIAL_DELAY_MS = 120L
-private const val VIDEO_SPEED_REPEAT_INTERVAL_MS = 100L
+private const val VIDEO_SPEED_REPEAT_INITIAL_DELAY_MS = 80L
+private const val VIDEO_SPEED_REPEAT_INTERVAL_MS = 50L
+private const val LOCKED_UNLOCK_HINT_MS = 1_500L
 private const val SHORT_HINT_MS = 900L
 private const val GESTURE_HINT_MS = 650L
 private const val ERROR_HINT_MS = 1_400L
