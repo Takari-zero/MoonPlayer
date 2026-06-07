@@ -863,10 +863,10 @@ private fun VideoControlOverlay(
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     IconButton(onClick = { showAudioDelayPanel = true }) {
-                        Icon(Icons.Filled.Audiotrack, contentDescription = "音轨", tint = Color.White)
+                        Icon(Icons.Filled.Audiotrack, contentDescription = "音轨同步", tint = Color.White)
                     }
                     IconButton(onClick = { showSubtitlePanel = true }) {
-                        Icon(Icons.Filled.Subtitles, contentDescription = "字幕", tint = Color.White)
+                        Icon(Icons.Filled.Subtitles, contentDescription = "外挂字幕", tint = Color.White)
                     }
                     Box {
                         IconButton(onClick = { moreMenuExpanded = !moreMenuExpanded }) {
@@ -896,7 +896,6 @@ private fun VideoControlOverlay(
                         "循环" -> onToggleRepeat()
                         "解码" -> Toast.makeText(context, "解码方式后续实现", Toast.LENGTH_SHORT).show()
                         "截图" -> onScreenshot()
-                        else -> Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -982,8 +981,8 @@ private fun VideoControlOverlay(
             ) {
                 VideoQuickToolButton(
                     icon = Icons.Filled.Tune,
-                    label = "均衡器",
-                    onClick = { showEqualizerPanel = true }
+                    label = "调节",
+                    onClick = { Toast.makeText(context, "均衡器后续实现", Toast.LENGTH_SHORT).show() }
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.Speed,
@@ -1076,11 +1075,10 @@ private fun VideoToolPanel(
     modifier: Modifier = Modifier
 ) {
     val tools = listOf(
-        VideoToolAction("解码", "自动", Icons.Filled.Settings),
+        VideoToolAction("解码", "后续", Icons.Filled.Settings, enabled = false),
         VideoToolAction("倍速", "${playbackSpeed.formatSpeed()}x", Icons.Filled.Speed),
         VideoToolAction("循环", if (isRepeatOne) "开启" else "关闭", Icons.Filled.Loop),
-        VideoToolAction("截图", null, Icons.Filled.PhotoCamera),
-        VideoToolAction("更多", null, Icons.Filled.MoreHoriz)
+        VideoToolAction("截图", "可用", Icons.Filled.PhotoCamera)
     )
     Column(
         modifier = modifier
@@ -1100,6 +1098,7 @@ private fun VideoToolPanel(
                         label = tool.label,
                         value = tool.value,
                         icon = tool.icon,
+                        enabled = tool.enabled,
                         onClick = { onToolClick(tool.label) }
                     )
                 }
@@ -1112,8 +1111,10 @@ private fun VideoToolItem(
     label: String,
     value: String? = null,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
+    val itemAlpha = if (enabled) 1f else 0.48f
     Column(
         modifier = Modifier
             .width(58.dp)
@@ -1126,19 +1127,22 @@ private fun VideoToolItem(
         Box(
             modifier = Modifier
                 .size(36.dp)
-                .background(Color(0xFF151E2B), CircleShape),
+                .background(
+                    if (enabled) Color(0xFF151E2B) else Color(0xFF11151D),
+                    CircleShape
+                ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = Color(0xFF8AB6FF),
+                tint = if (enabled) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.42f),
                 modifier = Modifier.size(20.dp)
             )
         }
         Text(
             text = value?.let { "$label\n$it" } ?: label,
-            color = Color.White.copy(alpha = 0.86f),
+            color = Color.White.copy(alpha = 0.86f * itemAlpha),
             style = MaterialTheme.typography.labelSmall,
             maxLines = 2,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1187,26 +1191,25 @@ private fun AudioDelayPanel(
     SidePanelShell(title = "音轨同步", onDismiss = onDismiss, modifier = modifier.width(260.dp)) {
         Text(
             text = "当前偏移 ${formatSignedDelay(delayMs)}",
-            color = Color.White.copy(alpha = 0.78f),
+            color = Color.White.copy(alpha = 0.58f),
             style = MaterialTheme.typography.bodySmall
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(-500L, -100L, 0L, 100L, 500L).forEach { delta ->
                 Text(
                     text = if (delta == 0L) "归零" else formatSignedDelay(delta),
-                    color = if (delta == 0L) Color(0xFF8AB6FF) else Color.White,
+                    color = Color.White.copy(alpha = 0.42f),
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .clickable { if (delta == 0L) onChange(0L) else onChange(delayMs + delta) }
+                        .background(Color.White.copy(alpha = 0.05f))
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelSmall
                 )
             }
         }
         Text(
-            text = "负数表示声音提前，正数表示声音延后。本版先保存偏移设置，底层真实延迟后续专项接入。",
-            color = Color.White.copy(alpha = 0.58f),
+            text = "音轨切换和音轨同步/偏移后续实现，当前不会修改真实播放音轨。",
+            color = Color.White.copy(alpha = 0.62f),
             style = MaterialTheme.typography.labelSmall
         )
     }
@@ -1793,7 +1796,8 @@ private enum class VideoResizeMode(
 private data class VideoToolAction(
     val label: String,
     val value: String?,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val enabled: Boolean = true
 )
 
 private data class VideoSeekPreview(
