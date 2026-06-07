@@ -1079,6 +1079,12 @@ private fun VideoControlOverlay(
                         onClick = { showFutureTool("视频信息") }
                     )
                     VideoQuickToolButton(
+                        icon = Icons.Filled.Settings,
+                        label = "队列",
+                        isFuture = true,
+                        onClick = { showFutureTool("播放列表") }
+                    )
+                    VideoQuickToolButton(
                         icon = Icons.Filled.Loop,
                         label = "AB",
                         isFuture = true,
