@@ -3,6 +3,7 @@ package com.shenghui.localvibe.feature.folder
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
@@ -36,6 +38,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,8 +55,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -87,7 +93,9 @@ fun FolderScreen(
     videoMetadataCache: Map<String, VideoMetadata> = emptyMap(),
     onVideoMetadataLoaded: (String, VideoMetadata) -> Unit = { _, _ -> },
     audioProgressMap: Map<String, Long>,
+    recentVideoFile: LocalMediaFile? = null,
     onOpenVideo: (LocalMediaFile) -> Unit,
+    onContinueVideo: (LocalMediaFile) -> Unit = {},
     onOpenAudio: (LocalMediaFile) -> Unit,
     onRemoveFile: (LocalMediaFile) -> Unit,
     onDeleteFile: (LocalMediaFile) -> Unit,
@@ -154,6 +162,31 @@ fun FolderScreen(
             Color(0xFF05070D)
         } else {
             MaterialTheme.colorScheme.background
+        },
+        floatingActionButton = {
+            if (targetType == LocalMediaType.VIDEO) {
+                FloatingActionButton(
+                    onClick = {
+                        if (recentVideoFile != null) {
+                            onContinueVideo(recentVideoFile)
+                        } else {
+                            Toast.makeText(context, "暂无可继续播放的视频", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .padding(end = 10.dp, bottom = 72.dp)
+                        .size(52.dp),
+                    containerColor = Color(0xFF6F43F2),
+                    contentColor = Color(0xFFF8F5FF),
+                    shape = CircleShape
+                ) {
+                    Icon(
+                        Icons.Filled.PlayArrow,
+                        contentDescription = "继续播放",
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
         }
     ) { innerPadding ->
         Box(
@@ -207,8 +240,13 @@ fun FolderScreen(
                 )
             } else {
                 if (targetType == LocalMediaType.VIDEO) {
-                    VideoFolderTopBar(
+                    VideoFolderTopBarV2(
                         folderName = folderName.ifBlank { "未命名文件夹" },
+                        videoCount = visibleFiles.size,
+                        totalSize = visibleFiles.sumOf { it.size.coerceAtLeast(0L) },
+                        isSearching = isVideoSearching,
+                        searchKeyword = videoSearchKeyword,
+                        onSearchKeywordChange = { videoSearchKeyword = it },
                         isGridMode = isVideoGridMode,
                         sortMode = videoSortMode,
                         onBack = onBack,
@@ -419,19 +457,12 @@ fun FolderScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .padding(top = 92.dp)
                         .zIndex(8f)
                         .clickable {
                             videoSearchKeyword = ""
                             isVideoSearching = false
                         }
-                )
-                VideoFolderSearchOverlay(
-                    value = videoSearchKeyword,
-                    onValueChange = { videoSearchKeyword = it },
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 18.dp, vertical = 76.dp)
-                        .zIndex(9f)
                 )
             }
         }
@@ -571,6 +602,11 @@ fun FolderScreen(
 @Composable
 private fun VideoFolderTopBar(
     folderName: String,
+    videoCount: Int,
+    totalSize: Long,
+    isSearching: Boolean,
+    searchKeyword: String,
+    onSearchKeywordChange: (String) -> Unit,
     isGridMode: Boolean,
     sortMode: VideoFolderSortMode,
     onBack: () -> Unit,
@@ -598,18 +634,31 @@ private fun VideoFolderTopBar(
             ) {
                 Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
             }
-            Text(
-                text = folderName,
+            Column(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .fillMaxWidth()
                     .padding(horizontal = 140.dp),
-                color = Color(0xFFF5F7FA),
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = folderName,
+                    color = Color(0xFFF8F5FF),
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "$videoCount 个视频 · ${formatFileSize(totalSize)}",
+                    color = Color(0xFFA7A0B8),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+            }
             Row(
                 modifier = Modifier.align(Alignment.CenterEnd),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -709,6 +758,210 @@ private fun VideoFolderTopBar(
                     .height(1.dp)
                     .background(Color.White.copy(alpha = 0.08f))
             )
+        }
+    }
+}
+
+@Composable
+private fun VideoFolderTopBarV2(
+    folderName: String,
+    videoCount: Int,
+    totalSize: Long,
+    isSearching: Boolean,
+    searchKeyword: String,
+    onSearchKeywordChange: (String) -> Unit,
+    isGridMode: Boolean,
+    sortMode: VideoFolderSortMode,
+    onBack: () -> Unit,
+    onToggleSearch: () -> Unit,
+    onToggleViewMode: () -> Unit,
+    onSortChange: (VideoFolderSortMode) -> Unit,
+    onStartMultiSelect: () -> Unit,
+    onRescanFolder: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .zIndex(2f)
+            .padding(top = 18.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier.size(42.dp)
+        ) {
+            Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color(0xFFCCC5D8))
+        }
+
+        if (isSearching) {
+            androidx.compose.material3.OutlinedTextField(
+                value = searchKeyword,
+                onValueChange = onSearchKeywordChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp, end = 10.dp)
+                    .height(48.dp),
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        text = "\u641c\u7d22\u89c6\u9891",
+                        color = Color(0xFFA7A0B8),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp, end = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = folderName,
+                    color = Color(0xFFF8F5FF),
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "$videoCount \u4e2a\u89c6\u9891 \u00b7 ${formatFileSize(totalSize)}",
+                    color = Color(0xFFA7A0B8),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onToggleSearch,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(Icons.Filled.Search, contentDescription = "搜索", tint = Color(0xFFF8F5FF))
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFF15111F))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { if (isGridMode) onToggleViewMode() },
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(if (!isGridMode) Color(0xFF4A2D83) else Color.Transparent)
+                ) {
+                    Icon(
+                        Icons.Filled.ViewList,
+                        contentDescription = "列表视图",
+                        tint = if (!isGridMode) Color(0xFFF8F5FF) else Color(0xFFBEB7CD)
+                    )
+                }
+                IconButton(
+                    onClick = { if (!isGridMode) onToggleViewMode() },
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(if (isGridMode) Color(0xFF4A2D83) else Color.Transparent)
+                ) {
+                    Icon(
+                        Icons.Filled.GridView,
+                        contentDescription = "网格视图",
+                        tint = if (isGridMode) Color(0xFFF8F5FF) else Color(0xFFBEB7CD)
+                    )
+                }
+            }
+
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                IconButton(
+                    onClick = { expanded = true },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color(0xFFF8F5FF))
+                }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    containerColor = Color(0xFF101722),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("搜索", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onToggleSearch()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isGridMode) "列表视图" else "网格视图", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onToggleViewMode()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (sortMode == VideoFolderSortMode.NAME) "按名称 ✓" else "按名称", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onSortChange(VideoFolderSortMode.NAME)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (sortMode == VideoFolderSortMode.DURATION) "按时长 ✓" else "按时长", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onSortChange(VideoFolderSortMode.DURATION)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (sortMode == VideoFolderSortMode.SIZE) "按大小 ✓" else "按大小", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onSortChange(VideoFolderSortMode.SIZE)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (sortMode == VideoFolderSortMode.PROGRESS) "按进度 ✓" else "按进度", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onSortChange(VideoFolderSortMode.PROGRESS)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("多选删除", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onStartMultiSelect()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("重新扫描当前文件夹", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            onRescanFolder()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("更多功能", color = Color(0xFFF5F7FA)) },
+                        onClick = {
+                            expanded = false
+                            Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -959,6 +1212,13 @@ private fun VideoFileCard(
     onLongPress: () -> Unit
 ) {
     val context = LocalContext.current
+    val progressFraction = videoProgressFraction(progressMs, metadata?.durationMs)
+    val progressPercent = (progressFraction * 100).toInt().coerceIn(0, 99)
+    val progressText = if (progressMs > 0L) {
+        if (progressPercent > 0) "\u5df2\u89c2\u770b $progressPercent%" else "\u5df2\u89c2\u770b"
+    } else {
+        "\u672a\u89c2\u770b"
+    }
     LaunchedEffect(file.id, metadata) {
         if (metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
@@ -985,8 +1245,8 @@ private fun VideoFileCard(
         border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 0.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 0.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (isSelectionMode) {
@@ -995,25 +1255,38 @@ private fun VideoFileCard(
             VideoThumbnail(
                 metadata = metadata,
                 durationMs = metadata?.durationMs,
-                modifier = Modifier.size(width = 104.dp, height = 60.dp)
+                modifier = Modifier.size(width = 150.dp, height = 84.dp)
             )
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
                     text = file.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFFF5F7FA),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFFF8F5FF),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = formatFileSize(file.size),
+                    text = "${formatFileSize(file.size)} \u00b7 $progressText",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFA8B2C2)
+                    color = Color(0xFFA7A0B8)
                 )
-                if (progressMs > 0L) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(Color(0xFF1B1724))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                            .height(2.dp)
+                            .background(Color(0xFF8B52FF))
+                    )
+                }
+                if (false && progressMs > 0L) {
                     Text(
                         text = "上次播放到 ${formatDuration(progressMs)}",
                         style = MaterialTheme.typography.labelSmall,
@@ -1025,11 +1298,17 @@ private fun VideoFileCard(
                 FileMoreMenu(
                     file = file,
                     onRemove = onRemove,
-                    onDelete = onDelete
+                    onDelete = onDelete,
+                    iconTint = Color(0xFF5E576A)
                 )
             }
         }
     }
+}
+
+private fun videoProgressFraction(progressMs: Long, durationMs: Long?): Float {
+    if (progressMs <= 0L || durationMs == null || durationMs <= 0L) return 0f
+    return (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1146,11 +1425,7 @@ private fun VideoThumbnail(
                 contentScale = ContentScale.Crop
             )
         } else {
-            Text(
-                text = "视频",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFFA8B2C2)
-            )
+            VideoThumbnailPlaceholder()
         }
         if (durationMs != null && durationMs > 0L) {
             Box(
@@ -1172,17 +1447,91 @@ private fun VideoThumbnail(
 }
 
 @Composable
+private fun VideoThumbnailPlaceholder() {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val center = Offset(size.width * 0.52f, size.height * 0.48f)
+        val moonRadius = size.minDimension * 0.33f
+
+        drawRect(
+            Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF050509),
+                    Color(0xFF151023),
+                    Color(0xFF050509)
+                ),
+                start = Offset.Zero,
+                end = Offset(size.width, size.height)
+            )
+        )
+        drawCircle(
+            Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFBC74FF).copy(alpha = 0.5f),
+                    Color(0xFF7C4BEF).copy(alpha = 0.18f),
+                    Color.Transparent
+                ),
+                center = Offset(center.x + moonRadius * 0.28f, center.y),
+                radius = moonRadius * 1.75f
+            ),
+            radius = moonRadius * 1.75f,
+            center = Offset(center.x + moonRadius * 0.28f, center.y)
+        )
+        repeat(8) { index ->
+            val y = size.height * (0.18f + index * 0.075f)
+            drawLine(
+                Color(0xFFB78AFF).copy(alpha = if (index % 2 == 0) 0.12f else 0.07f),
+                Offset(size.width * 0.12f, y),
+                Offset(size.width * 0.9f, y + size.height * 0.02f),
+                strokeWidth = 1f
+            )
+        }
+        drawCircle(Color(0xFF06050A), radius = moonRadius, center = center)
+        drawCircle(
+            Color(0xFFE6B8FF).copy(alpha = 0.42f),
+            radius = moonRadius,
+            center = center,
+            style = Stroke(width = size.minDimension * 0.018f)
+        )
+        drawCircle(
+            Color(0xFF06050A).copy(alpha = 0.88f),
+            radius = moonRadius * 0.96f,
+            center = Offset(center.x - moonRadius * 0.08f, center.y - moonRadius * 0.02f)
+        )
+
+        val frameColor = Color(0xFFC58AFF).copy(alpha = 0.24f)
+        val insetX = size.width * 0.12f
+        val insetY = size.height * 0.14f
+        val frameW = size.width * 0.17f
+        val frameH = size.height * 0.16f
+        val stroke = size.minDimension * 0.012f
+        drawLine(frameColor, Offset(insetX, insetY), Offset(insetX + frameW, insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(insetX, insetY), Offset(insetX, insetY + frameH), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, insetY), Offset(size.width - insetX - frameW, insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, insetY), Offset(size.width - insetX, insetY + frameH), strokeWidth = stroke)
+        drawLine(frameColor, Offset(insetX, size.height - insetY), Offset(insetX + frameW, size.height - insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(insetX, size.height - insetY), Offset(insetX, size.height - insetY - frameH), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, size.height - insetY), Offset(size.width - insetX - frameW, size.height - insetY), strokeWidth = stroke)
+        drawLine(frameColor, Offset(size.width - insetX, size.height - insetY), Offset(size.width - insetX, size.height - insetY - frameH), strokeWidth = stroke)
+    }
+}
+
+@Composable
 private fun FileMoreMenu(
     file: LocalMediaFile,
     onRemove: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    iconTint: Color? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+            Icon(
+                Icons.Filled.MoreVert,
+                contentDescription = "更多",
+                tint = iconTint ?: MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         DropdownMenu(
             expanded = expanded,

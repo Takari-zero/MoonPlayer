@@ -1579,6 +1579,9 @@ private fun LocalVibeApp() {
                         videoMetadataCache[mediaId] = metadata
                     },
                     audioProgressMap = emptyMap(),
+                    recentVideoFile = recentVideoFile ?: recentVideoUri?.let { uri ->
+                        scannedFilesByFolder.values.flatten().firstOrNull { it.uri == uri }
+                    },
                     onOpenVideo = { file ->
                         val files = currentFolder?.let { folder ->
                             scannedFilesByFolder[
@@ -1590,6 +1593,18 @@ private fun LocalVibeApp() {
                             .takeIf { it >= 0 } ?: 0
                         selectedMediaFile = file
                         selectedVideoUri = file.uri
+                        recentVideoFile = file
+                        recentVideoUri = file.uri
+                        coroutineScope.launch {
+                            appStateStore.saveRecentVideoUri(file.uri)
+                        }
+                        navController.navigate(LocalVibeRoute.VideoPlayer)
+                    },
+                    onContinueVideo = { file ->
+                        selectedMediaFile = file
+                        selectedVideoUri = file.uri
+                        videoQueue = listOf(file)
+                        currentVideoIndex = 0
                         recentVideoFile = file
                         recentVideoUri = file.uri
                         coroutineScope.launch {
