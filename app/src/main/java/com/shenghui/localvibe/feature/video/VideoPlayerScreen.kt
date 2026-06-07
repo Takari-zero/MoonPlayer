@@ -254,7 +254,7 @@ private fun LocalVideoPlayer(
             )
         }
         externalSubtitleUri = uri
-        Toast.makeText(context, "已加载外挂字幕", Toast.LENGTH_SHORT).show()
+        showVideoPlayerToast(context, "已加载外挂字幕")
     }
 
     fun saveCurrentProgress() {
@@ -276,7 +276,7 @@ private fun LocalVideoPlayer(
         if (latestIndex > 0) {
             selectVideo(latestIndex - 1)
         } else {
-            Toast.makeText(context, "已经是第一个", Toast.LENGTH_SHORT).show()
+            showVideoPlayerToast(context, "已经是第一个")
         }
     }
 
@@ -284,7 +284,7 @@ private fun LocalVideoPlayer(
         if (latestIndex < latestQueue.lastIndex) {
             selectVideo(latestIndex + 1)
         } else if (!auto) {
-            Toast.makeText(context, "已经是最后一个", Toast.LENGTH_SHORT).show()
+            showVideoPlayerToast(context, "已经是最后一个")
         }
     }
 
@@ -301,25 +301,29 @@ private fun LocalVideoPlayer(
                 )
             }
             isSavingScreenshot = false
-            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+            showVideoPlayerToast(
+                context = context,
+                message = result.message,
+                durationMs = result.toastDurationMs
+            )
         }
     }
 
     LaunchedEffect(gestureOverlay) {
         if (gestureOverlay != null) {
-            delay(1000)
+            delay(GESTURE_HINT_MS)
             gestureOverlay = null
         }
     }
     LaunchedEffect(resizeModeOverlay) {
         if (resizeModeOverlay != null) {
-            delay(1_000)
+            delay(SHORT_HINT_MS)
             resizeModeOverlay = null
         }
     }
     LaunchedEffect(seekPreviewOverlay, dragMode) {
         if (seekPreviewOverlay != null && dragMode != VideoDragMode.SEEK) {
-            delay(900)
+            delay(GESTURE_HINT_MS)
             seekPreviewOverlay = null
         }
     }
@@ -345,7 +349,7 @@ private fun LocalVideoPlayer(
     BackHandler(enabled = isScreenLocked) {
         isScreenLocked = false
         showControls = true
-        Toast.makeText(context, "已解锁", Toast.LENGTH_SHORT).show()
+        showVideoPlayerToast(context, "已解锁")
     }
 
     LaunchedEffect(activity, isPortraitPlayback) {
@@ -567,11 +571,10 @@ private fun LocalVideoPlayer(
                     val nextRepeat = !isRepeatOne
                     isRepeatOne = nextRepeat
                     player.repeatMode = if (nextRepeat) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-                    Toast.makeText(
+                    showVideoPlayerToast(
                         context,
-                        if (nextRepeat) "循环播放已开启" else "循环播放已关闭",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                        if (nextRepeat) "循环播放已开启" else "循环播放已关闭"
+                    )
                 },
                 onSubtitleSelect = {
                     subtitleLauncher.launch(
@@ -593,15 +596,14 @@ private fun LocalVideoPlayer(
                 onToggleOrientation = {
                     val nextPortrait = !isPortraitPlayback
                     isPortraitPlayback = nextPortrait
-                    Toast.makeText(
+                    showVideoPlayerToast(
                         context,
-                        if (nextPortrait) "已切换竖屏" else "已切换横屏",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                        if (nextPortrait) "已切换竖屏" else "已切换横屏"
+                    )
                 },
                 onLockScreen = {
                     isScreenLocked = true
-                    Toast.makeText(context, "已锁定", Toast.LENGTH_SHORT).show()
+                    showVideoPlayerToast(context, "已锁定")
                 },
                 onSpeedPanelVisibilityChange = { isSpeedPanelVisible = it }
             )
@@ -613,7 +615,7 @@ private fun LocalVideoPlayer(
                 onClick = {
                     isScreenLocked = false
                     showControls = true
-                    Toast.makeText(context, "已解锁", Toast.LENGTH_SHORT).show()
+                    showVideoPlayerToast(context, "已解锁")
                 },
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -894,7 +896,7 @@ private fun VideoControlOverlay(
                     when (label) {
                         "倍速" -> showSpeedPanel = true
                         "循环" -> onToggleRepeat()
-                        "解码" -> Toast.makeText(context, "解码方式后续实现", Toast.LENGTH_SHORT).show()
+                        "解码" -> showVideoPlayerToast(context, "解码方式后续实现")
                         "截图" -> onScreenshot()
                     }
                 }
@@ -938,7 +940,7 @@ private fun VideoControlOverlay(
                 onDismiss = { showAudioDelayPanel = false },
                 onChange = { nextDelayMs ->
                     onAudioDelayChange(nextDelayMs)
-                    Toast.makeText(context, "音轨偏移 ${formatSignedDelay(nextDelayMs)}", Toast.LENGTH_SHORT).show()
+                    showVideoPlayerToast(context, "音轨偏移 ${formatSignedDelay(nextDelayMs)}")
                 },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -982,7 +984,7 @@ private fun VideoControlOverlay(
                 VideoQuickToolButton(
                     icon = Icons.Filled.Tune,
                     label = "调节",
-                    onClick = { Toast.makeText(context, "均衡器后续实现", Toast.LENGTH_SHORT).show() }
+                    onClick = { showVideoPlayerToast(context, "均衡器后续实现") }
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.Speed,
@@ -1395,7 +1397,7 @@ private fun VideoSpeedPanel(
                     onClick = {
                         val parsed = inputText.trim().removeSuffix("x").removeSuffix("X").toFloatOrNull()
                         if (parsed == null) {
-                            Toast.makeText(context, "请输入有效倍速", Toast.LENGTH_SHORT).show()
+                            showVideoPlayerToast(context, "请输入有效倍速", ERROR_HINT_MS)
                         } else {
                             applySpeed(parsed)
                             showInputDialog = false
@@ -1968,10 +1970,10 @@ private fun Bitmap.isProbablyBlankFrame(): Boolean {
     return true
 }
 
-private enum class ScreenshotSaveResult(val message: String) {
-    Saved("截图已保存"),
-    Failed("截图失败"),
-    Unavailable("当前画面暂不可截图")
+private enum class ScreenshotSaveResult(val message: String, val toastDurationMs: Long) {
+    Saved("截图已保存", SHORT_HINT_MS),
+    Failed("截图失败", ERROR_HINT_MS),
+    Unavailable("当前画面暂不可截图", ERROR_HINT_MS)
 }
 
 private tailrec fun Context.findActivity(): Activity? {
@@ -2004,9 +2006,22 @@ private fun Activity.setScreenBrightness(value: Float) {
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 }
 
+private fun showVideoPlayerToast(
+    context: Context,
+    message: String,
+    durationMs: Long = SHORT_HINT_MS
+) {
+    val toast = Toast.makeText(context, message, Toast.LENGTH_SHORT)
+    toast.show()
+    Handler(Looper.getMainLooper()).postDelayed({ toast.cancel() }, durationMs)
+}
+
 private const val FINISHED_THRESHOLD_MS = 5_000L
 private const val MIN_VIDEO_SPEED = 0.25f
 private const val MAX_VIDEO_SPEED = 5f
 private const val VIDEO_SPEED_STEP = 0.01f
 private const val VIDEO_SPEED_REPEAT_INITIAL_DELAY_MS = 120L
 private const val VIDEO_SPEED_REPEAT_INTERVAL_MS = 100L
+private const val SHORT_HINT_MS = 900L
+private const val GESTURE_HINT_MS = 650L
+private const val ERROR_HINT_MS = 1_400L
