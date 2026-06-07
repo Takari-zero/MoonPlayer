@@ -1,14 +1,20 @@
 ﻿package com.shenghui.localvibe.feature.video
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.graphics.Bitmap
 import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -76,6 +82,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -105,9 +112,16 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 import kotlin.math.round
 
@@ -186,6 +200,7 @@ private fun LocalVideoPlayer(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    val coroutineScope = rememberCoroutineScope()
     val audioManager = remember(context) {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
@@ -227,6 +242,7 @@ private fun LocalVideoPlayer(
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
     var isPortraitPlayback by remember(mediaFile.uri) { mutableStateOf(false) }
+    var isSavingScreenshot by remember { mutableStateOf(false) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -269,6 +285,23 @@ private fun LocalVideoPlayer(
             selectVideo(latestIndex + 1)
         } else if (!auto) {
             Toast.makeText(context, "已经是最后一个", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun captureScreenshot() {
+        if (isSavingScreenshot) return
+        val positionMs = player.currentPosition.coerceAtLeast(0L)
+        isSavingScreenshot = true
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                saveVideoFrameScreenshot(
+                    context = context.applicationContext,
+                    videoUri = Uri.parse(mediaFile.uri),
+                    positionMs = positionMs
+                )
+            }
+            isSavingScreenshot = false
+            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -555,6 +588,7 @@ private fun LocalVideoPlayer(
                 onAudioDelayChange = { nextDelayMs ->
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
                 },
+                onScreenshot = ::captureScreenshot,
                 isPortraitPlayback = isPortraitPlayback,
                 onToggleOrientation = {
                     val nextPortrait = !isPortraitPlayback
@@ -743,6 +777,7 @@ private fun VideoControlOverlay(
     onToggleRepeat: () -> Unit,
     onSubtitleSelect: () -> Unit,
     onAudioDelayChange: (Long) -> Unit,
+    onScreenshot: () -> Unit,
     isPortraitPlayback: Boolean,
     onToggleOrientation: () -> Unit,
     onLockScreen: () -> Unit,
@@ -860,7 +895,7 @@ private fun VideoControlOverlay(
                         "倍速" -> showSpeedPanel = true
                         "循环" -> onToggleRepeat()
                         "解码" -> Toast.makeText(context, "解码方式后续实现", Toast.LENGTH_SHORT).show()
-                        "截图" -> Toast.makeText(context, "截图功能后续实现", Toast.LENGTH_SHORT).show()
+                        "截图" -> onScreenshot()
                         else -> Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -963,7 +998,7 @@ private fun VideoControlOverlay(
                 VideoQuickToolButton(
                     icon = Icons.Filled.PhotoCamera,
                     label = "截图",
-                    onClick = { Toast.makeText(context, "截图功能后续实现", Toast.LENGTH_SHORT).show() }
+                    onClick = onScreenshot
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.MoreHoriz,
@@ -1790,6 +1825,149 @@ private fun formatSignedDelay(delayMs: Long): String {
         delayMs < 0L -> "${delayMs}ms"
         else -> "0ms"
     }
+}
+
+private fun saveVideoFrameScreenshot(
+    context: Context,
+    videoUri: Uri,
+    positionMs: Long
+): ScreenshotSaveResult {
+    val bitmap = extractVideoFrame(context, videoUri, positionMs)
+        ?: return ScreenshotSaveResult.Unavailable
+    if (bitmap.isProbablyBlankFrame()) {
+        return ScreenshotSaveResult.Unavailable
+    }
+    val fileName = "MoonPlayer_${
+        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+    }.png"
+    return if (saveBitmapToGallery(context, bitmap, fileName)) {
+        ScreenshotSaveResult.Saved
+    } else {
+        ScreenshotSaveResult.Failed
+    }
+}
+
+private fun extractVideoFrame(
+    context: Context,
+    videoUri: Uri,
+    positionMs: Long
+): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, videoUri)
+        retriever.getFrameAtTime(
+            positionMs.coerceAtLeast(0L) * 1_000L,
+            MediaMetadataRetriever.OPTION_CLOSEST
+        )
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+private fun saveBitmapToGallery(
+    context: Context,
+    bitmap: Bitmap,
+    fileName: String
+): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        saveBitmapToGalleryQAndAbove(context, bitmap, fileName)
+    } else {
+        saveBitmapToGalleryLegacy(context, bitmap, fileName)
+    }
+}
+
+private fun saveBitmapToGalleryQAndAbove(
+    context: Context,
+    bitmap: Bitmap,
+    fileName: String
+): Boolean {
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/MoonPlayer")
+        put(MediaStore.Images.Media.IS_PENDING, 1)
+    }
+    val imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: return false
+    return try {
+        resolver.openOutputStream(imageUri)?.use { output ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                return@use false
+            }
+            true
+        } == true
+    } catch (_: Exception) {
+        false
+    }.also { saved ->
+        if (saved) {
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(imageUri, values, null, null)
+        } else {
+            resolver.delete(imageUri, null, null)
+        }
+    }
+}
+
+private fun saveBitmapToGalleryLegacy(
+    context: Context,
+    bitmap: Bitmap,
+    fileName: String
+): Boolean {
+    return try {
+        val directory = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+            "MoonPlayer"
+        )
+        if (!directory.exists() && !directory.mkdirs()) {
+            return false
+        }
+        val imageFile = File(directory, fileName)
+        FileOutputStream(imageFile).use { output ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                return false
+            }
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.DATA, imageFile.absolutePath)
+        }
+        context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) != null
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun Bitmap.isProbablyBlankFrame(): Boolean {
+    if (width <= 0 || height <= 0) return true
+    val columns = 8
+    val rows = 8
+    var brightest = 0
+    for (xIndex in 0 until columns) {
+        val x = ((xIndex + 0.5f) * width / columns).toInt().coerceIn(0, width - 1)
+        for (yIndex in 0 until rows) {
+            val y = ((yIndex + 0.5f) * height / rows).toInt().coerceIn(0, height - 1)
+            val pixel = getPixel(x, y)
+            brightest = maxOf(
+                brightest,
+                android.graphics.Color.red(pixel),
+                android.graphics.Color.green(pixel),
+                android.graphics.Color.blue(pixel)
+            )
+            if (brightest > 12) return false
+        }
+    }
+    return true
+}
+
+private enum class ScreenshotSaveResult(val message: String) {
+    Saved("截图已保存"),
+    Failed("截图失败"),
+    Unavailable("当前画面暂不可截图")
 }
 
 private tailrec fun Context.findActivity(): Activity? {
