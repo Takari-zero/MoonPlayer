@@ -15,6 +15,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -240,6 +241,8 @@ private fun LocalVideoPlayer(
     var videoResizeMode by remember(mediaFile.uri) { mutableStateOf(VideoResizeMode.FIT) }
     var isRepeatOne by remember(mediaFile.uri) { mutableStateOf(false) }
     var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
+    var externalSubtitleName by remember(mediaFile.uri) { mutableStateOf<String?>(null) }
+    var subtitleOffsetMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
@@ -259,6 +262,7 @@ private fun LocalVideoPlayer(
             )
         }
         externalSubtitleUri = uri
+        externalSubtitleName = context.subtitleDisplayName(uri)
         showVideoPlayerToast(context, "已加载外挂字幕")
     }
 
@@ -407,10 +411,15 @@ private fun LocalVideoPlayer(
     }
 
     LaunchedEffect(externalSubtitleUri) {
-        val subtitleUri = externalSubtitleUri ?: return@LaunchedEffect
         val current = player.currentPosition.coerceAtLeast(0L)
         val shouldPlay = player.playWhenReady
-        player.setMediaItem(buildVideoMediaItem(mediaFile.uri, subtitleUri), current)
+        player.setMediaItem(
+            buildVideoMediaItem(
+                videoUri = mediaFile.uri,
+                subtitleUri = externalSubtitleUri
+            ),
+            current
+        )
         player.prepare()
         player.playWhenReady = shouldPlay
     }
@@ -578,6 +587,8 @@ private fun LocalVideoPlayer(
                 resizeMode = videoResizeMode,
                 isRepeatOne = isRepeatOne,
                 audioDelayMs = audioDelayMs,
+                subtitleName = externalSubtitleName,
+                subtitleOffsetMs = subtitleOffsetMs,
                 onSpeedSelected = { speed ->
                     val safeSpeed = speed.normalizeVideoSpeed()
                     playbackSpeed = safeSpeed
@@ -607,6 +618,12 @@ private fun LocalVideoPlayer(
                             "application/octet-stream"
                         )
                     )
+                },
+                onSubtitleClear = {
+                    externalSubtitleUri = null
+                    externalSubtitleName = null
+                    subtitleOffsetMs = 0L
+                    showVideoPlayerToast(context, "已清除外挂字幕")
                 },
                 onAudioDelayChange = { nextDelayMs ->
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
@@ -799,10 +816,13 @@ private fun VideoControlOverlay(
     resizeMode: VideoResizeMode,
     isRepeatOne: Boolean,
     audioDelayMs: Long,
+    subtitleName: String?,
+    subtitleOffsetMs: Long,
     onSpeedSelected: (Float) -> Unit,
     onResizeModeSelected: (VideoResizeMode) -> Unit,
     onToggleRepeat: () -> Unit,
     onSubtitleSelect: () -> Unit,
+    onSubtitleClear: () -> Unit,
     onAudioDelayChange: (Long) -> Unit,
     onScreenshot: () -> Unit,
     isPortraitPlayback: Boolean,
@@ -816,8 +836,7 @@ private fun VideoControlOverlay(
     val quickToolsScrollState = rememberScrollState()
     var showSpeedPanel by remember { mutableStateOf(false) }
     var showResizePanel by remember { mutableStateOf(false) }
-    var showAudioDelayPanel by remember { mutableStateOf(false) }
-    var showSubtitlePanel by remember { mutableStateOf(false) }
+    var showSyncPanel by remember { mutableStateOf(false) }
     var showEqualizerPanel by remember { mutableStateOf(false) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
@@ -839,8 +858,7 @@ private fun VideoControlOverlay(
 
     fun closePanelOrBack() {
         when {
-            showAudioDelayPanel -> showAudioDelayPanel = false
-            showSubtitlePanel -> showSubtitlePanel = false
+            showSyncPanel -> showSyncPanel = false
             showEqualizerPanel -> showEqualizerPanel = false
             showSpeedPanel -> showSpeedPanel = false
             showResizePanel -> showResizePanel = false
@@ -852,7 +870,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showAudioDelayPanel, showSubtitlePanel, showEqualizerPanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSyncPanel, showEqualizerPanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -891,11 +909,11 @@ private fun VideoControlOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    IconButton(onClick = { showAudioDelayPanel = true }) {
-                        Icon(Icons.Filled.Audiotrack, contentDescription = "音轨同步", tint = Color.White)
+                    IconButton(onClick = { showSyncPanel = true }) {
+                        Icon(Icons.Filled.Audiotrack, contentDescription = "同步调节", tint = Color.White)
                     }
-                    IconButton(onClick = { showSubtitlePanel = true }) {
-                        Icon(Icons.Filled.Subtitles, contentDescription = "外挂字幕", tint = Color.White)
+                    IconButton(onClick = { showSyncPanel = true }) {
+                        Icon(Icons.Filled.Subtitles, contentDescription = "字幕同步", tint = Color.White)
                     }
                     Box {
                         IconButton(onClick = { onQuickToolsExpandedChange(!isQuickToolsExpanded) }) {
@@ -937,24 +955,18 @@ private fun VideoControlOverlay(
             )
         }
 
-        if (showAudioDelayPanel) {
-            AudioDelayPanel(
-                delayMs = audioDelayMs,
-                onDismiss = { showAudioDelayPanel = false },
-                onChange = { nextDelayMs ->
-                    onAudioDelayChange(nextDelayMs)
-                    showVideoPlayerToast(context, "音轨偏移 ${formatSignedDelay(nextDelayMs)}")
-                },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 18.dp)
-            )
-        }
-
-        if (showSubtitlePanel) {
-            SubtitlePanel(
-                onDismiss = { showSubtitlePanel = false },
+        if (showSyncPanel) {
+            SyncAdjustmentPanel(
+                subtitleName = subtitleName,
+                subtitleOffsetMs = subtitleOffsetMs,
+                audioDelayMs = audioDelayMs,
+                onDismiss = { showSyncPanel = false },
                 onPickSubtitle = onSubtitleSelect,
+                onClearSubtitle = onSubtitleClear,
+                onAudioDelayRequest = {
+                    onAudioDelayChange(audioDelayMs)
+                    showVideoPlayerToast(context, "音频同步调节后续实现")
+                },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 60.dp, end = 18.dp)
@@ -1021,16 +1033,16 @@ private fun VideoControlOverlay(
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Audiotrack,
-                        label = "音轨",
+                        label = "同步",
                         onClick = {
-                            showAudioDelayPanel = true
+                            showSyncPanel = true
                         }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Subtitles,
                         label = "字幕",
                         onClick = {
-                            showSubtitlePanel = true
+                            showSyncPanel = true
                         }
                     )
                     VideoQuickToolButton(
@@ -1223,72 +1235,124 @@ private fun VideoQuickToolButton(
 }
 
 @Composable
-private fun AudioDelayPanel(
-    delayMs: Long,
+private fun SyncAdjustmentPanel(
+    subtitleName: String?,
+    subtitleOffsetMs: Long,
+    audioDelayMs: Long,
     onDismiss: () -> Unit,
-    onChange: (Long) -> Unit,
+    onPickSubtitle: () -> Unit,
+    onClearSubtitle: () -> Unit,
+    onAudioDelayRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    SidePanelShell(title = "音轨同步", onDismiss = onDismiss, modifier = modifier.width(260.dp)) {
+    val hasSubtitle = subtitleName != null
+    val subtitleOffsetAvailable = false
+    SidePanelShell(title = "同步调节", onDismiss = onDismiss, modifier = modifier.width(330.dp)) {
+        SyncSectionTitle("字幕同步")
         Text(
-            text = "当前偏移 ${formatSignedDelay(delayMs)}",
-            color = Color.White.copy(alpha = 0.58f),
+            text = "当前字幕：${subtitleName ?: "未加载"}",
+            color = Color.White.copy(alpha = 0.66f),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = subtitleSyncStatus(subtitleOffsetMs),
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            SyncStepButton("提前0.5s", hasSubtitle && subtitleOffsetAvailable) {}
+            SyncStepButton("提前0.1s", hasSubtitle && subtitleOffsetAvailable) {}
+            SyncStepButton("重置", hasSubtitle && subtitleOffsetAvailable) {}
+            SyncStepButton("延后0.1s", hasSubtitle && subtitleOffsetAvailable) {}
+            SyncStepButton("延后0.5s", hasSubtitle && subtitleOffsetAvailable) {}
+        }
+        Text(
+            text = if (hasSubtitle) {
+                "当前版本暂不支持真实调整字幕显示时间，字幕可正常加载显示。"
+            } else {
+                "请先加载外挂字幕"
+            },
+            color = Color.White.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.labelSmall
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SyncActionButton("选择外挂字幕", enabled = true, onClick = onPickSubtitle)
+            SyncActionButton("清除字幕", enabled = hasSubtitle, onClick = onClearSubtitle)
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.08f))
+        )
+
+        SyncSectionTitle("音频同步")
+        Text(
+            text = "当前延迟 ${formatSignedDelay(audioDelayMs)}",
+            color = Color.White.copy(alpha = 0.56f),
             style = MaterialTheme.typography.bodySmall
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(-500L, -100L, 0L, 100L, 500L).forEach { delta ->
-                Text(
-                    text = if (delta == 0L) "归零" else formatSignedDelay(delta),
-                    color = Color.White.copy(alpha = 0.42f),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.05f))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
+            SyncStepButton("提前0.1s", enabled = false, onClick = onAudioDelayRequest)
+            SyncStepButton("重置", enabled = false, onClick = onAudioDelayRequest)
+            SyncStepButton("延后0.1s", enabled = false, onClick = onAudioDelayRequest)
         }
         Text(
-            text = "音轨切换和音轨同步/偏移后续实现，当前不会修改真实播放音轨。",
-            color = Color.White.copy(alpha = 0.62f),
+            text = "当前版本暂不支持调整音频与画面延迟，音频同步调节后续实现。",
+            color = Color.White.copy(alpha = 0.5f),
             style = MaterialTheme.typography.labelSmall
         )
     }
 }
 
 @Composable
-private fun SubtitlePanel(
-    onDismiss: () -> Unit,
-    onPickSubtitle: () -> Unit,
-    modifier: Modifier = Modifier
+private fun SyncSectionTitle(text: String) {
+    Text(
+        text = text,
+        color = Color.White.copy(alpha = 0.9f),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+@Composable
+private fun SyncStepButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit
 ) {
-    SidePanelShell(title = "字幕", onDismiss = onDismiss, modifier = modifier.width(240.dp)) {
-        Text(
-            text = "外挂字幕",
-            color = Color.White.copy(alpha = 0.78f),
-            style = MaterialTheme.typography.bodySmall
-        )
-        Text(
-            text = "选择 SRT / ASS / SSA / VTT 字幕文件",
-            color = Color.White.copy(alpha = 0.58f),
-            style = MaterialTheme.typography.labelSmall
-        )
-        Text(
-            text = "选择字幕",
-            color = Color(0xFF8AB6FF),
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.White.copy(alpha = 0.08f))
-                .clickable(onClick = onPickSubtitle)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            style = MaterialTheme.typography.labelMedium
-        )
-        Text(
-            text = "字幕加减速与同步微调后续接入。",
-            color = Color.White.copy(alpha = 0.5f),
-            style = MaterialTheme.typography.labelSmall
-        )
-    }
+    Text(
+        text = text,
+        color = if (enabled) Color(0xFFBDA8FF) else Color.White.copy(alpha = 0.38f),
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = if (enabled) 0.08f else 0.04f))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        style = MaterialTheme.typography.labelSmall,
+        maxLines = 1
+    )
+}
+
+@Composable
+private fun SyncActionButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Text(
+        text = text,
+        color = if (enabled) Color(0xFFBDA8FF) else Color.White.copy(alpha = 0.34f),
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = if (enabled) 0.09f else 0.04f))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 9.dp),
+        style = MaterialTheme.typography.labelMedium
+    )
 }
 
 @Composable
@@ -1794,7 +1858,10 @@ private fun ExoPlayer.savedPosition(): Long {
     }
 }
 
-private fun buildVideoMediaItem(videoUri: String, subtitleUri: Uri?): MediaItem {
+private fun buildVideoMediaItem(
+    videoUri: String,
+    subtitleUri: Uri?
+): MediaItem {
     val builder = MediaItem.Builder().setUri(Uri.parse(videoUri))
     if (subtitleUri != null) {
         builder.setSubtitleConfigurations(
@@ -1817,6 +1884,34 @@ private fun subtitleMimeType(uri: Uri): String {
         "ass", "ssa" -> "text/x-ssa"
         else -> "text/vtt"
     }
+}
+
+private fun Context.subtitleDisplayName(uri: Uri): String {
+    return runCatching {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && cursor.moveToFirst()) {
+                    cursor.getString(nameIndex)
+                } else {
+                    null
+                }
+            }
+    }.getOrNull()
+        ?: uri.lastPathSegment?.substringAfterLast('/')
+        ?: "外挂字幕"
+}
+
+private fun subtitleSyncStatus(offsetMs: Long): String {
+    return when {
+        offsetMs > 0L -> "字幕延后 ${formatDelayValue(offsetMs)}"
+        offsetMs < 0L -> "字幕提前 ${formatDelayValue(-offsetMs)}"
+        else -> "字幕同步 0.0s"
+    }
+}
+
+private fun formatDelayValue(delayMs: Long): String {
+    return String.format(Locale.US, "%.1fs", delayMs / 1000f)
 }
 
 private enum class VideoDragMode {
