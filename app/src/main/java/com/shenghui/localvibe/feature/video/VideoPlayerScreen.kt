@@ -145,7 +145,7 @@ fun VideoPlayerScreen(
 
     DisposableEffect(activity) {
         val previousOrientation = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         activity?.hideSystemBars()
 
         onDispose {
@@ -373,7 +373,7 @@ private fun LocalVideoPlayer(
             if (isPortraitPlayback) {
                 ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             } else {
-                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             }
     }
 
