@@ -842,12 +842,32 @@ private fun VideoControlOverlay(
     var eqMid by remember { mutableFloatStateOf(0f) }
     var eqTreble by remember { mutableFloatStateOf(0f) }
 
-    BackHandler(enabled = showSpeedPanel) {
-        showSpeedPanel = false
+    fun showFutureTool(feature: String) {
+        showFutureToolToast(context, feature)
     }
 
-    LaunchedEffect(showSpeedPanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel)
+    fun openSyncPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showEqualizerPanel = false
+        onQuickToolsExpandedChange(false)
+        showSyncPanel = true
+    }
+
+    fun closeSyncPanel() {
+        showSyncPanel = false
+    }
+
+    BackHandler(enabled = showSpeedPanel || showSyncPanel) {
+        if (showSyncPanel) {
+            closeSyncPanel()
+        } else {
+            showSpeedPanel = false
+        }
+    }
+
+    LaunchedEffect(showSpeedPanel, showSyncPanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel)
     }
 
     DisposableEffect(Unit) {
@@ -858,7 +878,7 @@ private fun VideoControlOverlay(
 
     fun closePanelOrBack() {
         when {
-            showSyncPanel -> showSyncPanel = false
+            showSyncPanel -> closeSyncPanel()
             showEqualizerPanel -> showEqualizerPanel = false
             showSpeedPanel -> showSpeedPanel = false
             showResizePanel -> showResizePanel = false
@@ -879,7 +899,9 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        if (!showSpeedPanel) {
+        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel
+
+        if (ordinaryControlsVisible) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -909,10 +931,10 @@ private fun VideoControlOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    IconButton(onClick = { showSyncPanel = true }) {
+                    IconButton(onClick = { openSyncPanel() }) {
                         Icon(Icons.Filled.Audiotrack, contentDescription = "同步调节", tint = Color.White)
                     }
-                    IconButton(onClick = { showSyncPanel = true }) {
+                    IconButton(onClick = { openSyncPanel() }) {
                         Icon(Icons.Filled.Subtitles, contentDescription = "字幕同步", tint = Color.White)
                     }
                     Box {
@@ -956,16 +978,21 @@ private fun VideoControlOverlay(
         }
 
         if (showSyncPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { closeSyncPanel() }
+            )
             SyncAdjustmentPanel(
                 subtitleName = subtitleName,
                 subtitleOffsetMs = subtitleOffsetMs,
                 audioDelayMs = audioDelayMs,
-                onDismiss = { showSyncPanel = false },
+                onDismiss = { closeSyncPanel() },
                 onPickSubtitle = onSubtitleSelect,
                 onClearSubtitle = onSubtitleClear,
                 onAudioDelayRequest = {
                     onAudioDelayChange(audioDelayMs)
-                    showVideoPlayerToast(context, "音频同步调节后续实现")
+                    showFutureTool("音频同步")
                 },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -988,7 +1015,7 @@ private fun VideoControlOverlay(
             )
         }
 
-        if (!showSpeedPanel) {
+        if (ordinaryControlsVisible) {
             Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -999,8 +1026,9 @@ private fun VideoControlOverlay(
             ) {
                 VideoQuickToolButton(
                     icon = Icons.Filled.Tune,
-                    label = "调节",
-                    onClick = { showVideoPlayerToast(context, "均衡器后续实现") }
+                    label = "均衡器",
+                    isFuture = true,
+                    onClick = { showFutureTool("均衡器") }
                 )
                 VideoQuickToolButton(
                     icon = Icons.Filled.Speed,
@@ -1027,23 +1055,52 @@ private fun VideoControlOverlay(
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
                         label = "解码",
+                        isFuture = true,
                         onClick = {
-                            showVideoPlayerToast(context, "解码方式后续实现")
+                            showFutureTool("解码方式")
                         }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Audiotrack,
-                        label = "同步",
-                        onClick = {
-                            showSyncPanel = true
-                        }
+                        label = "音轨",
+                        isFuture = true,
+                        onClick = { showFutureTool("音轨切换") }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Subtitles,
-                        label = "字幕",
-                        onClick = {
-                            showSyncPanel = true
-                        }
+                        icon = Icons.Filled.Tune,
+                        label = "画面调节",
+                        isFuture = true,
+                        onClick = { showFutureTool("画面调节") }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Settings,
+                        label = "信息",
+                        isFuture = true,
+                        onClick = { showFutureTool("视频信息") }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Loop,
+                        label = "AB",
+                        isFuture = true,
+                        onClick = { showFutureTool("AB 循环") }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Settings,
+                        label = "睡眠",
+                        isFuture = true,
+                        onClick = { showFutureTool("睡眠定时") }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Tune,
+                        label = "手势",
+                        isFuture = true,
+                        onClick = { showFutureTool("手势设置") }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Settings,
+                        label = "控制栏",
+                        isFuture = true,
+                        onClick = { showFutureTool("控制栏设置") }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.KeyboardArrowLeft,
@@ -1207,29 +1264,45 @@ private fun VideoToolItem(
 private fun VideoQuickToolButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
+    isFuture: Boolean = false,
     onClick: () -> Unit
 ) {
+    val contentAlpha = if (isFuture) 0.58f else 1f
     Box(
         modifier = Modifier
             .size(48.dp)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.45f))
+            .background(Color.Black.copy(alpha = if (isFuture) 0.30f else 0.45f))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         if (label.endsWith("X")) {
             Text(
                 text = label,
-                color = Color.White,
+                color = Color.White.copy(alpha = contentAlpha),
                 style = MaterialTheme.typography.titleSmall
             )
         } else {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = Color.White,
-                modifier = Modifier.size(25.dp)
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = if (isFuture) "$label 后续实现" else label,
+                    tint = Color.White.copy(alpha = contentAlpha),
+                    modifier = Modifier.size(if (isFuture) 21.dp else 25.dp)
+                )
+                if (isFuture) {
+                    Text(
+                        text = "后续",
+                        color = Color.White.copy(alpha = 0.46f),
+                        fontSize = 8.sp,
+                        lineHeight = 8.sp,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }
@@ -1245,6 +1318,7 @@ private fun SyncAdjustmentPanel(
     onAudioDelayRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val hasSubtitle = subtitleName != null
     val subtitleOffsetAvailable = false
     SidePanelShell(title = "同步调节", onDismiss = onDismiss, modifier = modifier.width(330.dp)) {
@@ -1281,6 +1355,25 @@ private fun SyncAdjustmentPanel(
             SyncActionButton("选择外挂字幕", enabled = true, onClick = onPickSubtitle)
             SyncActionButton("清除字幕", enabled = hasSubtitle, onClick = onClearSubtitle)
         }
+        SyncSectionTitle("字幕后续")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncActionButton("字幕样式", enabled = true, isFuture = true) {
+                    showFutureToolToast(context, "字幕样式")
+                }
+                SyncActionButton("字幕大小", enabled = true, isFuture = true) {
+                    showFutureToolToast(context, "字幕大小")
+                }
+                SyncActionButton("字幕位置", enabled = true, isFuture = true) {
+                    showFutureToolToast(context, "字幕位置")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncActionButton("字幕速度", enabled = true, isFuture = true) {
+                    showFutureToolToast(context, "字幕速度")
+                }
+            }
+        }
 
         Box(
             modifier = Modifier
@@ -1305,6 +1398,11 @@ private fun SyncAdjustmentPanel(
             color = Color.White.copy(alpha = 0.5f),
             style = MaterialTheme.typography.labelSmall
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SyncActionButton("音轨切换", enabled = true, isFuture = true) {
+                showFutureToolToast(context, "音轨切换")
+            }
+        }
     }
 }
 
@@ -1341,14 +1439,25 @@ private fun SyncStepButton(
 private fun SyncActionButton(
     text: String,
     enabled: Boolean,
+    isFuture: Boolean = false,
     onClick: () -> Unit
 ) {
+    val textColor = when {
+        !enabled -> Color.White.copy(alpha = 0.34f)
+        isFuture -> Color.White.copy(alpha = 0.58f)
+        else -> Color(0xFFBDA8FF)
+    }
+    val backgroundAlpha = when {
+        !enabled -> 0.04f
+        isFuture -> 0.055f
+        else -> 0.09f
+    }
     Text(
         text = text,
-        color = if (enabled) Color(0xFFBDA8FF) else Color.White.copy(alpha = 0.34f),
+        color = textColor,
         modifier = Modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = if (enabled) 0.09f else 0.04f))
+            .background(Color.White.copy(alpha = backgroundAlpha))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 13.dp, vertical = 9.dp),
         style = MaterialTheme.typography.labelMedium
@@ -2155,6 +2264,10 @@ private fun showVideoPlayerToast(
     val toast = Toast.makeText(context, message, Toast.LENGTH_SHORT)
     toast.show()
     Handler(Looper.getMainLooper()).postDelayed({ toast.cancel() }, durationMs)
+}
+
+private fun showFutureToolToast(context: Context, feature: String) {
+    showVideoPlayerToast(context, "${feature}后续实现")
 }
 
 private const val FINISHED_THRESHOLD_MS = 5_000L
