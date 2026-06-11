@@ -131,6 +131,13 @@ import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 import kotlin.math.round
 
+private val PlayerMoonPurple = Color(0xFF7B55FF)
+private val PlayerMoonPurpleSoft = Color(0xFFB7A7FF)
+private val PlayerPanelDark = Color(0xE60B0A12)
+private val PlayerPanelStroke = Color(0x30B7A7FF)
+private val PlayerTrackInactive = Color(0xFF3A3449)
+private val VideoFolderPlaybackSpeeds = mutableMapOf<String, Float>()
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun VideoPlayerScreen(
@@ -222,6 +229,8 @@ private fun LocalVideoPlayer(
     }
     val latestQueue by rememberUpdatedState(queue)
     val latestIndex by rememberUpdatedState(currentIndex)
+    val navigationQueue = remember(queue) { queue.videoNavigationQueue() }
+    val folderSpeedKey = remember(mediaFile.uri, queue) { mediaFile.videoFolderPlaybackSpeedKey(queue) }
     var gestureOverlay by remember { mutableStateOf<String?>(null) }
     var seekPreviewOverlay by remember { mutableStateOf<VideoSeekPreview?>(null) }
     var resizeModeOverlay by remember { mutableStateOf<String?>(null) }
@@ -239,7 +248,11 @@ private fun LocalVideoPlayer(
     var gestureSeekPreviewMs by remember { mutableLongStateOf(0L) }
     var startBrightness by remember { mutableFloatStateOf(activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f) }
     var startVolume by remember { mutableStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
-    var playbackSpeed by remember(mediaFile.uri) { mutableFloatStateOf(1f) }
+    var playbackSpeed by remember(folderSpeedKey) {
+        mutableFloatStateOf(
+            VideoFolderPlaybackSpeeds[folderSpeedKey]?.normalizeVideoSpeed() ?: 1f
+        )
+    }
     var videoResizeMode by remember(mediaFile.uri) { mutableStateOf(VideoResizeMode.FIT) }
     var isRepeatOne by remember(mediaFile.uri) { mutableStateOf(false) }
     var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
@@ -268,6 +281,10 @@ private fun LocalVideoPlayer(
         showVideoPlayerToast(context, "已加载外挂字幕")
     }
 
+    LaunchedEffect(player, playbackSpeed) {
+        player.setPlaybackSpeed(playbackSpeed.normalizeVideoSpeed())
+    }
+
     fun saveCurrentProgress() {
         onProgressChanged(mediaFile.uri, player.savedPosition())
     }
@@ -283,17 +300,32 @@ private fun LocalVideoPlayer(
         onSelectVideo(index)
     }
 
+    fun currentNavigationIndex(): Int {
+        return navigationQueue.indexOfFirst { it.uri == mediaFile.uri }
+            .takeIf { it >= 0 }
+            ?: latestIndex.coerceIn(0, navigationQueue.lastIndex.coerceAtLeast(0))
+    }
+
+    fun selectNavigationVideo(file: LocalMediaFile) {
+        val queueIndex = latestQueue.indexOfFirst { it.uri == file.uri }
+        if (queueIndex >= 0) {
+            selectVideo(queueIndex)
+        }
+    }
+
     fun previous() {
-        if (latestIndex > 0) {
-            selectVideo(latestIndex - 1)
+        val index = currentNavigationIndex()
+        if (index > 0) {
+            selectNavigationVideo(navigationQueue[index - 1])
         } else {
             showVideoPlayerToast(context, "已经是第一个")
         }
     }
 
     fun next(auto: Boolean = false) {
-        if (latestIndex < latestQueue.lastIndex) {
-            selectVideo(latestIndex + 1)
+        val index = currentNavigationIndex()
+        if (index < navigationQueue.lastIndex) {
+            selectNavigationVideo(navigationQueue[index + 1])
         } else if (!auto) {
             showVideoPlayerToast(context, "已经是最后一个")
         }
@@ -594,6 +626,7 @@ private fun LocalVideoPlayer(
                 onSpeedSelected = { speed ->
                     val safeSpeed = speed.normalizeVideoSpeed()
                     playbackSpeed = safeSpeed
+                    VideoFolderPlaybackSpeeds[folderSpeedKey] = safeSpeed
                     player.setPlaybackSpeed(safeSpeed)
                 },
                 onResizeModeSelected = { mode ->
@@ -735,7 +768,7 @@ private fun GestureValueOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height((88 * percent.coerceIn(0, 100) / 100f).dp)
-                    .background(Color(0xFF8AB6FF), RoundedCornerShape(6.dp))
+                    .background(PlayerMoonPurpleSoft, RoundedCornerShape(6.dp))
             )
         }
         Text(
@@ -762,7 +795,7 @@ private fun SeekPreviewOverlay(
         Icon(
             imageVector = if (isForward) Icons.Filled.FastForward else Icons.Filled.FastRewind,
             contentDescription = null,
-            tint = Color(0xFF8AB6FF),
+            tint = PlayerMoonPurpleSoft,
             modifier = Modifier.size(34.dp)
         )
         Text(
@@ -911,13 +944,13 @@ private fun VideoControlOverlay(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.58f),
-                                Color.Black.copy(alpha = 0.24f),
+                                Color.Black.copy(alpha = 0.50f),
+                                Color.Black.copy(alpha = 0.18f),
                                 Color.Transparent
                             )
                         )
                     )
-                    .padding(start = 18.dp, end = 20.dp, top = 8.dp, bottom = 18.dp)
+                    .padding(start = 18.dp, end = 20.dp, top = 6.dp, bottom = 16.dp)
             ) {
                 IconButton(
                     onClick = onBack,
@@ -929,7 +962,7 @@ private fun VideoControlOverlay(
                         Icons.Filled.ArrowBack,
                         contentDescription = "返回",
                         tint = Color.White,
-                        modifier = Modifier.size(30.dp)
+                        modifier = Modifier.size(29.dp)
                     )
                 }
                 Text(
@@ -937,9 +970,9 @@ private fun VideoControlOverlay(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .padding(horizontal = 260.dp, vertical = 8.dp),
+                        .padding(horizontal = 252.dp, vertical = 8.dp),
                     color = Color.White,
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -948,50 +981,50 @@ private fun VideoControlOverlay(
                 Row(
                     modifier = Modifier.align(Alignment.TopEnd),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .clickable { openSyncPanel() }
-                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                            .padding(horizontal = 5.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             Icons.Filled.Audiotrack,
                             contentDescription = "同步调节",
                             tint = Color.White,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
-                        Text("音轨", color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp)
+                        Text("音轨", color = Color.White.copy(alpha = 0.88f), fontSize = 13.sp)
                     }
                     Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .clickable { openSyncPanel() }
-                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                            .padding(horizontal = 5.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             Icons.Filled.Subtitles,
                             contentDescription = "字幕同步",
                             tint = Color.White,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
-                        Text("字幕", color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp)
+                        Text("字幕", color = Color.White.copy(alpha = 0.88f), fontSize = 13.sp)
                     }
                     Box {
                         IconButton(
                             onClick = { onQuickToolsExpandedChange(!isQuickToolsExpanded) },
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(38.dp)
                         ) {
                             Icon(
                                 Icons.Filled.MoreVert,
                                 contentDescription = "更多",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                                tint = Color.White.copy(alpha = 0.9f),
+                                modifier = Modifier.size(26.dp)
                             )
                         }
                     }
@@ -1011,7 +1044,7 @@ private fun VideoControlOverlay(
                 onSpeedChange = onSpeedSelected,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(start = 76.dp, end = 76.dp, bottom = 18.dp)
+                    .padding(start = 82.dp, end = 82.dp, bottom = 22.dp)
             )
         }
 
@@ -1026,7 +1059,7 @@ private fun VideoControlOverlay(
                 },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 18.dp)
+                    .padding(top = 56.dp, end = 20.dp)
             )
         }
 
@@ -1049,7 +1082,7 @@ private fun VideoControlOverlay(
                 },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 18.dp)
+                    .padding(top = 56.dp, end = 20.dp)
             )
         }
 
@@ -1064,7 +1097,7 @@ private fun VideoControlOverlay(
                 onDismiss = { showEqualizerPanel = false },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 18.dp)
+                    .padding(top = 56.dp, end = 20.dp)
             )
         }
 
@@ -1072,9 +1105,9 @@ private fun VideoControlOverlay(
             Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 42.dp, end = 16.dp, top = 72.dp)
+                    .padding(start = 38.dp, end = 16.dp, top = 70.dp)
                     .horizontalScroll(quickToolsScrollState),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 VideoQuickToolButton(
@@ -1183,23 +1216,23 @@ private fun VideoControlOverlay(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.24f),
-                                Color.Black.copy(alpha = 0.62f)
+                                Color.Black.copy(alpha = 0.20f),
+                                Color.Black.copy(alpha = 0.58f)
                             )
                         )
                     )
-                    .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(start = 22.dp, end = 22.dp, top = 14.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
                         formatDuration(currentPositionMs),
-                        color = Color.White,
-                        fontSize = 16.sp,
+                        color = Color.White.copy(alpha = 0.92f),
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                     ThinVideoProgressBar(
@@ -1212,15 +1245,15 @@ private fun VideoControlOverlay(
                     )
                     Text(
                         formatDuration(durationMs),
-                        color = Color.White,
-                        fontSize = 16.sp,
+                        color = Color.White.copy(alpha = 0.92f),
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                 }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 32.dp, end = 28.dp)
+                        .padding(start = 34.dp, end = 30.dp)
                 ) {
                     IconButton(
                         onClick = onLockScreen,
@@ -1231,14 +1264,14 @@ private fun VideoControlOverlay(
                         Icon(
                             Icons.Filled.Lock,
                             contentDescription = "锁定屏幕",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
+                            tint = Color.White.copy(alpha = 0.88f),
+                            modifier = Modifier.size(25.dp)
                         )
                     }
                     Row(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .width(250.dp),
+                            .width(236.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1246,29 +1279,30 @@ private fun VideoControlOverlay(
                             Icon(
                                 Icons.Filled.SkipPrevious,
                                 contentDescription = "上一集",
-                                tint = Color.White.copy(alpha = 0.74f),
-                                modifier = Modifier.size(30.dp)
+                                tint = Color.White.copy(alpha = 0.72f),
+                                modifier = Modifier.size(29.dp)
                             )
                         }
                         IconButton(
                             onClick = onPlayPause,
                             modifier = Modifier
-                                .size(58.dp)
-                                .border(2.dp, Color(0xFF7B55FF), CircleShape)
+                                .size(56.dp)
+                                .border(2.dp, PlayerMoonPurple, CircleShape)
+                                .background(Color.Black.copy(alpha = 0.18f), CircleShape)
                         ) {
                             Icon(
                                 imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                 contentDescription = if (isPlaying) "暂停" else "播放",
                                 tint = Color.White,
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(33.dp)
                             )
                         }
                         IconButton(onClick = onNext, modifier = Modifier.size(42.dp)) {
                             Icon(
                                 Icons.Filled.SkipNext,
                                 contentDescription = "下一集",
-                                tint = Color.White.copy(alpha = 0.74f),
-                                modifier = Modifier.size(30.dp)
+                                tint = Color.White.copy(alpha = 0.72f),
+                                modifier = Modifier.size(29.dp)
                             )
                         }
                     }
@@ -1281,8 +1315,8 @@ private fun VideoControlOverlay(
                         Icon(
                             Icons.Filled.AspectRatio,
                             contentDescription = "适应屏幕",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
+                            tint = Color.White.copy(alpha = 0.88f),
+                            modifier = Modifier.size(25.dp)
                         )
                     }
                 }
@@ -1306,7 +1340,9 @@ private fun VideoToolPanel(
     Column(
         modifier = modifier
             .width(244.dp)
-            .background(Color(0xE6101722), RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(22.dp))
+            .background(PlayerPanelDark)
+            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(22.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -1359,7 +1395,7 @@ private fun VideoToolItem(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (enabled) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.42f),
+                tint = if (enabled) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.42f),
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -1381,40 +1417,51 @@ private fun VideoQuickToolButton(
     onClick: () -> Unit
 ) {
     val contentAlpha = if (isFuture) 0.58f else 1f
+    val displayLabel = when {
+        label == "展开更多工具" -> "展开"
+        label == "画面调节" -> "画调"
+        label == "睡眠定时" -> "睡眠"
+        label == "控制栏设置" -> "控制"
+        label == "控制栏" -> "控制"
+        else -> label
+    }
     Box(
         modifier = Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = if (isFuture) 0.30f else 0.45f))
+            .width(48.dp)
+            .height(44.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Transparent)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        if (label.endsWith("X")) {
-            Text(
-                text = label,
-                color = Color.White.copy(alpha = contentAlpha),
-                style = MaterialTheme.typography.titleSmall
+        Column(
+            modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(0.dp, Alignment.CenterVertically)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = if (isFuture) "$label 后续实现" else label,
+                tint = Color.White.copy(alpha = contentAlpha),
+                modifier = Modifier.size(if (isFuture) 18.dp else 19.dp)
             )
-        } else {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = if (isFuture) "$label 后续实现" else label,
-                    tint = Color.White.copy(alpha = contentAlpha),
-                    modifier = Modifier.size(if (isFuture) 21.dp else 25.dp)
+            Text(
+                text = displayLabel,
+                color = Color.White.copy(alpha = if (isFuture) 0.52f else 0.78f),
+                fontSize = 9.sp,
+                lineHeight = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            if (isFuture) {
+                Text(
+                    text = "后续",
+                    color = Color.White.copy(alpha = 0.38f),
+                    fontSize = 7.sp,
+                    lineHeight = 7.sp,
+                    maxLines = 1
                 )
-                if (isFuture) {
-                    Text(
-                        text = "后续",
-                        color = Color.White.copy(alpha = 0.46f),
-                        fontSize = 8.sp,
-                        lineHeight = 8.sp,
-                        maxLines = 1
-                    )
-                }
             }
         }
     }
@@ -1537,7 +1584,7 @@ private fun SyncStepButton(
 ) {
     Text(
         text = text,
-        color = if (enabled) Color(0xFFBDA8FF) else Color.White.copy(alpha = 0.38f),
+        color = if (enabled) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.38f),
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
             .background(Color.White.copy(alpha = if (enabled) 0.08f else 0.04f))
@@ -1558,7 +1605,7 @@ private fun SyncActionButton(
     val textColor = when {
         !enabled -> Color.White.copy(alpha = 0.34f)
         isFuture -> Color.White.copy(alpha = 0.58f)
-        else -> Color(0xFFBDA8FF)
+        else -> PlayerMoonPurpleSoft
     }
     val backgroundAlpha = when {
         !enabled -> 0.04f
@@ -1624,9 +1671,10 @@ private fun VideoSpeedPanel(
         modifier = modifier
             .fillMaxWidth(0.82f)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xE6101722))
+            .background(PlayerPanelDark)
+            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(18.dp))
             .clickable(onClick = {})
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 20.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(
@@ -1677,7 +1725,7 @@ private fun VideoSpeedPanel(
                 )
                 Text(
                     text = "编辑",
-                    color = Color(0xFF8AB6FF),
+                    color = PlayerMoonPurpleSoft,
                     style = MaterialTheme.typography.labelMedium
                 )
             }
@@ -1812,21 +1860,21 @@ private fun VideoSpeedSlider(
                     .fillMaxWidth()
                     .height(trackHeight)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFF2E3445))
+                    .background(PlayerTrackInactive)
             )
             Box(
                 modifier = Modifier
                     .fillMaxWidth(fraction)
                     .height(trackHeight)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFF4D8DFF))
+                    .background(PlayerMoonPurple)
             )
             Box(
                 modifier = Modifier
                     .offset(x = thumbOffset)
                     .size(thumbSize)
                     .clip(CircleShape)
-                    .background(Color(0xFF8AB6FF))
+                    .background(PlayerMoonPurpleSoft)
             )
         }
 
@@ -1851,7 +1899,7 @@ private fun VideoSpeedSlider(
                     modifier = Modifier
                         .size(4.dp)
                         .clip(CircleShape)
-                        .background(Color.White)
+                        .background(Color.White.copy(alpha = 0.82f))
                 )
                 Text(
                     text = "${option.formatSpeed()}x",
@@ -1888,7 +1936,8 @@ private fun VideoSpeedStepButton(
         modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.1f))
+            .background(Color.White.copy(alpha = 0.09f))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -1915,7 +1964,9 @@ private fun SidePanelShell(
 ) {
     Column(
         modifier = modifier
-            .background(Color(0xE6101722), RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(PlayerPanelDark)
+            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(18.dp))
             .clickable(onClick = {})
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1947,7 +1998,7 @@ private fun EqualizerSlider(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(label, color = Color.White.copy(alpha = 0.78f), style = MaterialTheme.typography.labelMedium)
-            Text("${value.toInt()} dB", color = Color(0xFF8AB6FF), style = MaterialTheme.typography.labelSmall)
+            Text("${value.toInt()} dB", color = PlayerMoonPurpleSoft, style = MaterialTheme.typography.labelSmall)
         }
         Slider(
             value = value,
@@ -1960,9 +2011,9 @@ private fun EqualizerSlider(
 
 @Composable
 private fun videoSliderColors() = SliderDefaults.colors(
-    thumbColor = Color(0xFF8AB6FF),
-    activeTrackColor = Color(0xFF4D8DFF),
-    inactiveTrackColor = Color(0xFF2E3445)
+    thumbColor = PlayerMoonPurpleSoft,
+    activeTrackColor = PlayerMoonPurple,
+    inactiveTrackColor = PlayerTrackInactive
 )
 @Composable
 private fun VideoChoicePanel(
@@ -1981,7 +2032,9 @@ private fun VideoChoicePanel(
     Column(
         modifier = modifier
             .width(190.dp)
-            .background(Color(0xE6101722), RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(PlayerPanelDark)
+            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(18.dp))
             .clickable(onClick = {})
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1990,7 +2043,7 @@ private fun VideoChoicePanel(
         options.forEach { option ->
             Text(
                 text = if (option == selected) "$option  ✓" else option,
-                color = if (option == selected) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.86f),
+                color = if (option == selected) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.86f),
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
@@ -2049,19 +2102,19 @@ private fun ThinVideoProgressBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(2.dp)
-                .background(Color(0xFF2E3445), RoundedCornerShape(99.dp))
+                .background(PlayerTrackInactive, RoundedCornerShape(99.dp))
         )
         Box(
             modifier = Modifier
                 .fillMaxWidth(progressFraction)
                 .height(2.dp)
-                .background(Color(0xFF4D8DFF), RoundedCornerShape(99.dp))
+                .background(PlayerMoonPurple, RoundedCornerShape(99.dp))
         )
         Box(
             modifier = Modifier
                 .offset(x = (maxWidth - 10.dp) * progressFraction)
                 .size(10.dp)
-                .background(Color(0xFF8AB6FF), CircleShape)
+                .background(PlayerMoonPurpleSoft, CircleShape)
         )
     }
 }
@@ -2182,6 +2235,99 @@ private fun Float.normalizeVideoSpeed(): Float {
     return (round(coerced / VIDEO_SPEED_STEP) * VIDEO_SPEED_STEP)
         .coerceIn(MIN_VIDEO_SPEED, MAX_VIDEO_SPEED)
 }
+
+private fun LocalMediaFile.videoFolderPlaybackSpeedKey(queue: List<LocalMediaFile>): String {
+    val folderNames = queue
+        .mapNotNull { it.parentFolderName?.trim()?.takeIf(String::isNotBlank) }
+        .distinct()
+    if (folderNames.size == 1) {
+        return "folder:${folderNames.first().lowercase(Locale.ROOT)}"
+    }
+
+    parentFolderName?.trim()
+        ?.takeIf(String::isNotBlank)
+        ?.let { return "folder:${it.lowercase(Locale.ROOT)}" }
+
+    if (queue.isNotEmpty()) {
+        return "queue:${queue.map { it.uri.trim() }.sorted().joinToString("|").hashCode()}"
+    }
+
+    val normalizedUri = uri.trim()
+    val parentUri = Uri.decode(normalizedUri)
+        .trimEnd('/')
+        .substringBeforeLast('/', missingDelimiterValue = "")
+        .takeIf { it.isNotBlank() }
+    return "uri:${parentUri ?: normalizedUri}"
+}
+
+private fun List<LocalMediaFile>.videoNavigationQueue(): List<LocalMediaFile> {
+    return sortedWith { first, second ->
+        val firstEpisode = first.name.extractEpisodeNumber()
+        val secondEpisode = second.name.extractEpisodeNumber()
+        when {
+            firstEpisode != null && secondEpisode != null && firstEpisode != secondEpisode ->
+                firstEpisode.compareTo(secondEpisode)
+            firstEpisode != null && secondEpisode == null -> -1
+            firstEpisode == null && secondEpisode != null -> 1
+            else -> naturalCompareVideoNames(first.name, second.name)
+        }.takeIf { it != 0 } ?: first.uri.compareTo(second.uri)
+    }
+}
+
+private fun String.extractEpisodeNumber(): Int? {
+    val source = substringBeforeLast('.', missingDelimiterValue = this)
+    val patterns = listOf(
+        Regex("""第\s*0*(\d{1,4})\s*[集话話]"""),
+        Regex("""(?i)\bS\d{1,3}\s*E0*(\d{1,4})\b"""),
+        Regex("""(?i)\bEP\s*0*(\d{1,4})\b"""),
+        Regex("""(?i)\bE0*(\d{1,4})\b""")
+    )
+    patterns.forEach { pattern ->
+        pattern.find(source)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+    }
+    return Regex("""(?<!\d)0*(\d{1,4})(?!\d)""")
+        .findAll(source)
+        .mapNotNull { match -> match.groupValues.getOrNull(1)?.toIntOrNull() }
+        .filterNot { number -> number in setOf(480, 720, 1080, 2160, 4320) }
+        .filterNot { number -> number in 1900..2099 }
+        .lastOrNull()
+}
+
+private fun naturalCompareVideoNames(first: String, second: String): Int {
+    val firstParts = first.videoNameParts()
+    val secondParts = second.videoNameParts()
+    val maxSize = minOf(firstParts.size, secondParts.size)
+    for (index in 0 until maxSize) {
+        val left = firstParts[index]
+        val right = secondParts[index]
+        val compare = when {
+            left.number != null && right.number != null -> left.number.compareTo(right.number)
+            left.number != null -> -1
+            right.number != null -> 1
+            else -> left.text.compareTo(right.text, ignoreCase = true)
+        }
+        if (compare != 0) return compare
+    }
+    return firstParts.size.compareTo(secondParts.size)
+}
+
+private fun String.videoNameParts(): List<VideoNamePart> {
+    return Regex("""\d+|\D+""")
+        .findAll(substringBeforeLast('.', missingDelimiterValue = this))
+        .map { match ->
+            val value = match.value
+            VideoNamePart(
+                text = value,
+                number = value.toIntOrNull()
+            )
+        }
+        .toList()
+}
+
+private data class VideoNamePart(
+    val text: String,
+    val number: Int?
+)
 
 private fun formatSeekDelta(deltaMs: Long): String {
     val sign = if (deltaMs >= 0L) "+" else "-"
