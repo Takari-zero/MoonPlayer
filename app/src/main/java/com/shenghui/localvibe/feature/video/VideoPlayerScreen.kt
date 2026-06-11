@@ -22,6 +22,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -93,6 +94,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -906,40 +908,91 @@ private fun VideoControlOverlay(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.34f))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.58f),
+                                Color.Black.copy(alpha = 0.24f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+                    .padding(start = 18.dp, end = 20.dp, top = 8.dp, bottom = 18.dp)
             ) {
                 IconButton(
                     onClick = onBack,
-                    modifier = Modifier.align(Alignment.CenterStart)
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .size(42.dp)
                 ) {
-                    Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+                    Icon(
+                        Icons.Filled.ArrowBack,
+                        contentDescription = "返回",
+                        tint = Color.White,
+                        modifier = Modifier.size(30.dp)
+                    )
                 }
                 Text(
                     text = title,
                     modifier = Modifier
-                        .align(Alignment.Center)
+                        .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .padding(horizontal = 176.dp),
+                        .padding(horizontal = 260.dp, vertical = 8.dp),
                     color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
                 Row(
-                    modifier = Modifier.align(Alignment.CenterEnd),
+                    modifier = Modifier.align(Alignment.TopEnd),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    IconButton(onClick = { openSyncPanel() }) {
-                        Icon(Icons.Filled.Audiotrack, contentDescription = "同步调节", tint = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { openSyncPanel() }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Audiotrack,
+                            contentDescription = "同步调节",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text("音轨", color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp)
                     }
-                    IconButton(onClick = { openSyncPanel() }) {
-                        Icon(Icons.Filled.Subtitles, contentDescription = "字幕同步", tint = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { openSyncPanel() }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Subtitles,
+                            contentDescription = "字幕同步",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text("字幕", color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp)
                     }
                     Box {
-                        IconButton(onClick = { onQuickToolsExpandedChange(!isQuickToolsExpanded) }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
+                        IconButton(
+                            onClick = { onQuickToolsExpandedChange(!isQuickToolsExpanded) },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "更多",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
                         }
                     }
                 }
@@ -1126,16 +1179,29 @@ private fun VideoControlOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.24f))
-                    .padding(horizontal = 14.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.24f),
+                                Color.Black.copy(alpha = 0.62f)
+                            )
+                        )
+                    )
+                    .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text(formatDuration(currentPositionMs), color = Color.White)
+                    Text(
+                        formatDuration(currentPositionMs),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                     ThinVideoProgressBar(
                         currentPositionMs = currentPositionMs,
                         durationMs = durationMs,
@@ -1144,39 +1210,80 @@ private fun VideoControlOverlay(
                         onSeekFinished = onSeekFinished,
                         modifier = Modifier.weight(1f)
                     )
-                    Text(formatDuration(durationMs), color = Color.White)
+                    Text(
+                        formatDuration(durationMs),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
-                Row(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 60.dp, end = 34.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(start = 32.dp, end = 28.dp)
                 ) {
-                    IconButton(onClick = onLockScreen, modifier = Modifier.size(48.dp)) {
+                    IconButton(
+                        onClick = onLockScreen,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .size(42.dp)
+                    ) {
                         Icon(
                             Icons.Filled.Lock,
                             contentDescription = "锁定屏幕",
                             tint = Color.White,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(26.dp)
                         )
                     }
-                    IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.SkipPrevious, contentDescription = "上一集", tint = Color.White, modifier = Modifier.size(32.dp))
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .width(250.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onPrevious, modifier = Modifier.size(42.dp)) {
+                            Icon(
+                                Icons.Filled.SkipPrevious,
+                                contentDescription = "上一集",
+                                tint = Color.White.copy(alpha = 0.74f),
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onPlayPause,
+                            modifier = Modifier
+                                .size(58.dp)
+                                .border(2.dp, Color(0xFF7B55FF), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = if (isPlaying) "暂停" else "播放",
+                                tint = Color.White,
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
+                        IconButton(onClick = onNext, modifier = Modifier.size(42.dp)) {
+                            Icon(
+                                Icons.Filled.SkipNext,
+                                contentDescription = "下一集",
+                                tint = Color.White.copy(alpha = 0.74f),
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
                     }
-                    IconButton(onClick = onPlayPause, modifier = Modifier.size(58.dp)) {
+                    IconButton(
+                        onClick = { onResizeModeSelected(resizeMode.next()) },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(42.dp)
+                    ) {
                         Icon(
-                            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = if (isPlaying) "暂停" else "播放",
+                            Icons.Filled.AspectRatio,
+                            contentDescription = "适应屏幕",
                             tint = Color.White,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(26.dp)
                         )
-                    }
-                    IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.SkipNext, contentDescription = "下一集", tint = Color.White, modifier = Modifier.size(32.dp))
-                    }
-                    IconButton(onClick = { onResizeModeSelected(resizeMode.next()) }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.AspectRatio, contentDescription = "适应屏幕", tint = Color.White, modifier = Modifier.size(28.dp))
                     }
                 }
             }
