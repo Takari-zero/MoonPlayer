@@ -662,8 +662,13 @@ private fun LocalVideoPlayer(
                 currentPositionMs = if (isSeekingByUser) draggingPositionMs else currentPositionMs,
                 durationMs = durationMs,
                 mediaFile = mediaFile,
+                navigationQueue = navigationQueue,
+                currentQueueUri = mediaFile.uri,
                 isPlaying = isPlaying,
                 onBack = ::requestBack,
+                onQueueItemSelected = { file ->
+                    selectNavigationVideo(file)
+                },
                 onSeekStart = {
                     isSeekingByUser = true
                     draggingPositionMs = currentPositionMs
@@ -913,8 +918,11 @@ private fun VideoControlOverlay(
     currentPositionMs: Long,
     durationMs: Long,
     mediaFile: LocalMediaFile,
+    navigationQueue: List<LocalMediaFile>,
+    currentQueueUri: String,
     isPlaying: Boolean,
     onBack: () -> Unit,
+    onQueueItemSelected: (LocalMediaFile) -> Unit,
     onSeekStart: () -> Unit,
     onSeekPreview: (Long) -> Unit,
     onSeekFinished: () -> Unit,
@@ -948,6 +956,7 @@ private fun VideoControlOverlay(
     var showSyncPanel by remember { mutableStateOf(false) }
     var showEqualizerPanel by remember { mutableStateOf(false) }
     var showInfoPanel by remember { mutableStateOf(false) }
+    var showQueuePanel by remember { mutableStateOf(false) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
     var eqTreble by remember { mutableFloatStateOf(0f) }
@@ -961,6 +970,7 @@ private fun VideoControlOverlay(
         showResizePanel = false
         showEqualizerPanel = false
         showInfoPanel = false
+        showQueuePanel = false
         onQuickToolsExpandedChange(false)
         showSyncPanel = true
     }
@@ -970,26 +980,39 @@ private fun VideoControlOverlay(
         showResizePanel = false
         showSyncPanel = false
         showEqualizerPanel = false
+        showQueuePanel = false
         onQuickToolsExpandedChange(false)
         showInfoPanel = true
+    }
+
+    fun openQueuePanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showSyncPanel = false
+        showEqualizerPanel = false
+        showInfoPanel = false
+        onQuickToolsExpandedChange(false)
+        showQueuePanel = true
     }
 
     fun closeSyncPanel() {
         showSyncPanel = false
     }
 
-    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel) {
+    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel) {
         if (showSyncPanel) {
             closeSyncPanel()
         } else if (showInfoPanel) {
             showInfoPanel = false
+        } else if (showQueuePanel) {
+            showQueuePanel = false
         } else {
             showSpeedPanel = false
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel)
+    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel, showQueuePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1003,6 +1026,7 @@ private fun VideoControlOverlay(
             showSyncPanel -> closeSyncPanel()
             showEqualizerPanel -> showEqualizerPanel = false
             showInfoPanel -> showInfoPanel = false
+            showQueuePanel -> showQueuePanel = false
             showSpeedPanel -> showSpeedPanel = false
             showResizePanel -> showResizePanel = false
             isQuickToolsExpanded -> onQuickToolsExpandedChange(false)
@@ -1013,7 +1037,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSyncPanel, showEqualizerPanel, showInfoPanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSyncPanel, showEqualizerPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1022,7 +1046,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showInfoPanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showInfoPanel && !showQueuePanel
 
         if (ordinaryControlsVisible) {
             Box(
@@ -1193,6 +1217,30 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showQueuePanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showQueuePanel = false }
+            )
+            VideoQueuePanel(
+                queue = navigationQueue,
+                currentUri = currentQueueUri,
+                currentPositionMs = currentPositionMs,
+                durationMs = durationMs,
+                onSelect = { file ->
+                    showQueuePanel = false
+                    if (file.uri != currentQueueUri) {
+                        onQueueItemSelected(file)
+                    }
+                },
+                onDismiss = { showQueuePanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 20.dp)
+            )
+        }
+
         if (showEqualizerPanel) {
             VideoEqualizerPanel(
                 bass = eqBass,
@@ -1273,8 +1321,7 @@ private fun VideoControlOverlay(
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
                         label = "队列",
-                        isFuture = true,
-                        onClick = { showFutureTool("播放列表") }
+                        onClick = { openQueuePanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Loop,
@@ -1828,6 +1875,168 @@ private fun VideoInfoRow(
             maxLines = maxValueLines,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+@Composable
+private fun VideoQueuePanel(
+    queue: List<LocalMediaFile>,
+    currentUri: String,
+    currentPositionMs: Long,
+    durationMs: Long,
+    onSelect: (LocalMediaFile) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentFile = queue.firstOrNull { it.uri == currentUri }
+    val folderName = currentFile?.parentFolderName?.takeIf { it.isNotBlank() }
+        ?: queue.firstOrNull()?.parentFolderName?.takeIf { it.isNotBlank() }
+        ?: "未知文件夹"
+    val currentIndex = queue.indexOfFirst { it.uri == currentUri }
+
+    SidePanelShell(
+        title = "播放队列",
+        onDismiss = onDismiss,
+        modifier = modifier
+            .width(360.dp)
+            .fillMaxHeight(0.82f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.045f))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = folderName,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "共 ${queue.size} 个视频" + if (currentIndex >= 0) " · 当前第 ${currentIndex + 1} 个" else "",
+                color = Color.White.copy(alpha = 0.58f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (queue.isEmpty()) {
+                Text(
+                    text = "当前没有可展示的播放队列",
+                    color = Color.White.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.045f))
+                        .padding(horizontal = 12.dp, vertical = 12.dp)
+                )
+            } else {
+                queue.forEachIndexed { index, file ->
+                    VideoQueueItem(
+                        index = index,
+                        file = file,
+                        isCurrent = file.uri == currentUri,
+                        currentPositionMs = currentPositionMs,
+                        durationMs = durationMs,
+                        onClick = { onSelect(file) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoQueueItem(
+    index: Int,
+    file: LocalMediaFile,
+    isCurrent: Boolean,
+    currentPositionMs: Long,
+    durationMs: Long,
+    onClick: () -> Unit
+) {
+    val progressText = if (isCurrent) {
+        val current = formatDuration(currentPositionMs)
+        val total = durationMs.takeIf { it > 0L }?.let { formatDuration(it) }
+        if (total == null) "正在播放 · $current" else "正在播放 · $current / $total"
+    } else {
+        "时长未知"
+    }
+    val detailText = listOfNotNull(
+        formatFileSize(file.size.coerceAtLeast(0L)).takeIf { it.isNotBlank() },
+        progressText
+    ).joinToString(" · ")
+    val backgroundColor = if (isCurrent) {
+        PlayerMoonPurple.copy(alpha = 0.20f)
+    } else {
+        Color.White.copy(alpha = 0.045f)
+    }
+    val borderColor = if (isCurrent) {
+        PlayerMoonPurpleSoft.copy(alpha = 0.68f)
+    } else {
+        Color.White.copy(alpha = 0.06f)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(13.dp))
+            .background(backgroundColor)
+            .border(1.dp, borderColor, RoundedCornerShape(13.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = (index + 1).toString().padStart(2, '0'),
+            color = if (isCurrent) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.48f),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(28.dp),
+            textAlign = TextAlign.Center,
+            maxLines = 1
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = file.name.ifBlank { "未知视频" },
+                color = Color.White.copy(alpha = if (isCurrent) 0.96f else 0.84f),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = detailText,
+                color = if (isCurrent) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.52f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (isCurrent) {
+            Text(
+                text = "正在播放",
+                color = PlayerMoonPurpleSoft,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
+        }
     }
 }
 
