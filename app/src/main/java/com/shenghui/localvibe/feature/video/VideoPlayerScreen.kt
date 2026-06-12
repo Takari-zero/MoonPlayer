@@ -90,6 +90,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -121,6 +122,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.TrackGroup
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -666,6 +670,7 @@ private fun LocalVideoPlayer(
                 currentPositionMs = if (isSeekingByUser) draggingPositionMs else currentPositionMs,
                 durationMs = durationMs,
                 mediaFile = mediaFile,
+                player = player,
                 navigationQueue = navigationQueue,
                 currentQueueUri = mediaFile.uri,
                 isPlaying = isPlaying,
@@ -922,6 +927,7 @@ private fun VideoControlOverlay(
     currentPositionMs: Long,
     durationMs: Long,
     mediaFile: LocalMediaFile,
+    player: ExoPlayer,
     navigationQueue: List<LocalMediaFile>,
     currentQueueUri: String,
     isPlaying: Boolean,
@@ -961,9 +967,23 @@ private fun VideoControlOverlay(
     var showEqualizerPanel by remember { mutableStateOf(false) }
     var showInfoPanel by remember { mutableStateOf(false) }
     var showQueuePanel by remember { mutableStateOf(false) }
+    var showAudioTrackPanel by remember { mutableStateOf(false) }
+    var audioTrackRevision by remember(player) { mutableIntStateOf(0) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
     var eqTreble by remember { mutableFloatStateOf(0f) }
+    val audioTracks = remember(player, audioTrackRevision) { player.availableAudioTracks() }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) {
+                audioTrackRevision += 1
+            }
+        }
+        player.addListener(listener)
+        audioTrackRevision += 1
+        onDispose { player.removeListener(listener) }
+    }
 
     fun showFutureTool(feature: String) {
         showFutureToolToast(context, feature)
@@ -975,8 +995,21 @@ private fun VideoControlOverlay(
         showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
+        showAudioTrackPanel = false
         onQuickToolsExpandedChange(false)
         showSyncPanel = true
+    }
+
+    fun openAudioTrackPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showSyncPanel = false
+        showEqualizerPanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        onQuickToolsExpandedChange(false)
+        audioTrackRevision += 1
+        showAudioTrackPanel = true
     }
 
     fun openInfoPanel() {
@@ -985,6 +1018,7 @@ private fun VideoControlOverlay(
         showSyncPanel = false
         showEqualizerPanel = false
         showQueuePanel = false
+        showAudioTrackPanel = false
         onQuickToolsExpandedChange(false)
         showInfoPanel = true
     }
@@ -995,6 +1029,7 @@ private fun VideoControlOverlay(
         showSyncPanel = false
         showEqualizerPanel = false
         showInfoPanel = false
+        showAudioTrackPanel = false
         onQuickToolsExpandedChange(false)
         showQueuePanel = true
     }
@@ -1003,9 +1038,11 @@ private fun VideoControlOverlay(
         showSyncPanel = false
     }
 
-    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel) {
+    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel) {
         if (showSyncPanel) {
             closeSyncPanel()
+        } else if (showAudioTrackPanel) {
+            showAudioTrackPanel = false
         } else if (showInfoPanel) {
             showInfoPanel = false
         } else if (showQueuePanel) {
@@ -1015,8 +1052,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel, showQueuePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel)
+    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel)
     }
 
     DisposableEffect(Unit) {
@@ -1029,6 +1066,7 @@ private fun VideoControlOverlay(
         when {
             showSyncPanel -> closeSyncPanel()
             showEqualizerPanel -> showEqualizerPanel = false
+            showAudioTrackPanel -> showAudioTrackPanel = false
             showInfoPanel -> showInfoPanel = false
             showQueuePanel -> showQueuePanel = false
             showSpeedPanel -> showSpeedPanel = false
@@ -1041,7 +1079,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSyncPanel, showEqualizerPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSyncPanel, showEqualizerPanel, showAudioTrackPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1050,7 +1088,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showInfoPanel && !showQueuePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showAudioTrackPanel && !showInfoPanel && !showQueuePanel
 
         if (ordinaryControlsVisible) {
             Box(
@@ -1102,14 +1140,14 @@ private fun VideoControlOverlay(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(16.dp))
-                            .clickable { openSyncPanel() }
+                            .clickable { openAudioTrackPanel() }
                             .padding(horizontal = 5.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             Icons.Filled.Audiotrack,
-                            contentDescription = "同步调节",
+                            contentDescription = "音轨",
                             tint = Color.White,
                             modifier = Modifier.size(22.dp)
                         )
@@ -1192,10 +1230,37 @@ private fun VideoControlOverlay(
                 onDismiss = { closeSyncPanel() },
                 onPickSubtitle = onSubtitleSelect,
                 onClearSubtitle = onSubtitleClear,
+                onAudioTrackOpen = {
+                    closeSyncPanel()
+                    openAudioTrackPanel()
+                },
                 onAudioDelayRequest = {
                     onAudioDelayChange(audioDelayMs)
                     showFutureTool("音频同步")
                 },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 20.dp)
+            )
+        }
+
+        if (showAudioTrackPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showAudioTrackPanel = false }
+            )
+            AudioTrackPanel(
+                tracks = audioTracks,
+                onSelect = { track ->
+                    val switched = player.selectAudioTrack(track)
+                    if (switched) {
+                        audioTrackRevision += 1
+                    } else {
+                        showVideoPlayerToast(context, "音轨切换失败", ERROR_HINT_MS)
+                    }
+                },
+                onDismiss = { showAudioTrackPanel = false },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 56.dp, end = 20.dp)
@@ -1308,8 +1373,7 @@ private fun VideoControlOverlay(
                     VideoQuickToolButton(
                         icon = Icons.Filled.Audiotrack,
                         label = "音轨",
-                        isFuture = true,
-                        onClick = { showFutureTool("音轨切换") }
+                        onClick = { openAudioTrackPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Tune,
@@ -1632,6 +1696,7 @@ private fun SyncAdjustmentPanel(
     onDismiss: () -> Unit,
     onPickSubtitle: () -> Unit,
     onClearSubtitle: () -> Unit,
+    onAudioTrackOpen: () -> Unit,
     onAudioDelayRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1716,9 +1781,162 @@ private fun SyncAdjustmentPanel(
             style = MaterialTheme.typography.labelSmall
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SyncActionButton("音轨切换", enabled = true, isFuture = true) {
-                showFutureToolToast(context, "音轨切换")
+            SyncActionButton("音轨切换", enabled = true, onClick = onAudioTrackOpen)
+        }
+    }
+}
+
+@Composable
+private fun AudioTrackPanel(
+    tracks: List<VideoAudioTrackOption>,
+    onSelect: (VideoAudioTrackOption) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(
+        title = "音轨",
+        onDismiss = onDismiss,
+        modifier = modifier
+            .width(340.dp)
+            .fillMaxHeight(0.74f)
+    ) {
+        when {
+            tracks.isEmpty() -> {
+                Text(
+                    text = "未检测到可用音轨",
+                    color = Color.White.copy(alpha = 0.68f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.045f))
+                        .padding(horizontal = 12.dp, vertical = 12.dp)
+                )
             }
+
+            tracks.size == 1 -> {
+                Text(
+                    text = "当前视频只有一个音轨",
+                    color = Color.White.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                AudioTrackRow(
+                    track = tracks.first(),
+                    onClick = {},
+                    enabled = false
+                )
+            }
+
+            else -> {
+                Text(
+                    text = "共 ${tracks.size} 条音轨，点击可切换",
+                    color = Color.White.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    itemsIndexed(tracks, key = { _, track -> track.id }) { _, track ->
+                        AudioTrackRow(
+                            track = track,
+                            enabled = track.isSupported,
+                            onClick = { onSelect(track) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioTrackRow(
+    track: VideoAudioTrackOption,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val isCurrent = track.isSelected
+    val backgroundColor = when {
+        isCurrent -> PlayerMoonPurple.copy(alpha = 0.10f)
+        enabled -> Color.White.copy(alpha = 0.035f)
+        else -> Color.White.copy(alpha = 0.020f)
+    }
+    val titleColor = when {
+        isCurrent -> Color.White.copy(alpha = 0.94f)
+        enabled -> Color.White.copy(alpha = 0.82f)
+        else -> Color.White.copy(alpha = 0.44f)
+    }
+    val detailColor = when {
+        isCurrent -> PlayerMoonPurpleSoft
+        enabled -> Color.White.copy(alpha = 0.54f)
+        else -> Color.White.copy(alpha = 0.34f)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .border(
+                width = 1.dp,
+                color = if (isCurrent) PlayerMoonPurpleSoft.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.035f),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(enabled = enabled && !isCurrent, onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (isCurrent) PlayerMoonPurpleSoft else Color.Transparent)
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "音轨 ${track.displayIndex}",
+                color = titleColor,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = track.detailText,
+                color = detailColor,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (isCurrent) {
+            Text(
+                text = "当前",
+                color = PlayerMoonPurpleSoft,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(PlayerMoonPurple.copy(alpha = 0.12f))
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                maxLines = 1
+            )
+        } else if (!enabled) {
+            Text(
+                text = "不可用",
+                color = Color.White.copy(alpha = 0.36f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
         }
     }
 }
@@ -2692,11 +2910,110 @@ private data class VideoInfoMetadata(
     val lastModifiedMs: Long?
 )
 
+private data class VideoAudioTrackOption(
+    val id: String,
+    val displayIndex: Int,
+    val trackGroup: TrackGroup,
+    val trackIndex: Int,
+    val isSelected: Boolean,
+    val isSupported: Boolean,
+    val label: String?,
+    val language: String,
+    val channelText: String,
+    val sampleRateText: String,
+    val formatText: String
+) {
+    val detailText: String
+        get() = listOfNotNull(
+            label?.takeIf { it.isNotBlank() },
+            "语言：$language",
+            "声道：$channelText",
+            "采样率：$sampleRateText",
+            "格式：$formatText"
+        ).joinToString(" · ")
+}
+
 private fun Float.formatSpeed(): String {
     val rounded = round(this * 100f) / 100f
     return String.format(Locale.US, "%.2f", rounded)
         .trimEnd('0')
         .trimEnd('.')
+}
+
+private fun ExoPlayer.availableAudioTracks(): List<VideoAudioTrackOption> {
+    var displayIndex = 1
+    return currentTracks.groups.flatMapIndexed { groupIndex, group ->
+        if (group.type != C.TRACK_TYPE_AUDIO) {
+            emptyList()
+        } else {
+            (0 until group.length).map { trackIndex ->
+                val format = group.getTrackFormat(trackIndex)
+                VideoAudioTrackOption(
+                    id = "audio-$groupIndex-$trackIndex-${format.id.orEmpty()}",
+                    displayIndex = displayIndex++,
+                    trackGroup = group.mediaTrackGroup,
+                    trackIndex = trackIndex,
+                    isSelected = group.isTrackSelected(trackIndex),
+                    isSupported = group.isTrackSupported(trackIndex),
+                    label = format.label?.takeIf { it.isNotBlank() },
+                    language = formatAudioLanguage(format.language),
+                    channelText = formatAudioChannels(format.channelCount),
+                    sampleRateText = formatAudioSampleRate(format.sampleRate),
+                    formatText = formatAudioMimeType(format.sampleMimeType)
+                )
+            }
+        }
+    }
+}
+
+private fun ExoPlayer.selectAudioTrack(track: VideoAudioTrackOption): Boolean {
+    if (!track.isSupported) return false
+    return runCatching {
+        trackSelectionParameters = trackSelectionParameters
+            .buildUpon()
+            .setOverrideForType(TrackSelectionOverride(track.trackGroup, listOf(track.trackIndex)))
+            .build()
+    }.isSuccess
+}
+
+private fun formatAudioLanguage(language: String?): String {
+    val normalized = language?.trim()?.lowercase(Locale.US).orEmpty()
+    return when (normalized) {
+        "", "und", "unknown" -> "未知"
+        "zh", "zho", "chi", "cmn", "zh-cn", "zh-hans" -> "中文"
+        "zh-tw", "zh-hant", "yue" -> "中文"
+        "en", "eng" -> "英文"
+        "ja", "jpn" -> "日文"
+        "ko", "kor" -> "韩文"
+        "fr", "fra", "fre" -> "法文"
+        "de", "deu", "ger" -> "德文"
+        "es", "spa" -> "西班牙文"
+        else -> language?.uppercase(Locale.US) ?: "未知"
+    }
+}
+
+private fun formatAudioChannels(channelCount: Int): String {
+    return if (channelCount > 0) "${channelCount}ch" else "未知"
+}
+
+private fun formatAudioSampleRate(sampleRate: Int): String {
+    return if (sampleRate > 0) "${sampleRate}Hz" else "未知"
+}
+
+private fun formatAudioMimeType(mimeType: String?): String {
+    val normalized = mimeType?.trim()?.lowercase(Locale.US).orEmpty()
+    return when {
+        normalized.isBlank() -> "未知"
+        normalized.contains("mp4a") || normalized.contains("aac") -> "AAC"
+        normalized.contains("eac3") -> "EAC3"
+        normalized.contains("ac3") -> "AC3"
+        normalized.contains("opus") -> "OPUS"
+        normalized.contains("vorbis") -> "VORBIS"
+        normalized.contains("flac") -> "FLAC"
+        normalized.contains("dts") -> "DTS"
+        normalized.contains("mpeg") || normalized.contains("mp3") -> "MP3"
+        else -> normalized.substringAfter('/').uppercase(Locale.US).ifBlank { "未知" }
+    }
 }
 
 private fun Float.normalizeVideoSpeed(): Float {
