@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -133,6 +134,8 @@ fun VideoLibraryScreen(
     var isGridMode by rememberSaveable { mutableStateOf(false) }
     var showMorePanel by rememberSaveable { mutableStateOf(false) }
     var sortMode by rememberSaveable { mutableStateOf(VideoLibrarySortMode.NAME) }
+    var showFolderThumbnail by rememberSaveable { mutableStateOf(true) }
+    var showFolderSize by rememberSaveable { mutableStateOf(true) }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedFolderIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
     val listState = rememberLazyListState()
@@ -290,6 +293,8 @@ fun VideoLibraryScreen(
                                 ) { item ->
                                     VideoFolderGridItem(
                                         item = item,
+                                        showThumbnail = showFolderThumbnail,
+                                        showSize = showFolderSize,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = item.folder.id in selectedFolderIds,
                                         onToggleSelected = {
@@ -316,6 +321,8 @@ fun VideoLibraryScreen(
                                     VideoFolderCard(
                                         item = item,
                                         compact = false,
+                                        showThumbnail = showFolderThumbnail,
+                                        showSize = showFolderSize,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = item.folder.id in selectedFolderIds,
                                         onToggleSelected = {
@@ -356,6 +363,10 @@ fun VideoLibraryScreen(
                 VideoLibraryMorePanelV2(
                     isGridMode = isGridMode,
                     sortMode = sortMode,
+                    showThumbnail = showFolderThumbnail,
+                    showSize = showFolderSize,
+                    onShowThumbnailChange = { showFolderThumbnail = it },
+                    onShowSizeChange = { showFolderSize = it },
                     onDismiss = { showMorePanel = false },
                     onSearch = {
                         showMorePanel = false
@@ -539,290 +550,6 @@ private fun HeaderIconButton(
 }
 
 @Composable
-private fun VideoLibraryMorePanel(
-    isGridMode: Boolean,
-    sortMode: VideoLibrarySortMode,
-    onDismiss: () -> Unit,
-    onSearch: () -> Unit,
-    onListMode: () -> Unit,
-    onGridMode: () -> Unit,
-    onAddFolder: () -> Unit,
-    onRescan: () -> Unit,
-    onSortByName: () -> Unit,
-    onSortByCount: () -> Unit,
-    onSortByDate: () -> Unit,
-    onMultiDelete: () -> Unit,
-    onMore: () -> Unit
-) {
-    var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
-    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
-    var showThumbnail by rememberSaveable { mutableStateOf(true) }
-    var showDuration by rememberSaveable { mutableStateOf(true) }
-    var showExtension by rememberSaveable { mutableStateOf(false) }
-    var showPlayTime by rememberSaveable { mutableStateOf(false) }
-    var showResolution by rememberSaveable { mutableStateOf(false) }
-    var showFrameRate by rememberSaveable { mutableStateOf(false) }
-    var showPath by rememberSaveable { mutableStateOf(false) }
-    var showSize by rememberSaveable { mutableStateOf(false) }
-    var showDate by rememberSaveable { mutableStateOf(false) }
-    var showDurationOnThumbnail by rememberSaveable { mutableStateOf(true) }
-    var showHiddenFiles by rememberSaveable { mutableStateOf(false) }
-    var recognizeNoMedia by rememberSaveable { mutableStateOf(true) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.62f))
-            .clickable(onClick = onDismiss),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
-            modifier = Modifier
-                .width(326.dp)
-                .clickable(onClick = {}),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = VideoSurface),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.065f))
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("视图模式", color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            MorePanelOption(
-                                icon = Icons.Filled.Search,
-                                label = "搜索",
-                                selected = true,
-                                onClick = onSearch
-                            )
-                            MorePanelOption(
-                                icon = Icons.Filled.CreateNewFolder,
-                                label = "添加",
-                                selected = false,
-                                onClick = onAddFolder
-                            )
-                        }
-                    }
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("布局", color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            MorePanelOption(
-                                icon = Icons.Filled.ViewList,
-                                label = "列表",
-                                selected = !isGridMode,
-                                onClick = onListMode
-                            )
-                            MorePanelOption(
-                                icon = Icons.Filled.GridView,
-                                label = "网格",
-                                selected = isGridMode,
-                                onClick = onGridMode
-                            )
-                        }
-                    }
-                }
-                PanelDivider()
-                Text("排序", color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    MorePanelOption(Icons.Filled.SortByAlpha, "名称", sortMode == VideoLibrarySortMode.NAME, onSortByName)
-                    MorePanelOption(Icons.Filled.Movie, "数量", sortMode == VideoLibrarySortMode.COUNT, onSortByCount)
-                    MorePanelOption(Icons.Filled.Schedule, "多选", false, onMultiDelete)
-                    MorePanelOption(Icons.Filled.DateRange, "日期", sortMode == VideoLibrarySortMode.DATE, onSortByDate)
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    MorePanelOption(Icons.Filled.Refresh, "重扫", false, onRescan)
-                    MorePanelOption(Icons.Filled.MoreHoriz, "更多", false, onMore)
-                }
-                PanelDivider()
-                VideoPanelExpandableHeader(
-                    title = "字段",
-                    expanded = fieldsExpanded,
-                    onClick = { fieldsExpanded = !fieldsExpanded }
-                )
-                if (fieldsExpanded) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                            VideoPanelCheckOption("缩略图", showThumbnail) { showThumbnail = it }
-                            VideoPanelCheckOption("长度", showDuration) { showDuration = it }
-                            VideoPanelCheckOption("文件扩展名", showExtension) { showExtension = it }
-                        }
-                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                            VideoPanelCheckOption("播放时间", showPlayTime) { showPlayTime = it }
-                            VideoPanelCheckOption("分辨率", showResolution) { showResolution = it }
-                            VideoPanelCheckOption("帧率", showFrameRate) { showFrameRate = it }
-                        }
-                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                            VideoPanelCheckOption("路径", showPath) { showPath = it }
-                            VideoPanelCheckOption("大小", showSize) { showSize = it }
-                            VideoPanelCheckOption("日期", showDate) { showDate = it }
-                        }
-                    }
-                }
-                PanelDivider()
-                VideoPanelExpandableHeader(
-                    title = "高级",
-                    expanded = advancedExpanded,
-                    onClick = { advancedExpanded = !advancedExpanded }
-                )
-                if (advancedExpanded) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        VideoPanelSwitchOption(
-                            label = "在缩略图上显示长度",
-                            checked = showDurationOnThumbnail,
-                            onCheckedChange = { showDurationOnThumbnail = it }
-                        )
-                        VideoPanelSwitchOption(
-                            label = "显示隐藏文件和文件夹",
-                            checked = showHiddenFiles,
-                            onCheckedChange = { showHiddenFiles = it }
-                        )
-                        VideoPanelSwitchOption(
-                            label = "识别 .nomedia",
-                            checked = recognizeNoMedia,
-                            onCheckedChange = { recognizeNoMedia = it }
-                        )
-                    }
-                }
-                PanelDivider()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "取消",
-                        color = VideoTextPrimary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClick = onDismiss)
-                            .padding(horizontal = 18.dp, vertical = 10.dp)
-                    )
-                    Text(
-                        text = "完成",
-                        color = VideoPrimary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClick = onDismiss)
-                            .padding(horizontal = 18.dp, vertical = 10.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun VideoPanelExpandableHeader(
-    title: String,
-    expanded: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .background(Color.White.copy(alpha = 0.04f))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(title, color = VideoTextPrimary, style = MaterialTheme.typography.titleSmall)
-        Icon(
-            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = VideoTextSecondary
-        )
-    }
-}
-
-@Composable
-private fun VideoPanelCheckOption(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .width(86.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
-        Text(
-            text = label,
-            color = VideoTextSecondary,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun VideoPanelSwitchOption(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, color = VideoTextSecondary, style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-@Composable
-private fun MorePanelOption(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .width(50.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) VideoPrimary.copy(alpha = 0.11f) else Color.White.copy(alpha = 0.03f))
-            .clickable(onClick = onClick)
-            .padding(vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = if (selected) VideoPrimarySoft else VideoTextSecondary.copy(alpha = 0.88f),
-            modifier = Modifier.size(22.dp)
-        )
-        Text(
-            text = label,
-            color = if (selected) VideoPrimarySoft else VideoTextMuted,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
 private fun PanelDivider() {
     Box(
         modifier = Modifier
@@ -836,6 +563,10 @@ private fun PanelDivider() {
 private fun VideoLibraryMorePanelV2(
     isGridMode: Boolean,
     sortMode: VideoLibrarySortMode,
+    showThumbnail: Boolean,
+    showSize: Boolean,
+    onShowThumbnailChange: (Boolean) -> Unit,
+    onShowSizeChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onSearch: () -> Unit,
     onListMode: () -> Unit,
@@ -848,17 +579,12 @@ private fun VideoLibraryMorePanelV2(
     onMultiDelete: () -> Unit,
     onMore: () -> Unit
 ) {
+    val context = LocalContext.current
     var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
-    var showThumbnail by rememberSaveable { mutableStateOf(true) }
-    var showDuration by rememberSaveable { mutableStateOf(true) }
-    var showExtension by rememberSaveable { mutableStateOf(false) }
-    var showPlayTime by rememberSaveable { mutableStateOf(false) }
-    var showPath by rememberSaveable { mutableStateOf(false) }
-    var showSize by rememberSaveable { mutableStateOf(false) }
-    var showDurationOnThumbnail by rememberSaveable { mutableStateOf(true) }
-    var showHiddenFiles by rememberSaveable { mutableStateOf(false) }
-    var recognizeNoMedia by rememberSaveable { mutableStateOf(true) }
+    fun showFuture(feature: String) {
+        Toast.makeText(context, "$feature 后续实现", Toast.LENGTH_SHORT).show()
+    }
 
     Box(
         modifier = Modifier
@@ -870,6 +596,7 @@ private fun VideoLibraryMorePanelV2(
         Card(
             modifier = Modifier
                 .width(304.dp)
+                .heightIn(max = 620.dp)
                 .clickable(onClick = {}),
             shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xF214141C)),
@@ -934,6 +661,51 @@ private fun VideoLibraryMorePanelV2(
                     ) {
                         MorePanelOptionV2(Icons.Filled.Schedule, "\u591a\u9009", false, onMultiDelete, Modifier.weight(1f))
                         MorePanelOptionV2(Icons.Filled.Refresh, "\u91cd\u626b", false, onRescan, Modifier.weight(1f))
+                    }
+
+                    PanelDivider()
+                    VideoPanelExpandableHeaderV2(
+                        title = "字段",
+                        icon = Icons.Filled.Description,
+                        expanded = fieldsExpanded,
+                        onClick = { fieldsExpanded = !fieldsExpanded }
+                    )
+                    if (fieldsExpanded) {
+                        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            VideoPanelToggleOptionV2(
+                                label = "缩略图",
+                                description = "显示文件夹封面",
+                                checked = showThumbnail,
+                                onCheckedChange = onShowThumbnailChange
+                            )
+                            VideoPanelToggleOptionV2(
+                                label = "大小",
+                                description = "显示文件夹总大小",
+                                checked = showSize,
+                                onCheckedChange = onShowSizeChange
+                            )
+                            VideoPanelFutureOptionV2("长度 / 时长") { showFuture("长度显示") }
+                            VideoPanelFutureOptionV2("播放时间 / 进度") { showFuture("播放时间显示") }
+                            VideoPanelFutureOptionV2("扩展名") { showFuture("扩展名显示") }
+                            VideoPanelFutureOptionV2("路径") { showFuture("路径显示") }
+                            VideoPanelFutureOptionV2("分辨率 / 帧率") { showFuture("分辨率和帧率显示") }
+                            VideoPanelFutureOptionV2("日期显示") { showFuture("日期显示") }
+                        }
+                    }
+
+                    PanelDivider()
+                    VideoPanelExpandableHeaderV2(
+                        title = "高级",
+                        icon = Icons.Filled.MoreHoriz,
+                        expanded = advancedExpanded,
+                        onClick = { advancedExpanded = !advancedExpanded }
+                    )
+                    if (advancedExpanded) {
+                        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            VideoPanelFutureOptionV2("缩略图显示长度") { showFuture("缩略图显示长度") }
+                            VideoPanelFutureOptionV2("显示隐藏文件和文件夹") { showFuture("显示隐藏文件和文件夹") }
+                            VideoPanelFutureOptionV2("识别 .nomedia") { showFuture("识别 .nomedia") }
+                        }
                     }
                 }
 
@@ -1013,6 +785,84 @@ private fun VideoPanelExpandableHeaderV2(
             contentDescription = null,
             tint = VideoTextSecondary,
             modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoPanelToggleOptionV2(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.04f))
+            .clickable { onCheckedChange(!checked) }
+            .padding(start = 12.dp, end = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = label,
+                color = VideoTextPrimary,
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = description,
+                color = VideoTextSecondary,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.height(32.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoPanelFutureOptionV2(
+    label: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(38.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .background(Color.White.copy(alpha = 0.025f))
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = VideoTextSecondary.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = "后续实现",
+            color = VideoTextMuted,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1
         )
     }
 }
@@ -1238,6 +1088,8 @@ private fun EmptyVideoState(text: String) {
 private fun VideoFolderCard(
     item: VideoFolderUiModel,
     compact: Boolean,
+    showThumbnail: Boolean,
+    showSize: Boolean,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelected: () -> Unit = {},
@@ -1265,11 +1117,11 @@ private fun VideoFolderCard(
             ) {
                 FolderPreview(
                     folderName = item.folder.name,
-                    previewUri = item.videos.firstOrNull()?.uri,
+                    previewUri = item.videos.firstOrNull()?.uri.takeIf { showThumbnail },
                     videoCount = item.videos.size,
                     compact = true
                 )
-                FolderText(item = item, compact = true)
+                FolderText(item = item, compact = true, showSize = showSize)
             }
         } else {
             Row(
@@ -1281,11 +1133,16 @@ private fun VideoFolderCard(
             ) {
                 FolderPreview(
                     folderName = item.folder.name,
-                    previewUri = item.videos.firstOrNull()?.uri,
+                    previewUri = item.videos.firstOrNull()?.uri.takeIf { showThumbnail },
                     videoCount = item.videos.size,
                     compact = false
                 )
-                FolderText(item = item, compact = false, modifier = Modifier.weight(1f))
+                FolderText(
+                    item = item,
+                    compact = false,
+                    showSize = showSize,
+                    modifier = Modifier.weight(1f)
+                )
                 if (isSelectionMode) {
                     Checkbox(
                         checked = isSelected,
@@ -1321,6 +1178,8 @@ private fun VideoFolderCard(
 @Composable
 private fun VideoFolderGridItem(
     item: VideoFolderUiModel,
+    showThumbnail: Boolean,
+    showSize: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
@@ -1340,7 +1199,7 @@ private fun VideoFolderGridItem(
         Box {
             FolderPreview(
                 folderName = item.folder.name,
-                previewUri = item.videos.firstOrNull()?.uri,
+                previewUri = item.videos.firstOrNull()?.uri.takeIf { showThumbnail },
                 videoCount = item.videos.size,
                 compact = true,
                 modifier = Modifier
@@ -1379,7 +1238,7 @@ private fun VideoFolderGridItem(
                 textAlign = TextAlign.Start
             )
             Text(
-                text = folderMetaText(item),
+                text = folderMetaText(item, showSize),
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                 color = VideoTextSecondary,
                 maxLines = 1,
@@ -1473,6 +1332,7 @@ private fun FolderPreview(
 private fun FolderText(
     item: VideoFolderUiModel,
     compact: Boolean,
+    showSize: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1491,7 +1351,7 @@ private fun FolderText(
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = folderMetaText(item),
+            text = folderMetaText(item, showSize),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             color = VideoTextSecondary
         )
@@ -1615,7 +1475,10 @@ private fun folderCoverGradient(kind: FolderCoverKind): List<Color> {
     }
 }
 
-private fun folderMetaText(item: VideoFolderUiModel): String {
+private fun folderMetaText(item: VideoFolderUiModel, showSize: Boolean): String {
+    if (!showSize) {
+        return "${item.videos.size} 个视频"
+    }
     val totalSize = item.videos.sumOf { it.size.coerceAtLeast(0L) }
     return "${item.videos.size} 个视频 · ${formatByteCount(totalSize)}"
 }
