@@ -3,6 +3,8 @@ package com.shenghui.localvibe.feature.video
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -585,6 +587,11 @@ private fun VideoLibraryMorePanelV2(
     fun showFuture(feature: String) {
         Toast.makeText(context, "$feature 后续实现", Toast.LENGTH_SHORT).show()
     }
+    fun showBriefFuture(feature: String) {
+        val toast = Toast.makeText(context, "$feature 后续实现", Toast.LENGTH_SHORT)
+        toast.show()
+        Handler(Looper.getMainLooper()).postDelayed({ toast.cancel() }, 1_000L)
+    }
 
     Box(
         modifier = Modifier
@@ -702,9 +709,18 @@ private fun VideoLibraryMorePanelV2(
                     )
                     if (advancedExpanded) {
                         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            VideoPanelFutureOptionV2("缩略图显示长度") { showFuture("缩略图显示长度") }
-                            VideoPanelFutureOptionV2("显示隐藏文件和文件夹") { showFuture("显示隐藏文件和文件夹") }
-                            VideoPanelFutureOptionV2("识别 .nomedia") { showFuture("识别 .nomedia") }
+                            VideoPanelFutureOptionV2(
+                                label = "缩略图显示长度",
+                                reason = "需要可靠时长数据后再显示"
+                            ) { showBriefFuture("缩略图显示长度") }
+                            VideoPanelFutureOptionV2(
+                                label = "显示隐藏文件和文件夹",
+                                reason = "不会影响当前手动隐藏内容"
+                            ) { showBriefFuture("显示隐藏文件和文件夹") }
+                            VideoPanelFutureOptionV2(
+                                label = "识别 .nomedia",
+                                reason = "涉及扫描策略，暂不启用"
+                            ) { showBriefFuture("识别 .nomedia") }
                         }
                     }
                 }
@@ -837,12 +853,13 @@ private fun VideoPanelToggleOptionV2(
 @Composable
 private fun VideoPanelFutureOptionV2(
     label: String,
+    reason: String? = null,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(38.dp)
+            .height(if (reason == null) 38.dp else 50.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .background(Color.White.copy(alpha = 0.025f))
@@ -850,20 +867,41 @@ private fun VideoPanelFutureOptionV2(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = label,
-            color = VideoTextSecondary.copy(alpha = 0.78f),
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = "后续实现",
-            color = VideoTextMuted,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1
-        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = label,
+                color = VideoTextSecondary.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (reason != null) {
+                Text(
+                    text = reason,
+                    color = VideoTextMuted.copy(alpha = 0.86f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(VideoTextMuted.copy(alpha = 0.14f))
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "后续",
+                color = VideoTextMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
+        }
     }
 }
 
