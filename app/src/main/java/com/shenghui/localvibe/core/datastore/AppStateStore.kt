@@ -243,6 +243,22 @@ class AppStateStore(private val context: Context) {
         }.getOrDefault(emptyList())
     }
 
+    suspend fun loadVideoFolderPlaybackSpeeds(): Map<String, Float> {
+        val json = context.appStateDataStore.data.first()[VideoFolderPlaybackSpeedKey].orEmpty()
+        return decodeVideoFolderPlaybackSpeeds(json)
+    }
+
+    suspend fun saveVideoFolderPlaybackSpeed(folderKey: String, speed: Float) {
+        val normalizedKey = folderKey.trim()
+        if (normalizedKey.isBlank()) return
+        val safeSpeed = speed.takeIf(::isValidVideoFolderPlaybackSpeed) ?: DEFAULT_VIDEO_PLAYBACK_SPEED
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoFolderPlaybackSpeeds(prefs[VideoFolderPlaybackSpeedKey].orEmpty())
+                .plus(normalizedKey to safeSpeed)
+            prefs[VideoFolderPlaybackSpeedKey] = encodeVideoFolderPlaybackSpeeds(next)
+        }
+    }
+
     suspend fun saveProgress(progress: PersistedPlaybackProgress) {
         val next = loadProgress()
             .filterNot { it.mediaUri == progress.mediaUri && it.mediaType == progress.mediaType }
@@ -459,6 +475,43 @@ class AppStateStore(private val context: Context) {
         return array.toString()
     }
 
+    private fun decodeVideoFolderPlaybackSpeeds(json: String): Map<String, Float> {
+        if (json.isBlank()) return emptyMap()
+        return runCatching {
+            val root = JSONObject(json)
+            buildMap {
+                val keys = root.keys()
+                while (keys.hasNext()) {
+                    val folderKey = keys.next().trim()
+                    if (folderKey.isBlank()) continue
+                    val speed = root.optDouble(folderKey, Double.NaN).toFloat()
+                    put(
+                        folderKey,
+                        speed.takeIf(::isValidVideoFolderPlaybackSpeed)
+                            ?: DEFAULT_VIDEO_PLAYBACK_SPEED
+                    )
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun encodeVideoFolderPlaybackSpeeds(speeds: Map<String, Float>): String {
+        val root = JSONObject()
+        speeds.forEach { (folderKey, speed) ->
+            val normalizedKey = folderKey.trim()
+            if (normalizedKey.isNotBlank() && isValidVideoFolderPlaybackSpeed(speed)) {
+                root.put(normalizedKey, speed)
+            }
+        }
+        return root.toString()
+    }
+
+    private fun isValidVideoFolderPlaybackSpeed(speed: Float): Boolean {
+        return !speed.isNaN() &&
+            speed >= MIN_VIDEO_PLAYBACK_SPEED &&
+            speed <= MAX_VIDEO_PLAYBACK_SPEED
+    }
+
     private fun decodeHiddenVideoFolderIds(json: String): Set<String> {
         if (json.isBlank()) return emptySet()
         return runCatching {
@@ -500,7 +553,11 @@ class AppStateStore(private val context: Context) {
         val HiddenVideoUrisKey = stringPreferencesKey("hidden_video_uris_json")
         val HiddenVideoFolderIdsKey = stringPreferencesKey("hidden_video_folder_ids_json")
         val ProgressKey = stringPreferencesKey("playback_progress_json")
+        val VideoFolderPlaybackSpeedKey = stringPreferencesKey("video_folder_playback_speed_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")
         val RecentAudioUriKey = stringPreferencesKey("recent_audio_uri")
+        const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
+        const val MAX_VIDEO_PLAYBACK_SPEED = 5f
+        const val DEFAULT_VIDEO_PLAYBACK_SPEED = 1f
     }
 }

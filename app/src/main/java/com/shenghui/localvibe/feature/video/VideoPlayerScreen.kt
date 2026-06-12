@@ -147,6 +147,8 @@ fun VideoPlayerScreen(
     currentIndex: Int,
     onSelectVideo: (Int) -> Unit,
     onProgressChanged: (String, Long) -> Unit,
+    folderPlaybackSpeeds: Map<String, Float>,
+    onFolderPlaybackSpeedChanged: (String, Float) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -193,6 +195,8 @@ fun VideoPlayerScreen(
             currentIndex = currentIndex,
             onSelectVideo = onSelectVideo,
             onProgressChanged = onProgressChanged,
+            folderPlaybackSpeeds = folderPlaybackSpeeds,
+            onFolderPlaybackSpeedChanged = onFolderPlaybackSpeedChanged,
             onBack = onBack,
             modifier = Modifier.fillMaxSize()
         )
@@ -208,6 +212,8 @@ private fun LocalVideoPlayer(
     currentIndex: Int,
     onSelectVideo: (Int) -> Unit,
     onProgressChanged: (String, Long) -> Unit,
+    folderPlaybackSpeeds: Map<String, Float>,
+    onFolderPlaybackSpeedChanged: (String, Float) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -229,8 +235,10 @@ private fun LocalVideoPlayer(
     }
     val latestQueue by rememberUpdatedState(queue)
     val latestIndex by rememberUpdatedState(currentIndex)
+    val latestOnFolderPlaybackSpeedChanged by rememberUpdatedState(onFolderPlaybackSpeedChanged)
     val navigationQueue = remember(queue) { queue.videoNavigationQueue() }
     val folderSpeedKey = remember(mediaFile.uri, queue) { mediaFile.videoFolderPlaybackSpeedKey(queue) }
+    val savedFolderPlaybackSpeed = folderPlaybackSpeeds[folderSpeedKey]?.normalizeVideoSpeed()
     var gestureOverlay by remember { mutableStateOf<String?>(null) }
     var seekPreviewOverlay by remember { mutableStateOf<VideoSeekPreview?>(null) }
     var resizeModeOverlay by remember { mutableStateOf<String?>(null) }
@@ -248,11 +256,15 @@ private fun LocalVideoPlayer(
     var gestureSeekPreviewMs by remember { mutableLongStateOf(0L) }
     var startBrightness by remember { mutableFloatStateOf(activity?.window?.attributes?.screenBrightness?.takeIf { it >= 0f } ?: 0.5f) }
     var startVolume by remember { mutableStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
-    var playbackSpeed by remember(folderSpeedKey) {
+    var playbackSpeed by remember(folderSpeedKey, savedFolderPlaybackSpeed) {
         mutableFloatStateOf(
-            VideoFolderPlaybackSpeeds[folderSpeedKey]?.normalizeVideoSpeed() ?: 1f
+            VideoFolderPlaybackSpeeds[folderSpeedKey]?.normalizeVideoSpeed()
+                ?: savedFolderPlaybackSpeed
+                ?: 1f
         )
     }
+    var pendingFolderSpeedSave by remember { mutableStateOf<Pair<String, Float>?>(null) }
+    val latestPendingFolderSpeedSave by rememberUpdatedState(pendingFolderSpeedSave)
     var videoResizeMode by remember(mediaFile.uri) { mutableStateOf(VideoResizeMode.FIT) }
     var isRepeatOne by remember(mediaFile.uri) { mutableStateOf(false) }
     var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
@@ -283,6 +295,23 @@ private fun LocalVideoPlayer(
 
     LaunchedEffect(player, playbackSpeed) {
         player.setPlaybackSpeed(playbackSpeed.normalizeVideoSpeed())
+    }
+
+    LaunchedEffect(pendingFolderSpeedSave) {
+        val pending = pendingFolderSpeedSave ?: return@LaunchedEffect
+        delay(VIDEO_SPEED_SAVE_DEBOUNCE_MS)
+        latestOnFolderPlaybackSpeedChanged(pending.first, pending.second)
+        if (pendingFolderSpeedSave == pending) {
+            pendingFolderSpeedSave = null
+        }
+    }
+
+    DisposableEffect(folderSpeedKey) {
+        onDispose {
+            latestPendingFolderSpeedSave?.let { pending ->
+                latestOnFolderPlaybackSpeedChanged(pending.first, pending.second)
+            }
+        }
     }
 
     fun saveCurrentProgress() {
@@ -626,7 +655,10 @@ private fun LocalVideoPlayer(
                 onSpeedSelected = { speed ->
                     val safeSpeed = speed.normalizeVideoSpeed()
                     playbackSpeed = safeSpeed
-                    VideoFolderPlaybackSpeeds[folderSpeedKey] = safeSpeed
+                    if (folderSpeedKey.isNotBlank()) {
+                        VideoFolderPlaybackSpeeds[folderSpeedKey] = safeSpeed
+                        pendingFolderSpeedSave = folderSpeedKey to safeSpeed
+                    }
                     player.setPlaybackSpeed(safeSpeed)
                 },
                 onResizeModeSelected = { mode ->
@@ -2535,6 +2567,7 @@ private const val MAX_VIDEO_SPEED = 5f
 private const val VIDEO_SPEED_STEP = 0.01f
 private const val VIDEO_SPEED_REPEAT_INITIAL_DELAY_MS = 80L
 private const val VIDEO_SPEED_REPEAT_INTERVAL_MS = 50L
+private const val VIDEO_SPEED_SAVE_DEBOUNCE_MS = 400L
 private const val LOCKED_UNLOCK_HINT_MS = 1_500L
 private const val SHORT_HINT_MS = 900L
 private const val GESTURE_HINT_MS = 650L

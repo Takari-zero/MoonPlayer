@@ -142,6 +142,7 @@ private fun LocalVibeApp() {
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoFolderIds by remember { mutableStateOf(emptySet<String>()) }
+    val videoFolderPlaybackSpeeds = remember { mutableStateMapOf<String, Float>() }
     var isVideoVisibilityReady by remember { mutableStateOf(false) }
     var isVideoInitialScanComplete by remember { mutableStateOf(false) }
     var isVideoAutoScanning by remember { mutableStateOf(false) }
@@ -1111,6 +1112,8 @@ private fun LocalVibeApp() {
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
         hiddenVideoUris = appStateStore.loadHiddenVideoUris()
         hiddenVideoFolderIds = appStateStore.loadHiddenVideoFolderIds()
+        videoFolderPlaybackSpeeds.clear()
+        videoFolderPlaybackSpeeds.putAll(appStateStore.loadVideoFolderPlaybackSpeeds())
         isVideoVisibilityReady = true
         bookProgressMap.clear()
         appStateStore.loadBookProgress().forEach { progress ->
@@ -1696,6 +1699,21 @@ private fun LocalVibeApp() {
                                     updatedAt = System.currentTimeMillis()
                                 )
                             )
+                        }
+                    },
+                    folderPlaybackSpeeds = videoFolderPlaybackSpeeds,
+                    onFolderPlaybackSpeedChanged = { folderKey, speed ->
+                        val normalizedKey = folderKey.trim()
+                        if (
+                            normalizedKey.isNotBlank() &&
+                            !speed.isNaN() &&
+                            speed >= 0.25f &&
+                            speed <= 5f
+                        ) {
+                            videoFolderPlaybackSpeeds[normalizedKey] = speed
+                            coroutineScope.launch {
+                                appStateStore.saveVideoFolderPlaybackSpeed(normalizedKey, speed)
+                            }
                         }
                     },
                     onBack = { navController.popBackStack() }
