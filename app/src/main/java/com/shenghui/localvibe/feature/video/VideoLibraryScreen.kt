@@ -109,7 +109,8 @@ private val VideoDivider = Color(0xFF18181D)
 
 private enum class VideoLibrarySortMode {
     NAME,
-    COUNT
+    COUNT,
+    DATE
 }
 
 @Composable
@@ -149,6 +150,7 @@ fun VideoLibraryScreen(
         when (sortMode) {
             VideoLibrarySortMode.NAME -> filtered.sortedBy { it.folder.name.lowercase() }
             VideoLibrarySortMode.COUNT -> filtered.sortedByDescending { it.videos.size }
+            VideoLibrarySortMode.DATE -> filtered
         }
     }
 
@@ -384,6 +386,10 @@ fun VideoLibraryScreen(
                         sortMode = VideoLibrarySortMode.COUNT
                         showMorePanel = false
                     },
+                    onSortByDate = {
+                        sortMode = VideoLibrarySortMode.DATE
+                        showMorePanel = false
+                    },
                     onMultiDelete = {
                         showMorePanel = false
                         isMultiSelectMode = true
@@ -544,6 +550,7 @@ private fun VideoLibraryMorePanel(
     onRescan: () -> Unit,
     onSortByName: () -> Unit,
     onSortByCount: () -> Unit,
+    onSortByDate: () -> Unit,
     onMultiDelete: () -> Unit,
     onMore: () -> Unit
 ) {
@@ -628,7 +635,7 @@ private fun VideoLibraryMorePanel(
                     MorePanelOption(Icons.Filled.SortByAlpha, "名称", sortMode == VideoLibrarySortMode.NAME, onSortByName)
                     MorePanelOption(Icons.Filled.Movie, "数量", sortMode == VideoLibrarySortMode.COUNT, onSortByCount)
                     MorePanelOption(Icons.Filled.Schedule, "多选", false, onMultiDelete)
-                    MorePanelOption(Icons.Filled.DateRange, "日期", false, onMore)
+                    MorePanelOption(Icons.Filled.DateRange, "日期", sortMode == VideoLibrarySortMode.DATE, onSortByDate)
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -837,6 +844,7 @@ private fun VideoLibraryMorePanelV2(
     onRescan: () -> Unit,
     onSortByName: () -> Unit,
     onSortByCount: () -> Unit,
+    onSortByDate: () -> Unit,
     onMultiDelete: () -> Unit,
     onMore: () -> Unit
 ) {
@@ -904,10 +912,11 @@ private fun VideoLibraryMorePanelV2(
                     MorePanelSectionTitle("\u6392\u5e8f")
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         MorePanelOptionV2(Icons.Filled.SortByAlpha, "\u540d\u79f0", sortMode == VideoLibrarySortMode.NAME, onSortByName, Modifier.weight(1f))
                         MorePanelOptionV2(Icons.Filled.Movie, "\u6570\u91cf", sortMode == VideoLibrarySortMode.COUNT, onSortByCount, Modifier.weight(1f))
+                        MorePanelOptionV2(Icons.Filled.DateRange, "\u65e5\u671f", sortMode == VideoLibrarySortMode.DATE, onSortByDate, Modifier.weight(1f))
                     }
 
                     PanelDivider()
