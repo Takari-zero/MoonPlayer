@@ -903,6 +903,87 @@ private fun LocalVibeApp() {
         }
     }
 
+    fun rescanCurrentVideoFolder() {
+        val folder = currentFolder
+        val folderId = folder?.id?.trim().orEmpty()
+        if (currentFolderTargetType != LocalMediaType.VIDEO || folder == null || folderId.isBlank()) {
+            Toast.makeText(context, "重新扫描失败", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!isVideoVisibilityReady) {
+            Toast.makeText(context, "重新扫描失败", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Toast.makeText(context, "正在重新扫描当前文件夹…", Toast.LENGTH_SHORT).show()
+        if (folderId.startsWith("auto:")) {
+            isVideoAutoScanning = true
+            coroutineScope.launch {
+                try {
+                    val folders = withContext(Dispatchers.IO) {
+                        MediaStoreScanner.scanVideos(context.applicationContext)
+                    }.filterHiddenVideoFolders()
+                    videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
+                    folders.forEach { result ->
+                        videoFolders.add(result.folder)
+                        scannedFilesByFolder[typedFolderKey(LocalMediaType.VIDEO, result.folder.id)] =
+                            result.files
+                    }
+                    currentFolder = folders.firstOrNull { it.folder.id == folderId }?.folder
+                        ?: folder.copy(videoCount = 0, isScanning = false)
+                    Toast.makeText(
+                        context,
+                        "已重新扫描媒体库并刷新当前文件夹",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } catch (throwable: Throwable) {
+                    Log.w(VIDEO_LOG_TAG, "rescan current video folder failed id=$folderId", throwable)
+                    Toast.makeText(context, "重新扫描失败", Toast.LENGTH_SHORT).show()
+                } finally {
+                    isVideoInitialScanComplete = true
+                    isVideoAutoScanning = false
+                }
+            }
+            return
+        }
+
+        coroutineScope.launch {
+            try {
+                val folderUri = Uri.parse(folder.uri.ifBlank { folderId })
+                val typedFiles = withContext(Dispatchers.IO) {
+                    FolderScanner.scanFolder(context.applicationContext, folderUri)
+                }
+                    .filter { it.type == LocalMediaType.VIDEO }
+                    .filterVisibleVideos()
+                val refreshedFolder = folder.copy(
+                    videoCount = typedFiles.count { it.type == LocalMediaType.VIDEO },
+                    isScanning = false
+                )
+                updateCategoryFolder(
+                    targetType = LocalMediaType.VIDEO,
+                    folder = refreshedFolder,
+                    files = typedFiles
+                )
+                currentFolder = refreshedFolder
+                appStateStore.upsertFolder(
+                    PersistedFolder(
+                        folderId = folderId,
+                        name = refreshedFolder.name,
+                        uri = refreshedFolder.uri,
+                        targetType = LocalMediaType.VIDEO.name,
+                        source = "MANUAL",
+                        addedAt = System.currentTimeMillis(),
+                        lastScannedAt = System.currentTimeMillis()
+                    )
+                )
+                Toast.makeText(context, "已刷新当前文件夹", Toast.LENGTH_SHORT).show()
+            } catch (throwable: Throwable) {
+                Log.w(VIDEO_LOG_TAG, "rescan manual video folder failed id=$folderId", throwable)
+                Toast.makeText(context, "重新扫描失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -1645,6 +1726,7 @@ private fun LocalVibeApp() {
                         }
                     },
                     deleteSuccessSignal = folderVideoDeleteSuccessSignal,
+                    onRescanFolder = { rescanCurrentVideoFolder() },
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -2013,6 +2095,7 @@ private enum class FolderVideoDeleteMode {
 
 private const val AUTO_SCAN_THROTTLE_MS = 10_000L
 private const val BOOK_LOG_TAG = "LocalVibeBooks"
+private const val VIDEO_LOG_TAG = "LocalVibeVideo"
 
 private fun mediaScanPermissions(): List<String> {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

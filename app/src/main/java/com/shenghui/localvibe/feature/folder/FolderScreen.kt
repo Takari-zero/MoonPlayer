@@ -102,6 +102,7 @@ fun FolderScreen(
     onRemoveFiles: (List<LocalMediaFile>) -> Unit,
     onDeleteFiles: (List<LocalMediaFile>) -> Unit,
     deleteSuccessSignal: Long = 0L,
+    onRescanFolder: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -260,9 +261,7 @@ fun FolderScreen(
                             isMultiSelectMode = true
                             selectedUris = emptySet()
                         },
-                        onRescanFolder = {
-                            Toast.makeText(context, "已重新扫描当前文件夹", Toast.LENGTH_SHORT).show()
-                        }
+                        onRescanFolder = onRescanFolder
                     )
                 } else {
                     Box(modifier = Modifier.fillMaxWidth()) {
