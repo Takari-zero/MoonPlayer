@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,6 +46,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
@@ -119,6 +121,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.shenghui.localvibe.core.media.formatFileSize
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import java.io.File
@@ -658,6 +661,7 @@ private fun LocalVideoPlayer(
                 title = mediaFile.name,
                 currentPositionMs = if (isSeekingByUser) draggingPositionMs else currentPositionMs,
                 durationMs = durationMs,
+                mediaFile = mediaFile,
                 isPlaying = isPlaying,
                 onBack = ::requestBack,
                 onSeekStart = {
@@ -908,6 +912,7 @@ private fun VideoControlOverlay(
     title: String,
     currentPositionMs: Long,
     durationMs: Long,
+    mediaFile: LocalMediaFile,
     isPlaying: Boolean,
     onBack: () -> Unit,
     onSeekStart: () -> Unit,
@@ -942,6 +947,7 @@ private fun VideoControlOverlay(
     var showResizePanel by remember { mutableStateOf(false) }
     var showSyncPanel by remember { mutableStateOf(false) }
     var showEqualizerPanel by remember { mutableStateOf(false) }
+    var showInfoPanel by remember { mutableStateOf(false) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
     var eqTreble by remember { mutableFloatStateOf(0f) }
@@ -954,24 +960,36 @@ private fun VideoControlOverlay(
         showSpeedPanel = false
         showResizePanel = false
         showEqualizerPanel = false
+        showInfoPanel = false
         onQuickToolsExpandedChange(false)
         showSyncPanel = true
+    }
+
+    fun openInfoPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showSyncPanel = false
+        showEqualizerPanel = false
+        onQuickToolsExpandedChange(false)
+        showInfoPanel = true
     }
 
     fun closeSyncPanel() {
         showSyncPanel = false
     }
 
-    BackHandler(enabled = showSpeedPanel || showSyncPanel) {
+    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel) {
         if (showSyncPanel) {
             closeSyncPanel()
+        } else if (showInfoPanel) {
+            showInfoPanel = false
         } else {
             showSpeedPanel = false
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showSyncPanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel)
+    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel)
     }
 
     DisposableEffect(Unit) {
@@ -984,6 +1002,7 @@ private fun VideoControlOverlay(
         when {
             showSyncPanel -> closeSyncPanel()
             showEqualizerPanel -> showEqualizerPanel = false
+            showInfoPanel -> showInfoPanel = false
             showSpeedPanel -> showSpeedPanel = false
             showResizePanel -> showResizePanel = false
             isQuickToolsExpanded -> onQuickToolsExpandedChange(false)
@@ -994,7 +1013,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSyncPanel, showEqualizerPanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSyncPanel, showEqualizerPanel, showInfoPanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1003,7 +1022,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showInfoPanel
 
         if (ordinaryControlsVisible) {
             Box(
@@ -1155,6 +1174,25 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showInfoPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showInfoPanel = false }
+            )
+            VideoInfoPanel(
+                mediaFile = mediaFile,
+                durationMs = durationMs,
+                currentPositionMs = currentPositionMs,
+                playbackSpeed = playbackSpeed,
+                resizeMode = resizeMode,
+                onDismiss = { showInfoPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 20.dp)
+            )
+        }
+
         if (showEqualizerPanel) {
             VideoEqualizerPanel(
                 bass = eqBass,
@@ -1230,8 +1268,7 @@ private fun VideoControlOverlay(
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
                         label = "信息",
-                        isFuture = true,
-                        onClick = { showFutureTool("视频信息") }
+                        onClick = { openInfoPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
@@ -1691,6 +1728,107 @@ private fun SyncActionButton(
             .padding(horizontal = 13.dp, vertical = 9.dp),
         style = MaterialTheme.typography.labelMedium
     )
+}
+
+@Composable
+private fun VideoInfoPanel(
+    mediaFile: LocalMediaFile,
+    durationMs: Long,
+    currentPositionMs: Long,
+    playbackSpeed: Float,
+    resizeMode: VideoResizeMode,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var infoMetadata by remember(mediaFile.uri) { mutableStateOf<VideoInfoMetadata?>(null) }
+
+    LaunchedEffect(mediaFile.uri) {
+        infoMetadata = withContext(Dispatchers.IO) {
+            loadVideoInfoMetadata(context.applicationContext, mediaFile)
+        }
+    }
+
+    val effectiveDurationMs = durationMs.takeIf { it > 0L }
+        ?: infoMetadata?.durationMs?.takeIf { it > 0L }
+    val formatText = infoMetadata?.mimeType
+        ?: mediaFile.extension.trim().takeIf { it.isNotBlank() }?.uppercase(Locale.US)
+        ?: "未知"
+
+    SidePanelShell(
+        title = "视频信息",
+        onDismiss = onDismiss,
+        modifier = modifier
+            .width(360.dp)
+            .fillMaxHeight(0.82f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            VideoInfoRow("文件名", mediaFile.name.ifBlank { "未知" })
+            VideoInfoRow("文件大小", formatFileSize(mediaFile.size.coerceAtLeast(0L)))
+            VideoInfoRow("视频时长", effectiveDurationMs?.let { formatDuration(it) } ?: "未知")
+            VideoInfoRow(
+                "当前进度",
+                if (effectiveDurationMs != null) {
+                    "${formatDuration(currentPositionMs)} / ${formatDuration(effectiveDurationMs)}"
+                } else {
+                    formatDuration(currentPositionMs)
+                }
+            )
+            VideoInfoRow("文件夹", mediaFile.parentFolderName?.takeIf { it.isNotBlank() } ?: "未知")
+            VideoInfoRow("URI / 路径", mediaFile.uri.ifBlank { "未知" }, maxValueLines = 2)
+            VideoInfoRow("倍速", "${playbackSpeed.normalizeVideoSpeed().formatSpeed()}x")
+            VideoInfoRow("画面比例", resizeMode.label)
+            VideoInfoRow("分辨率", infoMetadata?.resolution ?: "未知")
+            VideoInfoRow("格式", formatText)
+            VideoInfoRow(
+                "最后修改",
+                infoMetadata?.lastModifiedMs
+                    ?.takeIf { it > 0L }
+                    ?.let { formatVideoInfoDate(it) }
+                    ?: "未知"
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoInfoRow(
+    label: String,
+    value: String,
+    maxValueLines: Int = 1
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.045f))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.58f),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(76.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = value,
+            color = Color.White.copy(alpha = 0.88f),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            maxLines = maxValueLines,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }
 
 @Composable
@@ -2292,6 +2430,13 @@ private data class VideoSeekPreview(
     val deltaMs: Long
 )
 
+private data class VideoInfoMetadata(
+    val durationMs: Long?,
+    val resolution: String?,
+    val mimeType: String?,
+    val lastModifiedMs: Long?
+)
+
 private fun Float.formatSpeed(): String {
     val rounded = round(this * 100f) / 100f
     return String.format(Locale.US, "%.2f", rounded)
@@ -2409,6 +2554,75 @@ private fun formatSignedDelay(delayMs: Long): String {
         delayMs < 0L -> "${delayMs}ms"
         else -> "0ms"
     }
+}
+
+private fun loadVideoInfoMetadata(
+    context: Context,
+    mediaFile: LocalMediaFile
+): VideoInfoMetadata {
+    val uri = Uri.parse(mediaFile.uri)
+    var durationMs: Long? = null
+    var resolution: String? = null
+    var mimeType: String? = null
+
+    runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?.takeIf { it > 0L }
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+            resolution = if (width != null && height != null) {
+                "${width} × ${height}"
+            } else {
+                null
+            }
+            mimeType = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                ?.takeIf { it.isNotBlank() }
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    val resolverMimeType = runCatching {
+        context.contentResolver.getType(uri)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    return VideoInfoMetadata(
+        durationMs = durationMs,
+        resolution = resolution,
+        mimeType = mimeType ?: resolverMimeType,
+        lastModifiedMs = queryVideoLastModifiedMs(context, uri)
+    )
+}
+
+private fun queryVideoLastModifiedMs(context: Context, uri: Uri): Long? {
+    return runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.DATE_MODIFIED),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val index = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
+            if (index < 0) return@use null
+            cursor.getLong(index)
+                .takeIf { it > 0L }
+                ?.let { it * 1000L }
+        }
+    }.getOrNull()
+}
+
+private fun formatVideoInfoDate(timestampMs: Long): String {
+    return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(timestampMs))
 }
 
 private fun saveVideoFrameScreenshot(
