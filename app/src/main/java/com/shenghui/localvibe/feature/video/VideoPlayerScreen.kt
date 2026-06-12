@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -43,6 +44,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1320,7 +1324,7 @@ private fun VideoControlOverlay(
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
-                        label = "队列",
+                        label = "播放列表",
                         onClick = { openQueuePanel() }
                     )
                     VideoQuickToolButton(
@@ -1894,25 +1898,53 @@ private fun VideoQueuePanel(
         ?: "未知文件夹"
     val currentIndex = queue.indexOfFirst { it.uri == currentUri }
 
-    SidePanelShell(
-        title = "播放队列",
-        onDismiss = onDismiss,
+    Column(
         modifier = modifier
-            .width(360.dp)
-            .fillMaxHeight(0.82f)
+            .fillMaxWidth(0.36f)
+            .widthIn(min = 292.dp, max = 400.dp)
+            .fillMaxHeight(0.74f)
+            .clip(RoundedCornerShape(13.dp))
+            .background(PlayerPanelDark.copy(alpha = 0.86f))
+            .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(13.dp))
+            .clickable(onClick = {})
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "播放列表",
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "关闭播放列表",
+                    tint = Color.White.copy(alpha = 0.64f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.045f))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.020f))
+                .padding(horizontal = 9.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Text(
                 text = folderName,
                 color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -1925,26 +1957,28 @@ private fun VideoQueuePanel(
             )
         }
 
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .weight(1f),
+            contentPadding = PaddingValues(bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             if (queue.isEmpty()) {
-                Text(
-                    text = "当前没有可展示的播放队列",
-                    color = Color.White.copy(alpha = 0.62f),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.045f))
-                        .padding(horizontal = 12.dp, vertical = 12.dp)
-                )
+                item {
+                    Text(
+                        text = "当前没有可展示的播放列表",
+                        color = Color.White.copy(alpha = 0.62f),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White.copy(alpha = 0.028f))
+                            .padding(horizontal = 9.dp, vertical = 9.dp)
+                    )
+                }
             } else {
-                queue.forEachIndexed { index, file ->
+                itemsIndexed(queue, key = { _, file -> file.uri }) { index, file ->
                     VideoQueueItem(
                         index = index,
                         file = file,
@@ -1971,7 +2005,7 @@ private fun VideoQueueItem(
     val progressText = if (isCurrent) {
         val current = formatDuration(currentPositionMs)
         val total = durationMs.takeIf { it > 0L }?.let { formatDuration(it) }
-        if (total == null) "正在播放 · $current" else "正在播放 · $current / $total"
+        total?.let { "$current / $it" } ?: current
     } else {
         "时长未知"
     }
@@ -1980,32 +2014,40 @@ private fun VideoQueueItem(
         progressText
     ).joinToString(" · ")
     val backgroundColor = if (isCurrent) {
-        PlayerMoonPurple.copy(alpha = 0.20f)
+        PlayerMoonPurple.copy(alpha = 0.085f)
     } else {
-        Color.White.copy(alpha = 0.045f)
+        Color.White.copy(alpha = 0.024f)
     }
     val borderColor = if (isCurrent) {
-        PlayerMoonPurpleSoft.copy(alpha = 0.68f)
+        PlayerMoonPurpleSoft.copy(alpha = 0.16f)
     } else {
-        Color.White.copy(alpha = 0.06f)
+        Color.Transparent
     }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
+            .height(50.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(backgroundColor)
-            .border(1.dp, borderColor, RoundedCornerShape(13.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 10.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
     ) {
+        Box(
+            modifier = Modifier
+                .width(2.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (isCurrent) PlayerMoonPurpleSoft else Color.Transparent)
+        )
         Text(
             text = (index + 1).toString().padStart(2, '0'),
-            color = if (isCurrent) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.48f),
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.width(28.dp),
+            color = if (isCurrent) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.42f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.width(22.dp),
             textAlign = TextAlign.Center,
             maxLines = 1
         )
@@ -2015,9 +2057,9 @@ private fun VideoQueueItem(
         ) {
             Text(
                 text = file.name.ifBlank { "未知视频" },
-                color = Color.White.copy(alpha = if (isCurrent) 0.96f else 0.84f),
+                color = Color.White.copy(alpha = if (isCurrent) 0.94f else 0.82f),
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -2034,6 +2076,10 @@ private fun VideoQueueItem(
                 text = "正在播放",
                 color = PlayerMoonPurpleSoft,
                 style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(PlayerMoonPurple.copy(alpha = 0.10f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
                 maxLines = 1
             )
         }
