@@ -1,5 +1,7 @@
 package com.shenghui.localvibe.feature.folder
 
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -780,6 +782,11 @@ private fun VideoFolderTopBarV2(
     onRescanFolder: () -> Unit
 ) {
     val context = LocalContext.current
+    fun showBriefHint(message: String) {
+        val toast = Toast.makeText(context, message, Toast.LENGTH_SHORT)
+        toast.show()
+        Handler(Looper.getMainLooper()).postDelayed({ toast.cancel() }, 1_000L)
+    }
 
     Row(
         modifier = Modifier
@@ -954,10 +961,23 @@ private fun VideoFolderTopBarV2(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("更多功能", color = Color(0xFFF5F7FA)) },
+                        text = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("更多功能", color = Color(0xFF8F889B))
+                                Text(
+                                    "后续",
+                                    color = Color(0xFF7B7488),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        },
                         onClick = {
                             expanded = false
-                            Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
+                            showBriefHint("更多功能后续实现")
                         }
                     )
                 }
