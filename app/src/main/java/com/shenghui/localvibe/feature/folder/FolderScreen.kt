@@ -36,6 +36,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
@@ -1145,9 +1146,6 @@ private fun TypedFileCard(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (isSelectionMode) {
-                Checkbox(checked = isSelected, onCheckedChange = { onToggleSelected() })
-            }
             Box(
                 modifier = Modifier
                     .size(48.dp)
@@ -1184,7 +1182,17 @@ private fun TypedFileCard(
                     )
                 }
             }
-            if (!isSelectionMode) {
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelected() },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = Color(0xFF7B55FF),
+                        checkmarkColor = Color(0xFFF8F5FF),
+                        uncheckedColor = Color(0xFFA8B2C2)
+                    )
+                )
+            } else {
                 FileMoreMenu(
                     file = file,
                     onRemove = onRemove,
@@ -1248,9 +1256,6 @@ private fun VideoFileCard(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (isSelectionMode) {
-                Checkbox(checked = isSelected, onCheckedChange = { onToggleSelected() })
-            }
             VideoThumbnail(
                 metadata = metadata,
                 durationMs = metadata?.durationMs,
@@ -1293,7 +1298,17 @@ private fun VideoFileCard(
                     )
                 }
             }
-            if (!isSelectionMode) {
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelected() },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = Color(0xFF7B55FF),
+                        checkmarkColor = Color(0xFFF8F5FF),
+                        uncheckedColor = Color(0xFFA8B2C2)
+                    )
+                )
+            } else {
                 FileMoreMenu(
                     file = file,
                     onRemove = onRemove,
@@ -1366,7 +1381,12 @@ private fun VideoGridFileCard(
                     Checkbox(
                         checked = isSelected,
                         onCheckedChange = { onToggleSelected() },
-                        modifier = Modifier.align(Alignment.TopStart)
+                        modifier = Modifier.align(Alignment.TopEnd),
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = Color(0xFF7B55FF),
+                            checkmarkColor = Color(0xFFF8F5FF),
+                            uncheckedColor = Color(0xFFA8B2C2)
+                        )
                     )
                 } else {
                     Box(modifier = Modifier.align(Alignment.TopEnd)) {

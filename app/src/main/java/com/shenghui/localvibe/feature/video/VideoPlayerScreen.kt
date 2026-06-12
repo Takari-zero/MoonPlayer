@@ -109,6 +109,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -154,16 +157,46 @@ fun VideoPlayerScreen(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isPlayerForeground by remember { mutableStateOf(true) }
 
-    DisposableEffect(activity) {
-        val previousOrientation = activity?.requestedOrientation
+    DisposableEffect(activity, lifecycleOwner) {
+        val previousOrientation =
+            activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        fun restoreActivityChrome() {
+            activity?.showSystemBars()
+            activity?.requestedOrientation = previousOrientation
+        }
+
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         activity?.hideSystemBars()
 
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    isPlayerForeground = true
+                    activity?.hideSystemBars()
+                }
+
+                Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
+                    isPlayerForeground = false
+                    restoreActivityChrome()
+                }
+
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+
         onDispose {
-            activity?.showSystemBars()
-            activity?.requestedOrientation =
-                previousOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            restoreActivityChrome()
+        }
+    }
+
+    LaunchedEffect(activity, isPlayerForeground) {
+        if (isPlayerForeground) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
     }
 
@@ -197,6 +230,7 @@ fun VideoPlayerScreen(
             onProgressChanged = onProgressChanged,
             folderPlaybackSpeeds = folderPlaybackSpeeds,
             onFolderPlaybackSpeedChanged = onFolderPlaybackSpeedChanged,
+            isPlayerForeground = isPlayerForeground,
             onBack = onBack,
             modifier = Modifier.fillMaxSize()
         )
@@ -214,6 +248,7 @@ private fun LocalVideoPlayer(
     onProgressChanged: (String, Long) -> Unit,
     folderPlaybackSpeeds: Map<String, Float>,
     onFolderPlaybackSpeedChanged: (String, Float) -> Unit,
+    isPlayerForeground: Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -435,13 +470,15 @@ private fun LocalVideoPlayer(
         showVideoPlayerToast(context, "已解锁")
     }
 
-    LaunchedEffect(activity, isPortraitPlayback) {
-        activity?.requestedOrientation =
-            if (isPortraitPlayback) {
-                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            }
+    LaunchedEffect(activity, isPortraitPlayback, isPlayerForeground) {
+        if (isPlayerForeground) {
+            activity?.requestedOrientation =
+                if (isPortraitPlayback) {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
+        }
     }
 
     LaunchedEffect(player) {

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -1269,9 +1270,6 @@ private fun VideoFolderCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (isSelectionMode) {
-                    Checkbox(checked = isSelected, onCheckedChange = { onToggleSelected() })
-                }
                 FolderPreview(
                     folderName = item.folder.name,
                     previewUri = item.videos.firstOrNull()?.uri,
@@ -1279,12 +1277,24 @@ private fun VideoFolderCard(
                     compact = false
                 )
                 FolderText(item = item, compact = false, modifier = Modifier.weight(1f))
-                Icon(
-                    Icons.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = VideoTextMuted.copy(alpha = 0.64f),
-                    modifier = Modifier.size(17.dp)
-                )
+                if (isSelectionMode) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onToggleSelected() },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = VideoPrimary,
+                            checkmarkColor = VideoTextPrimary,
+                            uncheckedColor = VideoTextSecondary
+                        )
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = VideoTextMuted.copy(alpha = 0.64f),
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
             }
         }
         if (!compact) {
@@ -1292,7 +1302,6 @@ private fun VideoFolderCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .padding(start = if (isSelectionMode) 44.dp else 0.dp)
                     .background(VideoDivider.copy(alpha = 0.42f))
             )
         }
@@ -1334,7 +1343,12 @@ private fun VideoFolderGridItem(
                 Checkbox(
                     checked = isSelected,
                     onCheckedChange = { onToggleSelected() },
-                    modifier = Modifier.align(Alignment.TopStart)
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = VideoPrimary,
+                        checkmarkColor = VideoTextPrimary,
+                        uncheckedColor = VideoTextSecondary
+                    )
                 )
             }
         }
