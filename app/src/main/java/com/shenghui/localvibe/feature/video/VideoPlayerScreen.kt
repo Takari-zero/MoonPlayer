@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -107,6 +108,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -337,7 +339,9 @@ private fun LocalVideoPlayer(
     var sleepTimerSelectedOption by remember { mutableStateOf(VideoSleepTimerOption.Off) }
     var sleepTimerEndAtElapsedMs by remember { mutableLongStateOf(0L) }
     var sleepTimerRemainingMs by remember { mutableLongStateOf(0L) }
+    var sleepTimerEndOfVideoEnabled by remember { mutableStateOf(false) }
     val latestSleepTimerMode by rememberUpdatedState(sleepTimerMode)
+    val latestSleepTimerEndOfVideoEnabled by rememberUpdatedState(sleepTimerEndOfVideoEnabled)
     var abLoopStartMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     var abLoopEndMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     val subtitleLauncher = rememberLauncherForActivityResult(
@@ -448,6 +452,7 @@ private fun LocalVideoPlayer(
         sleepTimerSelectedOption = VideoSleepTimerOption.Off
         sleepTimerEndAtElapsedMs = 0L
         sleepTimerRemainingMs = 0L
+        sleepTimerEndOfVideoEnabled = false
         if (showHint) {
             showVideoPlayerToast(context, "已关闭睡眠定时")
         }
@@ -458,6 +463,7 @@ private fun LocalVideoPlayer(
         sleepTimerSelectedOption = VideoSleepTimerOption.Off
         sleepTimerEndAtElapsedMs = 0L
         sleepTimerRemainingMs = 0L
+        sleepTimerEndOfVideoEnabled = false
         player.pause()
         isPlaying = false
         showVideoPlayerToast(context, "睡眠定时已暂停播放")
@@ -475,10 +481,7 @@ private fun LocalVideoPlayer(
             }
 
             VideoSleepTimerMode.END_OF_VIDEO -> {
-                sleepTimerMode = VideoSleepTimerMode.END_OF_VIDEO
-                sleepTimerSelectedOption = option
-                sleepTimerEndAtElapsedMs = 0L
-                sleepTimerRemainingMs = 0L
+                sleepTimerEndOfVideoEnabled = true
                 showVideoPlayerToast(context, "已设置当前视频结束后暂停")
             }
 
@@ -662,7 +665,7 @@ private fun LocalVideoPlayer(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
-                    if (latestSleepTimerMode == VideoSleepTimerMode.END_OF_VIDEO) {
+                    if (latestSleepTimerEndOfVideoEnabled || latestSleepTimerMode == VideoSleepTimerMode.END_OF_VIDEO) {
                         pauseForSleepTimer()
                     } else {
                         next(auto = true)
@@ -870,6 +873,7 @@ private fun LocalVideoPlayer(
                 sleepTimerMode = sleepTimerMode,
                 sleepTimerSelectedOption = sleepTimerSelectedOption,
                 sleepTimerRemainingMs = sleepTimerRemainingMs,
+                sleepTimerEndOfVideoEnabled = sleepTimerEndOfVideoEnabled,
                 abLoopStartMs = abLoopStartMs,
                 abLoopEndMs = abLoopEndMs,
                 onSpeedSelected = { speed ->
@@ -920,6 +924,13 @@ private fun LocalVideoPlayer(
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
                 },
                 onSleepTimerSelected = ::applySleepTimerOption,
+                onSleepTimerEndOfVideoChanged = { enabled ->
+                    sleepTimerEndOfVideoEnabled = enabled
+                    showVideoPlayerToast(
+                        context,
+                        if (enabled) "已设置当前视频结束后暂停" else "已关闭播完当前视频后停止"
+                    )
+                },
                 onSleepTimerPanelClosed = {
                     if (!isScreenLocked) {
                         showControls = true
@@ -1132,6 +1143,7 @@ private fun VideoControlOverlay(
     sleepTimerMode: VideoSleepTimerMode,
     sleepTimerSelectedOption: VideoSleepTimerOption,
     sleepTimerRemainingMs: Long,
+    sleepTimerEndOfVideoEnabled: Boolean,
     abLoopStartMs: Long?,
     abLoopEndMs: Long?,
     onSpeedSelected: (Float) -> Unit,
@@ -1142,6 +1154,7 @@ private fun VideoControlOverlay(
     onSubtitleStyleChanged: (VideoSubtitleStyleSettings) -> Unit,
     onAudioDelayChange: (Long) -> Unit,
     onSleepTimerSelected: (VideoSleepTimerOption) -> Unit,
+    onSleepTimerEndOfVideoChanged: (Boolean) -> Unit,
     onSleepTimerPanelClosed: () -> Unit,
     onSetAbLoopStart: () -> Unit,
     onSetAbLoopEnd: () -> Unit,
@@ -1531,17 +1544,20 @@ private fun VideoControlOverlay(
             Box(
                 modifier = Modifier
                     .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.46f))
                     .clickable { closeSleepTimerPanel() }
             )
             SleepTimerPanel(
                 mode = sleepTimerMode,
                 selectedOption = sleepTimerSelectedOption,
                 remainingMs = sleepTimerRemainingMs,
+                endOfVideoEnabled = sleepTimerEndOfVideoEnabled,
                 onSelect = onSleepTimerSelected,
+                onEndOfVideoChange = onSleepTimerEndOfVideoChanged,
                 onDismiss = { closeSleepTimerPanel() },
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 12.dp, end = 14.dp, bottom = 12.dp)
+                    .align(Alignment.Center)
+                    .padding(horizontal = 22.dp, vertical = 18.dp)
             )
         }
 
@@ -2929,300 +2945,423 @@ private fun SleepTimerPanel(
     mode: VideoSleepTimerMode,
     selectedOption: VideoSleepTimerOption,
     remainingMs: Long,
+    endOfVideoEnabled: Boolean,
     onSelect: (VideoSleepTimerOption) -> Unit,
+    onEndOfVideoChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var customMinutes by remember { mutableIntStateOf(45) }
-    val customOption = remember(customMinutes) {
+    val isTimedActive = mode == VideoSleepTimerMode.TIMED && remainingMs > 0L
+    val isAnyTimerActive = isTimedActive || endOfVideoEnabled
+    val activeRemainingMinutes = remember(remainingMs) { remainingMs.toDisplayMinutes() }
+    var draftMinutes by remember(mode, selectedOption) {
+        mutableIntStateOf(
+            when {
+                isTimedActive -> activeRemainingMinutes
+                selectedOption.mode == VideoSleepTimerMode.TIMED -> {
+                    ((selectedOption.durationMs ?: VIDEO_SLEEP_TIMER_DEFAULT_MINUTES * 60_000L) / 60_000L)
+                        .toInt()
+                        .coerceIn(VIDEO_SLEEP_TIMER_MIN_MINUTES, VIDEO_SLEEP_TIMER_MAX_MINUTES)
+                }
+                else -> VIDEO_SLEEP_TIMER_DEFAULT_MINUTES
+            }
+        )
+    }
+    var userAdjustedTime by remember(mode, selectedOption) { mutableStateOf(false) }
+    val displayedMinutes = if (isTimedActive && !userAdjustedTime) activeRemainingMinutes else draftMinutes
+    val normalizedDisplayMinutes = displayedMinutes.coerceIn(0, VIDEO_SLEEP_TIMER_MAX_MINUTES)
+    val displayHours = normalizedDisplayMinutes / 60
+    val displayMinutes = normalizedDisplayMinutes % 60
+    val selectedQuickMinutes = if (isTimedActive && !userAdjustedTime) {
+        selectedOption.durationMs?.let { (it / 60_000L).toInt() }
+    } else {
+        draftMinutes
+    }
+    val canStartTimer = draftMinutes >= VIDEO_SLEEP_TIMER_MIN_MINUTES
+    val primaryText = "确认"
+
+    fun updateDraft(minutes: Int) {
+        draftMinutes = minutes.coerceIn(0, VIDEO_SLEEP_TIMER_MAX_MINUTES)
+        userAdjustedTime = true
+    }
+
+    val draftOption = remember(draftMinutes) {
         VideoSleepTimerOption(
-            label = "${customMinutes} 分钟",
-            displayLabel = "${customMinutes} 分钟",
+            label = formatSleepTimerOptionLabel(draftMinutes),
+            displayLabel = formatSleepTimerOptionLabel(draftMinutes),
             mode = VideoSleepTimerMode.TIMED,
-            durationMs = customMinutes * 60 * 1000L,
+            durationMs = draftMinutes.coerceAtLeast(0) * 60_000L,
             isCustom = true
         )
     }
-    val isTimerActive = mode != VideoSleepTimerMode.OFF
-    val customRowLabel = when (mode) {
-        VideoSleepTimerMode.OFF -> "自定义时长"
-        VideoSleepTimerMode.TIMED -> "剩余时间"
-        VideoSleepTimerMode.END_OF_VIDEO -> "剩余时间"
-    }
-    val customRowValue = when (mode) {
-        VideoSleepTimerMode.OFF -> "${customMinutes} 分钟"
-        VideoSleepTimerMode.TIMED -> formatSleepTimerCountdown(remainingMs)
-        VideoSleepTimerMode.END_OF_VIDEO -> "本集结束后"
-    }
 
-    SidePanelShell(
-        title = "睡眠定时",
-        onDismiss = onDismiss,
+    Column(
         modifier = modifier
-            .width(430.dp)
-            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION),
-        contentPadding = 12.dp,
-        contentSpacing = 8.dp
+            .fillMaxWidth(0.58f)
+            .widthIn(min = 420.dp, max = 560.dp)
+            .heightIn(max = 360.dp)
+            .clip(RoundedCornerShape(34.dp))
+            .background(PlayerPanelDark.copy(alpha = 0.92f))
+            .clickable(onClick = {})
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 28.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            SleepTimerSectionTitle("快捷时长")
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                VideoSleepTimerFixedOptions.chunked(3).forEach { rowOptions ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        rowOptions.forEach { option ->
-                            SleepTimerChip(
-                                option = option,
-                                selected = option == selectedOption,
-                                onClick = { onSelect(option) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-            }
-
-            SleepTimerSectionTitle("自定义时长")
-            Row(
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = "睡眠定时",
+                color = Color.White.copy(alpha = 0.86f),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.Center),
+                maxLines = 1
+            )
+            IconButton(
+                onClick = onDismiss,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.040f))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    .align(Alignment.CenterEnd)
+                    .size(28.dp)
             ) {
-                Text(
-                    text = customRowLabel,
-                    color = Color.White.copy(alpha = 0.62f),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "关闭睡眠定时",
+                    tint = Color.White.copy(alpha = 0.62f),
+                    modifier = Modifier.size(19.dp)
                 )
-                SleepTimerStepButton(
-                    label = "−",
-                    enabled = !isTimerActive && customMinutes > VIDEO_SLEEP_TIMER_MIN_MINUTES,
-                    onClick = {
-                        customMinutes = (customMinutes - VIDEO_SLEEP_TIMER_STEP_MINUTES)
-                            .coerceAtLeast(VIDEO_SLEEP_TIMER_MIN_MINUTES)
+            }
+        }
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SleepTimerTimeNumber(
+                    value = displayHours.toString(),
+                    label = "小时",
+                    active = normalizedDisplayMinutes > 0,
+                    width = 118.dp,
+                    dragStepPx = SLEEP_TIMER_HOUR_DRAG_STEP_PX,
+                    onStep = { deltaHours ->
+                        updateDraft(normalizedDisplayMinutes + deltaHours * 60)
                     }
                 )
                 Text(
-                    text = customRowValue,
-                    color = if (isTimerActive) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.92f),
-                    fontSize = if (mode == VideoSleepTimerMode.TIMED) 20.sp else 18.sp,
+                    text = ":",
+                    color = Color.White.copy(alpha = 0.34f),
+                    fontSize = 48.sp,
+                    lineHeight = 46.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
+                    modifier = Modifier.width(24.dp),
                     maxLines = 1
                 )
-                SleepTimerStepButton(
-                    label = "+",
-                    enabled = !isTimerActive && customMinutes < VIDEO_SLEEP_TIMER_MAX_MINUTES,
-                    onClick = {
-                        customMinutes = (customMinutes + VIDEO_SLEEP_TIMER_STEP_MINUTES)
-                            .coerceAtMost(VIDEO_SLEEP_TIMER_MAX_MINUTES)
+                SleepTimerTimeNumber(
+                    value = displayMinutes.toString().padStart(2, '0'),
+                    label = "分钟",
+                    active = normalizedDisplayMinutes > 0,
+                    width = 118.dp,
+                    dragStepPx = SLEEP_TIMER_MINUTE_DRAG_STEP_PX,
+                    onStep = { deltaMinutes ->
+                        updateDraft(normalizedDisplayMinutes + deltaMinutes)
                     }
                 )
             }
             Text(
-                text = "每次 5 分钟 · 5-180 分钟",
-                color = Color.White.copy(alpha = 0.48f),
+                text = if (isTimedActive && !userAdjustedTime) {
+                    "剩余 ${formatSleepTimerCountdown(remainingMs)} · 拖动后点击确认更新"
+                } else {
+                    "上下拖动修改时间，点击确认后开始倒计时"
+                },
+                color = if (isTimedActive && !userAdjustedTime) {
+                    PlayerMoonPurpleSoft.copy(alpha = 0.78f)
+                } else {
+                    Color.White.copy(alpha = 0.42f)
+                },
                 style = MaterialTheme.typography.labelSmall,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
+                maxLines = 1
             )
-            SleepTimerPrimaryButton(
-                text = "开始定时",
-                onClick = { onSelect(customOption) }
-            )
+        }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.030f)),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
-            ) {
-                SleepTimerActionRow(
-                    option = VideoSleepTimerOption.EndOfVideo,
-                    selected = selectedOption == VideoSleepTimerOption.EndOfVideo,
-                    onClick = { onSelect(VideoSleepTimerOption.EndOfVideo) }
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(Color.White.copy(alpha = 0.050f))
-                )
-                SleepTimerActionRow(
-                    option = VideoSleepTimerOption.Off,
-                    selected = selectedOption == VideoSleepTimerOption.Off,
-                    onClick = { onSelect(VideoSleepTimerOption.Off) }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            VideoSleepTimerFixedOptions.forEach { option ->
+                val optionMinutes = ((option.durationMs ?: 0L) / 60_000L).toInt()
+                SleepTimerQuickChip(
+                    label = option.displayLabel,
+                    selected = optionMinutes == selectedQuickMinutes,
+                    onClick = {
+                        updateDraft(optionMinutes)
+                    },
+                    modifier = Modifier.weight(1f)
                 )
             }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.055f))
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                Icons.Filled.Loop,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.62f),
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = "播完当前视频后停止",
+                color = Color.White.copy(alpha = 0.74f),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            SleepTimerToggle(
+                checked = endOfVideoEnabled,
+                onClick = { onEndOfVideoChange(!endOfVideoEnabled) }
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SleepTimerModalButton(
+                text = "取消",
+                primary = false,
+                enabled = true,
+                onClick = onDismiss,
+                modifier = Modifier.weight(1f)
+            )
+            SleepTimerModalButton(
+                text = "重置",
+                primary = false,
+                enabled = true,
+                onClick = {
+                    if (isAnyTimerActive) {
+                        onSelect(VideoSleepTimerOption.Off)
+                    }
+                    updateDraft(VIDEO_SLEEP_TIMER_DEFAULT_MINUTES)
+                },
+                modifier = Modifier.weight(1f)
+            )
+            SleepTimerModalButton(
+                text = primaryText,
+                primary = true,
+                enabled = canStartTimer,
+                onClick = {
+                    if (canStartTimer) {
+                        onSelect(draftOption)
+                        userAdjustedTime = false
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
 
 @Composable
-private fun SleepTimerSectionTitle(text: String) {
-    Text(
-        text = text,
-        color = Color.White.copy(alpha = 0.60f),
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(top = 2.dp)
-    )
+private fun SleepTimerTimeNumber(
+    value: String,
+    label: String,
+    active: Boolean,
+    width: Dp,
+    dragStepPx: Float,
+    onStep: (Int) -> Unit
+) {
+    var dragRemainder by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+    val latestOnStep by rememberUpdatedState(onStep)
+    Column(
+        modifier = Modifier
+            .width(width)
+            .height(82.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                if (isDragging) PlayerMoonPurple.copy(alpha = 0.12f)
+                else Color.Transparent
+            )
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = {
+                        isDragging = true
+                        dragRemainder = 0f
+                    },
+                    onDragEnd = {
+                        isDragging = false
+                        dragRemainder = 0f
+                    },
+                    onDragCancel = {
+                        isDragging = false
+                        dragRemainder = 0f
+                    },
+                    onDrag = { change, dragAmount ->
+                        dragRemainder += dragAmount.y
+                        val steps = (-dragRemainder / dragStepPx).toInt()
+                        if (steps != 0) {
+                            latestOnStep(steps)
+                            dragRemainder += steps * dragStepPx
+                        }
+                        change.consume()
+                    }
+                )
+            }
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(
+            text = value,
+            color = if (active) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.32f),
+            fontSize = 48.sp,
+            lineHeight = 50.sp,
+            fontWeight = FontWeight.Medium,
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 1
+        )
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.58f),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
 }
 
 @Composable
-private fun SleepTimerChip(
-    option: VideoSleepTimerOption,
+private fun SleepTimerQuickChip(
+    label: String,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
-            .height(38.dp)
-            .clip(RoundedCornerShape(11.dp))
+            .height(31.dp)
+            .clip(RoundedCornerShape(999.dp))
             .background(
-                if (selected) PlayerMoonPurple.copy(alpha = 0.15f)
+                if (selected) PlayerMoonPurple.copy(alpha = 0.36f)
                 else Color.White.copy(alpha = 0.045f)
             )
             .border(
                 width = 1.dp,
-                color = if (selected) PlayerMoonPurpleSoft.copy(alpha = 0.70f) else Color.White.copy(alpha = 0.070f),
-                shape = RoundedCornerShape(11.dp)
+                color = if (selected) PlayerMoonPurpleSoft.copy(alpha = 0.52f) else Color.White.copy(alpha = 0.075f),
+                shape = RoundedCornerShape(999.dp)
             )
             .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = option.displayLabel,
-            color = if (selected) Color.White else Color.White.copy(alpha = 0.80f),
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun SleepTimerStepButton(
-    label: String,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = if (enabled) 0.090f else 0.035f))
-            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = Color.White.copy(alpha = if (enabled) 0.86f else 0.32f),
-            fontSize = 24.sp,
-            lineHeight = 24.sp,
-            fontWeight = FontWeight.Medium
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
 
 @Composable
-private fun SleepTimerPrimaryButton(
-    text: String,
+private fun SleepTimerToggle(
+    checked: Boolean,
     onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(38.dp)
-            .clip(RoundedCornerShape(11.dp))
-            .background(PlayerMoonPurple.copy(alpha = 0.18f))
-            .border(
-                width = 1.dp,
-                color = PlayerMoonPurpleSoft.copy(alpha = 0.56f),
-                shape = RoundedCornerShape(11.dp)
+            .width(42.dp)
+            .height(24.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                if (checked) PlayerMoonPurple.copy(alpha = 0.72f)
+                else Color.White.copy(alpha = 0.16f)
             )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+            .clickable(onClick = onClick)
+            .padding(3.dp),
+        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
     ) {
-        Text(
-            text = text,
-            color = PlayerMoonPurpleSoft,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.94f))
         )
     }
 }
 
 @Composable
-private fun SleepTimerActionRow(
-    option: VideoSleepTimerOption,
-    selected: Boolean,
-    onClick: () -> Unit
+private fun SleepTimerModalButton(
+    text: String,
+    primary: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(38.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(
-                    if (selected) PlayerMoonPurple.copy(alpha = 0.18f)
-                    else Color.White.copy(alpha = 0.055f)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(if (selected) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.30f))
+    Box(
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                when {
+                    primary && enabled -> PlayerMoonPurpleSoft.copy(alpha = 0.92f)
+                    primary -> Color.White.copy(alpha = 0.10f)
+                    else -> Color.White.copy(alpha = 0.075f)
+                }
             )
-        }
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
         Text(
-            text = option.label,
-            color = Color.White.copy(alpha = if (selected) 0.92f else 0.78f),
+            text = text,
+            color = when {
+                primary && enabled -> PlayerPanelDark
+                primary -> Color.White.copy(alpha = 0.36f)
+                else -> Color.White.copy(alpha = 0.76f)
+            },
             style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
         )
-        Text(
-            text = "›",
-            color = Color.White.copy(alpha = 0.42f),
-            fontSize = 22.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+    }
+}
+
+private fun Long.toDisplayMinutes(): Int {
+    if (this <= 0L) return 0
+    return ((this + 59_999L) / 60_000L)
+        .toInt()
+        .coerceIn(0, VIDEO_SLEEP_TIMER_MAX_MINUTES)
+}
+
+private fun formatSleepTimerOptionLabel(minutes: Int): String {
+    val safeMinutes = minutes.coerceIn(0, VIDEO_SLEEP_TIMER_MAX_MINUTES)
+    val hours = safeMinutes / 60
+    val restMinutes = safeMinutes % 60
+    return when {
+        safeMinutes <= 0 -> "0 分钟"
+        hours <= 0 -> "$restMinutes 分钟"
+        restMinutes == 0 -> "$hours 小时"
+        else -> "$hours 小时 $restMinutes 分钟"
     }
 }
 
@@ -4283,16 +4422,19 @@ private data class VideoSleepTimerOption(
         )
         val ThirtyMinutes = VideoSleepTimerOption(
             label = "30 分钟",
+            displayLabel = "30min",
             mode = VideoSleepTimerMode.TIMED,
             durationMs = 30 * 60 * 1000L
         )
         val FortyFiveMinutes = VideoSleepTimerOption(
             label = "45 分钟",
+            displayLabel = "45min",
             mode = VideoSleepTimerMode.TIMED,
             durationMs = 45 * 60 * 1000L
         )
         val SixtyMinutes = VideoSleepTimerOption(
             label = "60 分钟",
+            displayLabel = "60min",
             mode = VideoSleepTimerMode.TIMED,
             durationMs = 60 * 60 * 1000L
         )
@@ -4304,9 +4446,21 @@ private data class VideoSleepTimerOption(
         )
         val NinetyMinutes = VideoSleepTimerOption(
             label = "1小时30分钟",
-            displayLabel = "1:30",
+            displayLabel = "1h30min",
             mode = VideoSleepTimerMode.TIMED,
             durationMs = 90 * 60 * 1000L
+        )
+        val OneHundredTwentyMinutes = VideoSleepTimerOption(
+            label = "120 分钟",
+            displayLabel = "2h",
+            mode = VideoSleepTimerMode.TIMED,
+            durationMs = 120 * 60 * 1000L
+        )
+        val OneHundredEightyMinutes = VideoSleepTimerOption(
+            label = "180 分钟",
+            displayLabel = "180 min",
+            mode = VideoSleepTimerMode.TIMED,
+            durationMs = 180 * 60 * 1000L
         )
         val EndOfVideo = VideoSleepTimerOption(
             label = "当前视频结束后暂停",
@@ -4319,17 +4473,18 @@ private data class VideoSleepTimerOption(
     }
 }
 
-private const val VIDEO_SLEEP_TIMER_MIN_MINUTES = 5
-private const val VIDEO_SLEEP_TIMER_MAX_MINUTES = 180
-private const val VIDEO_SLEEP_TIMER_STEP_MINUTES = 5
+private const val VIDEO_SLEEP_TIMER_MIN_MINUTES = 1
+private const val VIDEO_SLEEP_TIMER_MAX_MINUTES = 24 * 60
+private const val VIDEO_SLEEP_TIMER_DEFAULT_MINUTES = 30
+private const val SLEEP_TIMER_HOUR_DRAG_STEP_PX = 88f
+private const val SLEEP_TIMER_MINUTE_DRAG_STEP_PX = 24f
 
 private val VideoSleepTimerFixedOptions = listOf(
-    VideoSleepTimerOption.FifteenMinutes,
     VideoSleepTimerOption.ThirtyMinutes,
     VideoSleepTimerOption.FortyFiveMinutes,
     VideoSleepTimerOption.SixtyMinutes,
-    VideoSleepTimerOption.SeventyFiveMinutes,
-    VideoSleepTimerOption.NinetyMinutes
+    VideoSleepTimerOption.NinetyMinutes,
+    VideoSleepTimerOption.OneHundredTwentyMinutes
 )
 
 private data class VideoToolAction(
