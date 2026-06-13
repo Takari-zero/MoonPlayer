@@ -17,6 +17,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.TypedValue
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -130,6 +131,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.shenghui.localvibe.core.media.formatFileSize
 import com.shenghui.localvibe.core.media.formatDuration
@@ -320,6 +322,7 @@ private fun LocalVideoPlayer(
     var externalSubtitleUri by remember(mediaFile.uri) { mutableStateOf<Uri?>(null) }
     var externalSubtitleName by remember(mediaFile.uri) { mutableStateOf<String?>(null) }
     var subtitleOffsetMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
+    var subtitleStyleSettings by remember(mediaFile.uri) { mutableStateOf(VideoSubtitleStyleSettings()) }
     var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
@@ -790,11 +793,13 @@ private fun LocalVideoPlayer(
                     useController = false
                     resizeMode = videoResizeMode.playerResizeMode
                     setBackgroundColor(android.graphics.Color.BLACK)
+                    applyVideoSubtitleStyle(subtitleStyleSettings)
                 }
             },
             update = { playerView ->
                 playerView.player = player
                 playerView.resizeMode = videoResizeMode.playerResizeMode
+                playerView.applyVideoSubtitleStyle(subtitleStyleSettings)
             }
         )
 
@@ -838,6 +843,7 @@ private fun LocalVideoPlayer(
                 audioDelayMs = audioDelayMs,
                 subtitleName = externalSubtitleName,
                 subtitleOffsetMs = subtitleOffsetMs,
+                subtitleStyleSettings = subtitleStyleSettings,
                 sleepTimerMode = sleepTimerMode,
                 sleepTimerSelectedOption = sleepTimerSelectedOption,
                 sleepTimerRemainingMs = sleepTimerRemainingMs,
@@ -882,6 +888,10 @@ private fun LocalVideoPlayer(
                     externalSubtitleName = null
                     subtitleOffsetMs = 0L
                     showVideoPlayerToast(context, "已清除外挂字幕")
+                },
+                onSubtitleStyleChanged = { settings ->
+                    subtitleStyleSettings = settings
+                    showVideoPlayerToast(context, "已应用字幕样式")
                 },
                 onAudioDelayChange = { nextDelayMs ->
                     audioDelayMs = nextDelayMs.coerceIn(-5_000L, 5_000L)
@@ -1090,6 +1100,7 @@ private fun VideoControlOverlay(
     audioDelayMs: Long,
     subtitleName: String?,
     subtitleOffsetMs: Long,
+    subtitleStyleSettings: VideoSubtitleStyleSettings,
     sleepTimerMode: VideoSleepTimerMode,
     sleepTimerSelectedOption: VideoSleepTimerOption,
     sleepTimerRemainingMs: Long,
@@ -1100,6 +1111,7 @@ private fun VideoControlOverlay(
     onToggleRepeat: () -> Unit,
     onSubtitleSelect: () -> Unit,
     onSubtitleClear: () -> Unit,
+    onSubtitleStyleChanged: (VideoSubtitleStyleSettings) -> Unit,
     onAudioDelayChange: (Long) -> Unit,
     onSleepTimerSelected: (VideoSleepTimerOption) -> Unit,
     onSleepTimerPanelClosed: () -> Unit,
@@ -1118,13 +1130,13 @@ private fun VideoControlOverlay(
     val quickToolsScrollState = rememberScrollState()
     var showSpeedPanel by remember { mutableStateOf(false) }
     var showResizePanel by remember { mutableStateOf(false) }
-    var showSyncPanel by remember { mutableStateOf(false) }
     var showEqualizerPanel by remember { mutableStateOf(false) }
     var showInfoPanel by remember { mutableStateOf(false) }
     var showQueuePanel by remember { mutableStateOf(false) }
     var showAudioTrackPanel by remember { mutableStateOf(false) }
     var showSleepTimerPanel by remember { mutableStateOf(false) }
     var showAbLoopPanel by remember { mutableStateOf(false) }
+    var showSubtitleStylePanel by remember { mutableStateOf(false) }
     var audioTrackRevision by remember(player) { mutableIntStateOf(0) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
@@ -1146,7 +1158,7 @@ private fun VideoControlOverlay(
         showFutureToolToast(context, feature)
     }
 
-    fun openSyncPanel() {
+    fun openSubtitleStylePanel() {
         showSpeedPanel = false
         showResizePanel = false
         showEqualizerPanel = false
@@ -1156,18 +1168,18 @@ private fun VideoControlOverlay(
         showSleepTimerPanel = false
         showAbLoopPanel = false
         onQuickToolsExpandedChange(false)
-        showSyncPanel = true
+        showSubtitleStylePanel = true
     }
 
     fun openAudioTrackPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showSyncPanel = false
         showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
+        showSubtitleStylePanel = false
         onQuickToolsExpandedChange(false)
         audioTrackRevision += 1
         showAudioTrackPanel = true
@@ -1176,12 +1188,12 @@ private fun VideoControlOverlay(
     fun openSleepTimerPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showSyncPanel = false
         showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showAbLoopPanel = false
+        showSubtitleStylePanel = false
         onQuickToolsExpandedChange(false)
         showSleepTimerPanel = true
     }
@@ -1189,12 +1201,12 @@ private fun VideoControlOverlay(
     fun openAbLoopPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showSyncPanel = false
         showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
+        showSubtitleStylePanel = false
         onQuickToolsExpandedChange(false)
         showAbLoopPanel = true
     }
@@ -1202,12 +1214,12 @@ private fun VideoControlOverlay(
     fun openInfoPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showSyncPanel = false
         showEqualizerPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
+        showSubtitleStylePanel = false
         onQuickToolsExpandedChange(false)
         showInfoPanel = true
     }
@@ -1215,18 +1227,14 @@ private fun VideoControlOverlay(
     fun openQueuePanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showSyncPanel = false
         showEqualizerPanel = false
         showInfoPanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
+        showSubtitleStylePanel = false
         onQuickToolsExpandedChange(false)
         showQueuePanel = true
-    }
-
-    fun closeSyncPanel() {
-        showSyncPanel = false
     }
 
     fun closeSleepTimerPanel() {
@@ -1234,9 +1242,9 @@ private fun VideoControlOverlay(
         onSleepTimerPanelClosed()
     }
 
-    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel) {
-        if (showSyncPanel) {
-            closeSyncPanel()
+    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel) {
+        if (showSubtitleStylePanel) {
+            showSubtitleStylePanel = false
         } else if (showAudioTrackPanel) {
             showAudioTrackPanel = false
         } else if (showSleepTimerPanel) {
@@ -1252,8 +1260,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showSubtitleStylePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1264,7 +1272,7 @@ private fun VideoControlOverlay(
 
     fun closePanelOrBack() {
         when {
-            showSyncPanel -> closeSyncPanel()
+            showSubtitleStylePanel -> showSubtitleStylePanel = false
             showEqualizerPanel -> showEqualizerPanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
             showSleepTimerPanel -> closeSleepTimerPanel()
@@ -1281,7 +1289,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSyncPanel, showEqualizerPanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSubtitleStylePanel, showEqualizerPanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1290,7 +1298,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showAbLoopPanel && !showInfoPanel && !showQueuePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showAudioTrackPanel && !showSleepTimerPanel && !showAbLoopPanel && !showInfoPanel && !showQueuePanel
 
         if (ordinaryControlsVisible) {
             Box(
@@ -1358,14 +1366,14 @@ private fun VideoControlOverlay(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(16.dp))
-                            .clickable { openSyncPanel() }
+                            .clickable { openSubtitleStylePanel() }
                             .padding(horizontal = 5.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             Icons.Filled.Subtitles,
-                            contentDescription = "字幕同步",
+                            contentDescription = "字幕样式",
                             tint = Color.White,
                             modifier = Modifier.size(22.dp)
                         )
@@ -1419,30 +1427,23 @@ private fun VideoControlOverlay(
             )
         }
 
-        if (showSyncPanel) {
+        if (showSubtitleStylePanel) {
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .clickable { closeSyncPanel() }
+                    .clickable { showSubtitleStylePanel = false }
             )
-            SyncAdjustmentPanel(
+            SubtitleStylePanel(
                 subtitleName = subtitleName,
                 subtitleOffsetMs = subtitleOffsetMs,
-                audioDelayMs = audioDelayMs,
-                onDismiss = { closeSyncPanel() },
-                onPickSubtitle = onSubtitleSelect,
-                onClearSubtitle = onSubtitleClear,
-                onAudioTrackOpen = {
-                    closeSyncPanel()
-                    openAudioTrackPanel()
-                },
-                onAudioDelayRequest = {
-                    onAudioDelayChange(audioDelayMs)
-                    showFutureTool("音频同步")
-                },
+                settings = subtitleStyleSettings,
+                onSubtitleSelect = onSubtitleSelect,
+                onSubtitleClear = onSubtitleClear,
+                onSettingsChange = onSubtitleStyleChanged,
+                onDismiss = { showSubtitleStylePanel = false },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 56.dp, end = 20.dp)
+                    .padding(top = 12.dp, end = 14.dp, bottom = 12.dp)
             )
         }
 
@@ -1927,25 +1928,29 @@ private fun VideoQuickToolButton(
 }
 
 @Composable
-private fun SyncAdjustmentPanel(
+private fun SubtitleStylePanel(
     subtitleName: String?,
     subtitleOffsetMs: Long,
-    audioDelayMs: Long,
+    settings: VideoSubtitleStyleSettings,
+    onSubtitleSelect: () -> Unit,
+    onSubtitleClear: () -> Unit,
+    onSettingsChange: (VideoSubtitleStyleSettings) -> Unit,
     onDismiss: () -> Unit,
-    onPickSubtitle: () -> Unit,
-    onClearSubtitle: () -> Unit,
-    onAudioTrackOpen: () -> Unit,
-    onAudioDelayRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val hasSubtitle = subtitleName != null
-    val subtitleOffsetAvailable = false
+    val currentHsv = remember(settings.color.styleColor) { subtitleColorHsv(settings.color.styleColor) }
+    var customHue by remember(settings.color.styleColor) { mutableFloatStateOf(currentHsv[0]) }
+    var customSaturation by remember(settings.color.styleColor) { mutableFloatStateOf(currentHsv[1] * 100f) }
+    var showCustomColorControls by remember { mutableStateOf(false) }
+    val customColor = remember(customHue, customSaturation) {
+        subtitleColorFromHueSaturation(customHue, customSaturation)
+    }
+
     SidePanelShell(
-        title = "同步调节",
+        title = "字幕样式",
         onDismiss = onDismiss,
         modifier = modifier
-            .width(360.dp)
+            .width(300.dp)
             .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
     ) {
         Column(
@@ -1956,86 +1961,527 @@ private fun SyncAdjustmentPanel(
                 .padding(bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            SyncSectionTitle("字幕同步")
-            Text(
-                text = "当前字幕：${subtitleName ?: "未加载"}",
-                color = Color.White.copy(alpha = 0.66f),
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            SubtitleFilePickerSection(
+                subtitleName = subtitleName,
+                onPickSubtitle = onSubtitleSelect,
+                onClearSubtitle = onSubtitleClear
             )
-            Text(
-                text = subtitleSyncStatus(subtitleOffsetMs),
-                color = Color.White.copy(alpha = 0.78f),
-                style = MaterialTheme.typography.bodySmall
+            SubtitleStyleChoiceGroup(
+                title = "字号大小",
+                options = VideoSubtitleSize.values().toList(),
+                selected = settings.size,
+                label = { it.label },
+                onSelect = { onSettingsChange(settings.copy(size = it)) }
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                SyncStepButton("提前0.5s", hasSubtitle && subtitleOffsetAvailable) {}
-                SyncStepButton("提前0.1s", hasSubtitle && subtitleOffsetAvailable) {}
-                SyncStepButton("重置", hasSubtitle && subtitleOffsetAvailable) {}
-                SyncStepButton("延后0.1s", hasSubtitle && subtitleOffsetAvailable) {}
-                SyncStepButton("延后0.5s", hasSubtitle && subtitleOffsetAvailable) {}
-            }
-            Text(
-                text = if (hasSubtitle) {
-                    "当前版本暂不支持真实调整字幕显示时间，字幕可正常加载显示。"
-                } else {
-                    "请先加载外挂字幕"
-                },
-                color = Color.White.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.labelSmall
+            SubtitleStyleChoiceGroup(
+                title = "字幕位置",
+                options = listOf(
+                    VideoSubtitlePosition.TOP,
+                    VideoSubtitlePosition.MIDDLE,
+                    VideoSubtitlePosition.BOTTOM
+                ),
+                selected = settings.position,
+                label = { it.label },
+                onSelect = { onSettingsChange(settings.copy(position = it)) }
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncActionButton("选择外挂字幕", enabled = true, onClick = onPickSubtitle)
-                SyncActionButton("清除字幕", enabled = hasSubtitle, onClick = onClearSubtitle)
-            }
-            SyncSectionTitle("字幕后续")
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SyncActionButton("字幕样式", enabled = true, isFuture = true) {
-                        showFutureToolToast(context, "字幕样式")
-                    }
-                    SyncActionButton("字幕大小", enabled = true, isFuture = true) {
-                        showFutureToolToast(context, "字幕大小")
-                    }
-                    SyncActionButton("字幕位置", enabled = true, isFuture = true) {
-                        showFutureToolToast(context, "字幕位置")
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SyncActionButton("字幕速度", enabled = true, isFuture = true) {
-                        showFutureToolToast(context, "字幕速度")
-                    }
-                }
-            }
+            SubtitleTimingSection(
+                subtitleName = subtitleName,
+                subtitleOffsetMs = subtitleOffsetMs
+            )
+            SubtitleStyleChoiceGroup(
+                title = "字幕背景",
+                options = VideoSubtitleBackground.values().toList(),
+                selected = settings.background,
+                label = { it.label },
+                onSelect = { onSettingsChange(settings.copy(background = it)) },
+                columns = 2
+            )
+            SubtitlePresetColorGrid(
+                selectedColor = settings.color,
+                onSelect = { onSettingsChange(settings.copy(color = it)) }
+            )
+            SubtitleCustomColorSection(
+                currentColor = settings.color,
+                draftColor = customColor,
+                expanded = showCustomColorControls,
+                onToggleExpanded = { showCustomColorControls = !showCustomColorControls },
+                hue = customHue,
+                saturation = customSaturation,
+                onHueChange = { customHue = it },
+                onSaturationChange = { customSaturation = it },
+                onApply = { onSettingsChange(settings.copy(color = customColor)) }
+            )
+        }
+    }
+}
 
+@Composable
+private fun SubtitleFilePickerSection(
+    subtitleName: String?,
+    onPickSubtitle: () -> Unit,
+    onClearSubtitle: () -> Unit
+) {
+    val hasSubtitle = subtitleName != null
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        SubtitlePanelSectionLabel("字幕选择")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF1B263A).copy(alpha = 0.78f))
+                .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(10.dp))
+                .clickable(onClick = onPickSubtitle)
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(Color.White.copy(alpha = 0.08f))
-            )
-
-            SyncSectionTitle("音频同步")
-            Text(
-                text = "当前延迟 ${formatSignedDelay(audioDelayMs)}",
-                color = Color.White.copy(alpha = 0.56f),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncStepButton("提前0.1s", enabled = false, onClick = onAudioDelayRequest)
-                SyncStepButton("重置", enabled = false, onClick = onAudioDelayRequest)
-                SyncStepButton("延后0.1s", enabled = false, onClick = onAudioDelayRequest)
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(PlayerMoonPurple.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Subtitles,
+                    contentDescription = null,
+                    tint = PlayerMoonPurpleSoft,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = subtitleName ?: "选择文件...",
+                    color = Color.White.copy(alpha = 0.88f),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (hasSubtitle) "已加载，点击可重新选择" else "支持 .srt, .ass, .vtt",
+                    color = Color.White.copy(alpha = 0.48f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (hasSubtitle) {
+                Text(
+                    text = "清除",
+                    color = Color.White,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(PlayerMoonPurple.copy(alpha = 0.88f))
+                        .border(1.dp, PlayerMoonPurpleSoft.copy(alpha = 0.78f), RoundedCornerShape(10.dp))
+                        .clickable(onClick = onClearSubtitle)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
             }
             Text(
-                text = "当前版本暂不支持调整音频与画面延迟，音频同步调节后续实现。",
-                color = Color.White.copy(alpha = 0.5f),
-                style = MaterialTheme.typography.labelSmall
+                text = "›",
+                color = Color.White.copy(alpha = 0.58f),
+                fontSize = 24.sp,
+                maxLines = 1
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncActionButton("音轨切换", enabled = true, onClick = onAudioTrackOpen)
+        }
+    }
+}
+
+@Composable
+private fun SubtitleTimingSection(
+    subtitleName: String?,
+    subtitleOffsetMs: Long
+) {
+    val context = LocalContext.current
+
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SubtitlePanelSectionLabel("字幕时间")
+            Text(
+                text = "后续",
+                color = Color.White.copy(alpha = 0.46f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.White.copy(alpha = 0.045f))
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF1B263A).copy(alpha = 0.42f))
+                .border(1.dp, Color.White.copy(alpha = 0.045f), RoundedCornerShape(10.dp))
+                .clickable { showFutureToolToast(context, "字幕时间调整") },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SubtitleTimingCell(
+                text = "提前 (-)",
+                enabled = false,
+                onClick = {},
+                modifier = Modifier.weight(1f)
+            )
+            SubtitleTimingCell(
+                text = formatSubtitleOffsetSeconds(subtitleOffsetMs),
+                enabled = false,
+                onClick = {},
+                modifier = Modifier.weight(0.82f)
+            )
+            SubtitleTimingCell(
+                text = "延后 (+)",
+                enabled = false,
+                onClick = {},
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Text(
+            text = if (subtitleName == null) {
+                "加载外挂字幕后，时间偏移将在后续版本支持。"
+            } else {
+                "外部字幕时间偏移需要后续自定义字幕处理。"
+            },
+            color = Color.White.copy(alpha = 0.42f),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun SubtitleTimingCell(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (enabled) Color.White.copy(alpha = 0.74f) else Color.White.copy(alpha = 0.42f),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun SubtitlePanelSectionLabel(text: String) {
+    Text(
+        text = text,
+        color = Color.White.copy(alpha = 0.74f),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+@Composable
+private fun <T> SubtitleStyleChoiceGroup(
+    title: String,
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    columns: Int = 3
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        SubtitlePanelSectionLabel(title)
+        options.chunked(columns).forEach { rowOptions ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                rowOptions.forEach { option ->
+                    SubtitleStyleChoiceChip(
+                        text = label(option),
+                        selected = option == selected,
+                        onClick = { onSelect(option) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(columns - rowOptions.size) {
+                    Box(modifier = Modifier.weight(1f))
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun SubtitleStyleChoiceChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(
+                if (selected) PlayerMoonPurple.copy(alpha = 0.95f)
+                else Color(0xFF1D2233).copy(alpha = 0.72f)
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) PlayerMoonPurpleSoft.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.055f),
+                shape = RoundedCornerShape(11.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.76f),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun SubtitlePresetColorGrid(
+    selectedColor: VideoSubtitleColor,
+    onSelect: (VideoSubtitleColor) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SubtitlePanelSectionLabel("字幕颜色")
+        VideoSubtitlePresetColors.chunked(5).forEach { rowColors ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                rowColors.forEach { color ->
+                    SubtitlePresetColorDot(
+                        color = color,
+                        selected = color.styleColor == selectedColor.styleColor && !selectedColor.isCustom,
+                        onClick = { onSelect(color) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(5 - rowColors.size) {
+                    Box(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitlePresetColorDot(
+    color: VideoSubtitleColor,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 3.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(color.previewColor)
+                .border(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.20f),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Text(
+                    text = "✓",
+                    color = if (color.label == "白色" || color.label == "黄色") {
+                        Color.Black.copy(alpha = 0.78f)
+                    } else {
+                        Color.White
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleCustomColorSection(
+    currentColor: VideoSubtitleColor,
+    draftColor: VideoSubtitleColor,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    hue: Float,
+    saturation: Float,
+    onHueChange: (Float) -> Unit,
+    onSaturationChange: (Float) -> Unit,
+    onApply: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.035f)),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggleExpanded)
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(currentColor.previewColor)
+                    .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(5.dp))
+            )
+            Text(
+                text = "自定义颜色",
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            Text(
+                text = subtitleColorHex(currentColor.styleColor),
+                color = Color.White.copy(alpha = 0.48f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1
+            )
+            Text(
+                text = if (expanded) "⌃" else "⌄",
+                color = Color.White.copy(alpha = 0.58f),
+                fontSize = 18.sp,
+                maxLines = 1
+            )
+        }
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(draftColor.previewColor)
+                            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(7.dp))
+                    )
+                    Text(
+                        text = subtitleColorHex(draftColor.styleColor),
+                        color = Color.White.copy(alpha = 0.58f),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "应用颜色",
+                        color = PlayerMoonPurpleSoft,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(PlayerMoonPurple.copy(alpha = 0.12f))
+                            .border(1.dp, PlayerMoonPurpleSoft.copy(alpha = 0.40f), RoundedCornerShape(10.dp))
+                            .clickable(onClick = onApply)
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
+                SubtitleColorSlider("色相", "${round(hue).toInt().coerceIn(0, 360)}°", hue, 0f..360f, onHueChange)
+                SubtitleColorSlider(
+                    "饱和度",
+                    "${round(saturation).toInt().coerceIn(0, 100)}%",
+                    saturation,
+                    0f..100f,
+                    onSaturationChange
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleColorSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.58f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.width(42.dp),
+            maxLines = 1
+        )
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = videoSliderColors(),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = valueText,
+            color = Color.White.copy(alpha = 0.70f),
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(38.dp),
+            maxLines = 1
+        )
     }
 }
 
@@ -2669,64 +3115,6 @@ private fun SleepTimerActionRow(
             overflow = TextOverflow.Ellipsis
         )
     }
-}
-
-@Composable
-private fun SyncSectionTitle(text: String) {
-    Text(
-        text = text,
-        color = Color.White.copy(alpha = 0.9f),
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold
-    )
-}
-
-@Composable
-private fun SyncStepButton(
-    text: String,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    Text(
-        text = text,
-        color = if (enabled) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.38f),
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = if (enabled) 0.08f else 0.04f))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        style = MaterialTheme.typography.labelSmall,
-        maxLines = 1
-    )
-}
-
-@Composable
-private fun SyncActionButton(
-    text: String,
-    enabled: Boolean,
-    isFuture: Boolean = false,
-    onClick: () -> Unit
-) {
-    val textColor = when {
-        !enabled -> Color.White.copy(alpha = 0.34f)
-        isFuture -> Color.White.copy(alpha = 0.58f)
-        else -> PlayerMoonPurpleSoft
-    }
-    val backgroundAlpha = when {
-        !enabled -> 0.04f
-        isFuture -> 0.055f
-        else -> 0.09f
-    }
-    Text(
-        text = text,
-        color = textColor,
-        modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = backgroundAlpha))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 9.dp),
-        style = MaterialTheme.typography.labelMedium
-    )
 }
 
 @Composable
@@ -3589,18 +3977,6 @@ private fun Context.subtitleDisplayName(uri: Uri): String {
         ?: "外挂字幕"
 }
 
-private fun subtitleSyncStatus(offsetMs: Long): String {
-    return when {
-        offsetMs > 0L -> "字幕延后 ${formatDelayValue(offsetMs)}"
-        offsetMs < 0L -> "字幕提前 ${formatDelayValue(-offsetMs)}"
-        else -> "字幕同步 0.0s"
-    }
-}
-
-private fun formatDelayValue(delayMs: Long): String {
-    return String.format(Locale.US, "%.1fs", delayMs / 1000f)
-}
-
 private fun formatSleepTimerCountdown(remainingMs: Long): String {
     val totalSeconds = (remainingMs.coerceAtLeast(0L) + 999L) / 1000L
     val hours = totalSeconds / 3600L
@@ -3652,6 +4028,100 @@ private val VideoResizeModes = listOf(
     VideoResizeMode.ZOOM,
     VideoResizeMode.STRETCH
 )
+
+private enum class VideoSubtitleSize(val label: String, val textSizeSp: Float) {
+    SMALL("小", 18f),
+    MEDIUM("中", 22f),
+    LARGE("大", 26f)
+}
+
+private enum class VideoSubtitlePosition(val label: String, val bottomPaddingFraction: Float) {
+    BOTTOM("底部", 0.14f),
+    MIDDLE("中部", 0.46f),
+    TOP("顶部", 0.74f)
+}
+
+private enum class VideoSubtitleBackground(
+    val label: String,
+    val styleColor: Int,
+    val previewColor: Color
+) {
+    OFF("关闭", android.graphics.Color.TRANSPARENT, Color.Transparent),
+    BLACK("半透明黑底", android.graphics.Color.argb(176, 0, 0, 0), Color.Black.copy(alpha = 0.62f))
+}
+
+private data class VideoSubtitleColor(
+    val label: String,
+    val styleColor: Int,
+    val previewColor: Color,
+    val isCustom: Boolean = false
+)
+
+private val VideoSubtitlePresetColors = listOf(
+    VideoSubtitleColor("白色", android.graphics.Color.WHITE, Color.White),
+    VideoSubtitleColor("黄色", android.graphics.Color.rgb(255, 224, 107), Color(0xFFFFE06B)),
+    VideoSubtitleColor("绿色", android.graphics.Color.rgb(112, 224, 128), Color(0xFF70E080)),
+    VideoSubtitleColor("青色", android.graphics.Color.rgb(92, 224, 214), Color(0xFF5CE0D6)),
+    VideoSubtitleColor("蓝色", android.graphics.Color.rgb(101, 183, 255), Color(0xFF65B7FF)),
+    VideoSubtitleColor("红色", android.graphics.Color.rgb(255, 112, 106), Color(0xFFFF706A)),
+    VideoSubtitleColor("粉色", android.graphics.Color.rgb(255, 142, 203), Color(0xFFFF8ECB)),
+    VideoSubtitleColor("紫色", android.graphics.Color.rgb(183, 167, 255), PlayerMoonPurpleSoft),
+    VideoSubtitleColor("橙色", android.graphics.Color.rgb(255, 172, 92), Color(0xFFFFAC5C)),
+    VideoSubtitleColor("蓝绿", android.graphics.Color.rgb(24, 190, 204), Color(0xFF18BECC))
+)
+
+private data class VideoSubtitleStyleSettings(
+    val size: VideoSubtitleSize = VideoSubtitleSize.MEDIUM,
+    val position: VideoSubtitlePosition = VideoSubtitlePosition.BOTTOM,
+    val background: VideoSubtitleBackground = VideoSubtitleBackground.OFF,
+    val color: VideoSubtitleColor = VideoSubtitlePresetColors.first()
+)
+
+private fun subtitleColorFromHueSaturation(hue: Float, saturation: Float): VideoSubtitleColor {
+    val color = android.graphics.Color.HSVToColor(
+        floatArrayOf(
+            hue.coerceIn(0f, 360f),
+            (saturation / 100f).coerceIn(0f, 1f),
+            1f
+        )
+    )
+    return VideoSubtitleColor(
+        label = "自定义",
+        styleColor = color,
+        previewColor = Color(color),
+        isCustom = true
+    )
+}
+
+private fun subtitleColorHsv(color: Int): FloatArray {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(color, hsv)
+    return hsv
+}
+
+private fun subtitleColorHex(color: Int): String {
+    return String.format(Locale.US, "#%06X", 0xFFFFFF and color)
+}
+
+private fun PlayerView.applyVideoSubtitleStyle(settings: VideoSubtitleStyleSettings) {
+    val subtitleView = findViewById<androidx.media3.ui.SubtitleView>(
+        androidx.media3.ui.R.id.exo_subtitles
+    ) ?: return
+    subtitleView.setApplyEmbeddedStyles(false)
+    subtitleView.setApplyEmbeddedFontSizes(false)
+    subtitleView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, settings.size.textSizeSp)
+    subtitleView.setBottomPaddingFraction(settings.position.bottomPaddingFraction)
+    subtitleView.setStyle(
+        CaptionStyleCompat(
+            settings.color.styleColor,
+            settings.background.styleColor,
+            android.graphics.Color.TRANSPARENT,
+            CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+            android.graphics.Color.BLACK,
+            null
+        )
+    )
+}
 
 private enum class VideoSleepTimerMode {
     OFF,
@@ -3958,6 +4428,11 @@ private fun formatSignedDelay(delayMs: Long): String {
         delayMs < 0L -> "${delayMs}ms"
         else -> "0ms"
     }
+}
+
+private fun formatSubtitleOffsetSeconds(offsetMs: Long): String {
+    val seconds = offsetMs / 1000f
+    return String.format(Locale.US, "%.1fs", seconds)
 }
 
 private fun loadVideoInfoMetadata(
