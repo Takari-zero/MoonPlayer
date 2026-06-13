@@ -154,6 +154,7 @@ private val PlayerPanelStroke = Color(0x30B7A7FF)
 private val PlayerTrackInactive = Color(0xFF3A3449)
 private val VideoFolderPlaybackSpeeds = mutableMapOf<String, Float>()
 private const val VIDEO_SEEK_END_GUARD_MS = 500L
+private const val PLAYER_SIDE_PANEL_HEIGHT_FRACTION = 0.96f
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -332,6 +333,8 @@ private fun LocalVideoPlayer(
     var sleepTimerEndAtElapsedMs by remember { mutableLongStateOf(0L) }
     var sleepTimerRemainingMs by remember { mutableLongStateOf(0L) }
     val latestSleepTimerMode by rememberUpdatedState(sleepTimerMode)
+    var abLoopStartMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
+    var abLoopEndMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     val subtitleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -495,6 +498,36 @@ private fun LocalVideoPlayer(
         return target
     }
 
+    fun currentAbMarkerPosition(): Long {
+        return safeVideoMarkerPosition(player.currentPosition.coerceAtLeast(0L), durationMs)
+    }
+
+    fun setAbLoopStart() {
+        val target = currentAbMarkerPosition()
+        abLoopStartMs = target
+        if (abLoopEndMs != null && abLoopEndMs!! <= target) {
+            abLoopEndMs = null
+        }
+        showVideoPlayerToast(context, "已设置 A 点")
+    }
+
+    fun setAbLoopEnd() {
+        val target = currentAbMarkerPosition()
+        val start = abLoopStartMs
+        if (start != null && target <= start) {
+            showVideoPlayerToast(context, "B 点必须晚于 A 点")
+            return
+        }
+        abLoopEndMs = target
+        showVideoPlayerToast(context, "已设置 B 点")
+    }
+
+    fun clearAbLoop() {
+        abLoopStartMs = null
+        abLoopEndMs = null
+        showVideoPlayerToast(context, "已关闭 AB 循环")
+    }
+
     LaunchedEffect(gestureOverlay) {
         if (gestureOverlay != null) {
             delay(GESTURE_HINT_MS)
@@ -568,6 +601,18 @@ private fun LocalVideoPlayer(
             durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
             isPlaying = player.isPlaying
             delay(500)
+        }
+    }
+
+    LaunchedEffect(currentPositionMs, abLoopStartMs, abLoopEndMs, isSeekingByUser, player) {
+        val start = abLoopStartMs ?: return@LaunchedEffect
+        val end = abLoopEndMs ?: return@LaunchedEffect
+        if (end <= start || isSeekingByUser || !player.isPlaying) return@LaunchedEffect
+        if (currentPositionMs >= end) {
+            val target = safeVideoSeekPosition(start, durationMs)
+            currentPositionMs = target
+            draggingPositionMs = target
+            player.seekTo(target)
         }
     }
 
@@ -796,6 +841,8 @@ private fun LocalVideoPlayer(
                 sleepTimerMode = sleepTimerMode,
                 sleepTimerSelectedOption = sleepTimerSelectedOption,
                 sleepTimerRemainingMs = sleepTimerRemainingMs,
+                abLoopStartMs = abLoopStartMs,
+                abLoopEndMs = abLoopEndMs,
                 onSpeedSelected = { speed ->
                     val safeSpeed = speed.normalizeVideoSpeed()
                     playbackSpeed = safeSpeed
@@ -845,6 +892,9 @@ private fun LocalVideoPlayer(
                         showControls = true
                     }
                 },
+                onSetAbLoopStart = ::setAbLoopStart,
+                onSetAbLoopEnd = ::setAbLoopEnd,
+                onClearAbLoop = ::clearAbLoop,
                 onScreenshot = ::captureScreenshot,
                 isPortraitPlayback = isPortraitPlayback,
                 onToggleOrientation = {
@@ -1043,6 +1093,8 @@ private fun VideoControlOverlay(
     sleepTimerMode: VideoSleepTimerMode,
     sleepTimerSelectedOption: VideoSleepTimerOption,
     sleepTimerRemainingMs: Long,
+    abLoopStartMs: Long?,
+    abLoopEndMs: Long?,
     onSpeedSelected: (Float) -> Unit,
     onResizeModeSelected: (VideoResizeMode) -> Unit,
     onToggleRepeat: () -> Unit,
@@ -1051,6 +1103,9 @@ private fun VideoControlOverlay(
     onAudioDelayChange: (Long) -> Unit,
     onSleepTimerSelected: (VideoSleepTimerOption) -> Unit,
     onSleepTimerPanelClosed: () -> Unit,
+    onSetAbLoopStart: () -> Unit,
+    onSetAbLoopEnd: () -> Unit,
+    onClearAbLoop: () -> Unit,
     onScreenshot: () -> Unit,
     isPortraitPlayback: Boolean,
     onToggleOrientation: () -> Unit,
@@ -1069,6 +1124,7 @@ private fun VideoControlOverlay(
     var showQueuePanel by remember { mutableStateOf(false) }
     var showAudioTrackPanel by remember { mutableStateOf(false) }
     var showSleepTimerPanel by remember { mutableStateOf(false) }
+    var showAbLoopPanel by remember { mutableStateOf(false) }
     var audioTrackRevision by remember(player) { mutableIntStateOf(0) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
@@ -1098,6 +1154,7 @@ private fun VideoControlOverlay(
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
+        showAbLoopPanel = false
         onQuickToolsExpandedChange(false)
         showSyncPanel = true
     }
@@ -1110,6 +1167,7 @@ private fun VideoControlOverlay(
         showInfoPanel = false
         showQueuePanel = false
         showSleepTimerPanel = false
+        showAbLoopPanel = false
         onQuickToolsExpandedChange(false)
         audioTrackRevision += 1
         showAudioTrackPanel = true
@@ -1123,8 +1181,22 @@ private fun VideoControlOverlay(
         showInfoPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
+        showAbLoopPanel = false
         onQuickToolsExpandedChange(false)
         showSleepTimerPanel = true
+    }
+
+    fun openAbLoopPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showSyncPanel = false
+        showEqualizerPanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        onQuickToolsExpandedChange(false)
+        showAbLoopPanel = true
     }
 
     fun openInfoPanel() {
@@ -1135,6 +1207,7 @@ private fun VideoControlOverlay(
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
+        showAbLoopPanel = false
         onQuickToolsExpandedChange(false)
         showInfoPanel = true
     }
@@ -1147,6 +1220,7 @@ private fun VideoControlOverlay(
         showInfoPanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
+        showAbLoopPanel = false
         onQuickToolsExpandedChange(false)
         showQueuePanel = true
     }
@@ -1160,13 +1234,15 @@ private fun VideoControlOverlay(
         onSleepTimerPanelClosed()
     }
 
-    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel) {
+    BackHandler(enabled = showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel) {
         if (showSyncPanel) {
             closeSyncPanel()
         } else if (showAudioTrackPanel) {
             showAudioTrackPanel = false
         } else if (showSleepTimerPanel) {
             closeSleepTimerPanel()
+        } else if (showAbLoopPanel) {
+            showAbLoopPanel = false
         } else if (showInfoPanel) {
             showInfoPanel = false
         } else if (showQueuePanel) {
@@ -1176,8 +1252,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel)
+    LaunchedEffect(showSpeedPanel, showSyncPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showSyncPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel)
     }
 
     DisposableEffect(Unit) {
@@ -1192,6 +1268,7 @@ private fun VideoControlOverlay(
             showEqualizerPanel -> showEqualizerPanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
             showSleepTimerPanel -> closeSleepTimerPanel()
+            showAbLoopPanel -> showAbLoopPanel = false
             showInfoPanel -> showInfoPanel = false
             showQueuePanel -> showQueuePanel = false
             showSpeedPanel -> showSpeedPanel = false
@@ -1204,7 +1281,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSyncPanel, showEqualizerPanel, showAudioTrackPanel, showSleepTimerPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSyncPanel, showEqualizerPanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1213,7 +1290,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSyncPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showAbLoopPanel && !showInfoPanel && !showQueuePanel
 
         if (ordinaryControlsVisible) {
             Box(
@@ -1410,6 +1487,26 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showAbLoopPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showAbLoopPanel = false }
+            )
+            AbLoopPanel(
+                startMs = abLoopStartMs,
+                endMs = abLoopEndMs,
+                isActive = abLoopStartMs != null && abLoopEndMs != null && abLoopEndMs > abLoopStartMs,
+                onSetStart = onSetAbLoopStart,
+                onSetEnd = onSetAbLoopEnd,
+                onClear = onClearAbLoop,
+                onDismiss = { showAbLoopPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 14.dp, bottom = 12.dp)
+            )
+        }
+
         if (showInfoPanel) {
             Box(
                 modifier = Modifier
@@ -1537,8 +1634,7 @@ private fun VideoControlOverlay(
                     VideoQuickToolButton(
                         icon = Icons.Filled.Loop,
                         label = "AB",
-                        isFuture = true,
-                        onClick = { showFutureTool("AB 循环") }
+                        onClick = { openAbLoopPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
@@ -1845,85 +1941,100 @@ private fun SyncAdjustmentPanel(
     val context = LocalContext.current
     val hasSubtitle = subtitleName != null
     val subtitleOffsetAvailable = false
-    SidePanelShell(title = "同步调节", onDismiss = onDismiss, modifier = modifier.width(330.dp)) {
-        SyncSectionTitle("字幕同步")
-        Text(
-            text = "当前字幕：${subtitleName ?: "未加载"}",
-            color = Color.White.copy(alpha = 0.66f),
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = subtitleSyncStatus(subtitleOffsetMs),
-            color = Color.White.copy(alpha = 0.78f),
-            style = MaterialTheme.typography.bodySmall
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            SyncStepButton("提前0.5s", hasSubtitle && subtitleOffsetAvailable) {}
-            SyncStepButton("提前0.1s", hasSubtitle && subtitleOffsetAvailable) {}
-            SyncStepButton("重置", hasSubtitle && subtitleOffsetAvailable) {}
-            SyncStepButton("延后0.1s", hasSubtitle && subtitleOffsetAvailable) {}
-            SyncStepButton("延后0.5s", hasSubtitle && subtitleOffsetAvailable) {}
-        }
-        Text(
-            text = if (hasSubtitle) {
-                "当前版本暂不支持真实调整字幕显示时间，字幕可正常加载显示。"
-            } else {
-                "请先加载外挂字幕"
-            },
-            color = Color.White.copy(alpha = 0.5f),
-            style = MaterialTheme.typography.labelSmall
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SyncActionButton("选择外挂字幕", enabled = true, onClick = onPickSubtitle)
-            SyncActionButton("清除字幕", enabled = hasSubtitle, onClick = onClearSubtitle)
-        }
-        SyncSectionTitle("字幕后续")
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncActionButton("字幕样式", enabled = true, isFuture = true) {
-                    showFutureToolToast(context, "字幕样式")
-                }
-                SyncActionButton("字幕大小", enabled = true, isFuture = true) {
-                    showFutureToolToast(context, "字幕大小")
-                }
-                SyncActionButton("字幕位置", enabled = true, isFuture = true) {
-                    showFutureToolToast(context, "字幕位置")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncActionButton("字幕速度", enabled = true, isFuture = true) {
-                    showFutureToolToast(context, "字幕速度")
-                }
-            }
-        }
-
-        Box(
+    SidePanelShell(
+        title = "同步调节",
+        onDismiss = onDismiss,
+        modifier = modifier
+            .width(360.dp)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(1.dp)
-                .background(Color.White.copy(alpha = 0.08f))
-        )
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SyncSectionTitle("字幕同步")
+            Text(
+                text = "当前字幕：${subtitleName ?: "未加载"}",
+                color = Color.White.copy(alpha = 0.66f),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitleSyncStatus(subtitleOffsetMs),
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                SyncStepButton("提前0.5s", hasSubtitle && subtitleOffsetAvailable) {}
+                SyncStepButton("提前0.1s", hasSubtitle && subtitleOffsetAvailable) {}
+                SyncStepButton("重置", hasSubtitle && subtitleOffsetAvailable) {}
+                SyncStepButton("延后0.1s", hasSubtitle && subtitleOffsetAvailable) {}
+                SyncStepButton("延后0.5s", hasSubtitle && subtitleOffsetAvailable) {}
+            }
+            Text(
+                text = if (hasSubtitle) {
+                    "当前版本暂不支持真实调整字幕显示时间，字幕可正常加载显示。"
+                } else {
+                    "请先加载外挂字幕"
+                },
+                color = Color.White.copy(alpha = 0.5f),
+                style = MaterialTheme.typography.labelSmall
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncActionButton("选择外挂字幕", enabled = true, onClick = onPickSubtitle)
+                SyncActionButton("清除字幕", enabled = hasSubtitle, onClick = onClearSubtitle)
+            }
+            SyncSectionTitle("字幕后续")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SyncActionButton("字幕样式", enabled = true, isFuture = true) {
+                        showFutureToolToast(context, "字幕样式")
+                    }
+                    SyncActionButton("字幕大小", enabled = true, isFuture = true) {
+                        showFutureToolToast(context, "字幕大小")
+                    }
+                    SyncActionButton("字幕位置", enabled = true, isFuture = true) {
+                        showFutureToolToast(context, "字幕位置")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SyncActionButton("字幕速度", enabled = true, isFuture = true) {
+                        showFutureToolToast(context, "字幕速度")
+                    }
+                }
+            }
 
-        SyncSectionTitle("音频同步")
-        Text(
-            text = "当前延迟 ${formatSignedDelay(audioDelayMs)}",
-            color = Color.White.copy(alpha = 0.56f),
-            style = MaterialTheme.typography.bodySmall
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SyncStepButton("提前0.1s", enabled = false, onClick = onAudioDelayRequest)
-            SyncStepButton("重置", enabled = false, onClick = onAudioDelayRequest)
-            SyncStepButton("延后0.1s", enabled = false, onClick = onAudioDelayRequest)
-        }
-        Text(
-            text = "当前版本暂不支持调整音频与画面延迟，音频同步调节后续实现。",
-            color = Color.White.copy(alpha = 0.5f),
-            style = MaterialTheme.typography.labelSmall
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SyncActionButton("音轨切换", enabled = true, onClick = onAudioTrackOpen)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.08f))
+            )
+
+            SyncSectionTitle("音频同步")
+            Text(
+                text = "当前延迟 ${formatSignedDelay(audioDelayMs)}",
+                color = Color.White.copy(alpha = 0.56f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncStepButton("提前0.1s", enabled = false, onClick = onAudioDelayRequest)
+                SyncStepButton("重置", enabled = false, onClick = onAudioDelayRequest)
+                SyncStepButton("延后0.1s", enabled = false, onClick = onAudioDelayRequest)
+            }
+            Text(
+                text = "当前版本暂不支持调整音频与画面延迟，音频同步调节后续实现。",
+                color = Color.White.copy(alpha = 0.5f),
+                style = MaterialTheme.typography.labelSmall
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SyncActionButton("音轨切换", enabled = true, onClick = onAudioTrackOpen)
+            }
         }
     }
 }
@@ -1940,7 +2051,7 @@ private fun AudioTrackPanel(
         onDismiss = onDismiss,
         modifier = modifier
             .width(340.dp)
-            .fillMaxHeight(0.74f)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
     ) {
         when {
             tracks.isEmpty() -> {
@@ -2084,6 +2195,181 @@ private fun AudioTrackRow(
 }
 
 @Composable
+private fun AbLoopPanel(
+    startMs: Long?,
+    endMs: Long?,
+    isActive: Boolean,
+    onSetStart: () -> Unit,
+    onSetEnd: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(
+        title = "AB 循环",
+        onDismiss = onDismiss,
+        modifier = modifier
+            .width(390.dp)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION),
+        contentPadding = 14.dp,
+        contentSpacing = 10.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isActive) PlayerMoonPurple.copy(alpha = 0.10f)
+                        else Color.White.copy(alpha = 0.040f)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(if (isActive) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.20f))
+                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "当前状态",
+                        color = Color.White.copy(alpha = 0.56f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = if (isActive) "循环中" else "未开启",
+                        color = if (isActive) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.86f),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.035f)),
+                verticalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                AbLoopPointRow(label = "A", value = startMs?.let(::formatDuration) ?: "未设置")
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Color.White.copy(alpha = 0.050f))
+                )
+                AbLoopPointRow(label = "B", value = endMs?.let(::formatDuration) ?: "未设置")
+            }
+
+            AbLoopButton(
+                text = "设置 A 点",
+                primary = true,
+                onClick = onSetStart
+            )
+            AbLoopButton(
+                text = "设置 B 点",
+                primary = true,
+                onClick = onSetEnd
+            )
+            AbLoopButton(
+                text = "清除 AB 循环",
+                primary = false,
+                onClick = onClear
+            )
+            Text(
+                text = "A/B 点仅对当前视频生效，播放到 B 点后会回到 A 点继续播放。",
+                color = Color.White.copy(alpha = 0.48f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun AbLoopPointRow(
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = label,
+            color = PlayerMoonPurpleSoft,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.width(20.dp),
+            textAlign = TextAlign.Center,
+            maxLines = 1
+        )
+        Text(
+            text = value,
+            color = Color.White.copy(alpha = 0.88f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun AbLoopButton(
+    text: String,
+    primary: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(
+                if (primary) PlayerMoonPurple.copy(alpha = 0.15f)
+                else Color.White.copy(alpha = 0.040f)
+            )
+            .border(
+                width = 1.dp,
+                color = if (primary) PlayerMoonPurpleSoft.copy(alpha = 0.48f) else Color.White.copy(alpha = 0.070f),
+                shape = RoundedCornerShape(11.dp)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (primary) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
 private fun SleepTimerPanel(
     mode: VideoSleepTimerMode,
     selectedOption: VideoSleepTimerOption,
@@ -2119,7 +2405,7 @@ private fun SleepTimerPanel(
         onDismiss = onDismiss,
         modifier = modifier
             .width(430.dp)
-            .fillMaxHeight(0.96f),
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION),
         contentPadding = 12.dp,
         contentSpacing = 8.dp
     ) {
@@ -2473,7 +2759,7 @@ private fun VideoInfoPanel(
         onDismiss = onDismiss,
         modifier = modifier
             .width(360.dp)
-            .fillMaxHeight(0.82f)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
     ) {
         Column(
             modifier = Modifier
@@ -2564,7 +2850,7 @@ private fun VideoQueuePanel(
         modifier = modifier
             .fillMaxWidth(0.36f)
             .widthIn(min = 292.dp, max = 400.dp)
-            .fillMaxHeight(0.74f)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
             .clip(RoundedCornerShape(13.dp))
             .background(PlayerPanelDark.copy(alpha = 0.86f))
             .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(13.dp))
@@ -3331,6 +3617,11 @@ private fun safeVideoSeekPosition(positionMs: Long, durationMs: Long): Long {
     val safeDuration = durationMs.takeIf { it > 0L } ?: return positionMs.coerceAtLeast(0L)
     val maxSeekPosition = (safeDuration - VIDEO_SEEK_END_GUARD_MS).coerceAtLeast(0L)
     return positionMs.coerceIn(0L, maxSeekPosition)
+}
+
+private fun safeVideoMarkerPosition(positionMs: Long, durationMs: Long): Long {
+    val safeDuration = durationMs.takeIf { it > 0L } ?: return positionMs.coerceAtLeast(0L)
+    return positionMs.coerceIn(0L, safeDuration)
 }
 
 private enum class VideoDragMode {
