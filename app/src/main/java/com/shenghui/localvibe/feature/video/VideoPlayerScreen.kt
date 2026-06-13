@@ -326,6 +326,8 @@ private fun LocalVideoPlayer(
     var audioDelayMs by remember(mediaFile.uri) { mutableLongStateOf(0L) }
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
+    var isAbLoopBarVisible by remember { mutableStateOf(false) }
+    var closeAbLoopBarRequest by remember { mutableIntStateOf(0) }
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
     var isPortraitPlayback by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSavingScreenshot by remember { mutableStateOf(false) }
@@ -505,8 +507,8 @@ private fun LocalVideoPlayer(
         return safeVideoMarkerPosition(player.currentPosition.coerceAtLeast(0L), durationMs)
     }
 
-    fun setAbLoopStart() {
-        val target = currentAbMarkerPosition()
+    fun setAbLoopStartAt(positionMs: Long) {
+        val target = safeVideoMarkerPosition(positionMs, durationMs)
         abLoopStartMs = target
         if (abLoopEndMs != null && abLoopEndMs!! <= target) {
             abLoopEndMs = null
@@ -514,8 +516,12 @@ private fun LocalVideoPlayer(
         showVideoPlayerToast(context, "已设置 A 点")
     }
 
-    fun setAbLoopEnd() {
-        val target = currentAbMarkerPosition()
+    fun setAbLoopStart() {
+        setAbLoopStartAt(currentAbMarkerPosition())
+    }
+
+    fun setAbLoopEndAt(positionMs: Long) {
+        val target = safeVideoMarkerPosition(positionMs, durationMs)
         val start = abLoopStartMs
         if (start != null && target <= start) {
             showVideoPlayerToast(context, "B 点必须晚于 A 点")
@@ -523,6 +529,20 @@ private fun LocalVideoPlayer(
         }
         abLoopEndMs = target
         showVideoPlayerToast(context, "已设置 B 点")
+    }
+
+    fun setAbLoopEnd() {
+        setAbLoopEndAt(currentAbMarkerPosition())
+    }
+
+    fun enableAbLoop() {
+        val start = abLoopStartMs
+        val end = abLoopEndMs
+        when {
+            start == null || end == null -> showVideoPlayerToast(context, "请先设置 A/B 点")
+            end <= start -> showVideoPlayerToast(context, "B 点必须晚于 A 点")
+            else -> showVideoPlayerToast(context, "AB 循环已开启")
+        }
     }
 
     fun clearAbLoop() {
@@ -549,10 +569,10 @@ private fun LocalVideoPlayer(
             seekPreviewOverlay = null
         }
     }
-    LaunchedEffect(showControls, isSpeedPanelVisible, isScreenLocked, isQuickToolsExpanded) {
-        if (showControls && !isSpeedPanelVisible && !isScreenLocked && !isQuickToolsExpanded) {
+    LaunchedEffect(showControls, isSpeedPanelVisible, isAbLoopBarVisible, isScreenLocked, isQuickToolsExpanded) {
+        if (showControls && !isSpeedPanelVisible && !isAbLoopBarVisible && !isScreenLocked && !isQuickToolsExpanded) {
             delay(2_000)
-            if (!isSpeedPanelVisible && !isScreenLocked && !isQuickToolsExpanded) {
+            if (!isSpeedPanelVisible && !isAbLoopBarVisible && !isScreenLocked && !isQuickToolsExpanded) {
                 showControls = false
             }
         }
@@ -686,6 +706,9 @@ private fun LocalVideoPlayer(
                         }
                         if (isSpeedPanelVisible) {
                             isSpeedPanelVisible = false
+                            showControls = true
+                        } else if (isAbLoopBarVisible && showControls) {
+                            closeAbLoopBarRequest += 1
                             showControls = true
                         } else if (showControls) {
                             showControls = false
@@ -904,6 +927,9 @@ private fun LocalVideoPlayer(
                 },
                 onSetAbLoopStart = ::setAbLoopStart,
                 onSetAbLoopEnd = ::setAbLoopEnd,
+                onSetAbLoopStartAt = ::setAbLoopStartAt,
+                onSetAbLoopEndAt = ::setAbLoopEndAt,
+                onEnableAbLoop = ::enableAbLoop,
                 onClearAbLoop = ::clearAbLoop,
                 onScreenshot = ::captureScreenshot,
                 isPortraitPlayback = isPortraitPlayback,
@@ -922,6 +948,8 @@ private fun LocalVideoPlayer(
                     showVideoPlayerToast(context, "已锁定")
                 },
                 onSpeedPanelVisibilityChange = { isSpeedPanelVisible = it },
+                abLoopCloseRequest = closeAbLoopBarRequest,
+                onAbLoopBarVisibilityChange = { isAbLoopBarVisible = it },
                 isQuickToolsExpanded = isQuickToolsExpanded,
                 onQuickToolsExpandedChange = { isQuickToolsExpanded = it }
             )
@@ -1117,12 +1145,17 @@ private fun VideoControlOverlay(
     onSleepTimerPanelClosed: () -> Unit,
     onSetAbLoopStart: () -> Unit,
     onSetAbLoopEnd: () -> Unit,
+    onSetAbLoopStartAt: (Long) -> Unit,
+    onSetAbLoopEndAt: (Long) -> Unit,
+    onEnableAbLoop: () -> Unit,
     onClearAbLoop: () -> Unit,
     onScreenshot: () -> Unit,
     isPortraitPlayback: Boolean,
     onToggleOrientation: () -> Unit,
     onLockScreen: () -> Unit,
     onSpeedPanelVisibilityChange: (Boolean) -> Unit,
+    abLoopCloseRequest: Int,
+    onAbLoopBarVisibilityChange: (Boolean) -> Unit,
     isQuickToolsExpanded: Boolean,
     onQuickToolsExpandedChange: (Boolean) -> Unit
 ) {
@@ -1137,6 +1170,8 @@ private fun VideoControlOverlay(
     var showSleepTimerPanel by remember { mutableStateOf(false) }
     var showAbLoopPanel by remember { mutableStateOf(false) }
     var showSubtitleStylePanel by remember { mutableStateOf(false) }
+    var abLoopEditTarget by remember { mutableStateOf<VideoAbLoopPoint?>(null) }
+    var abLoopEditText by remember { mutableStateOf("") }
     var audioTrackRevision by remember(player) { mutableIntStateOf(0) }
     var eqBass by remember { mutableFloatStateOf(0f) }
     var eqMid by remember { mutableFloatStateOf(0f) }
@@ -1152,6 +1187,22 @@ private fun VideoControlOverlay(
         player.addListener(listener)
         audioTrackRevision += 1
         onDispose { player.removeListener(listener) }
+    }
+
+    LaunchedEffect(currentQueueUri) {
+        showAbLoopPanel = false
+        abLoopEditTarget = null
+    }
+
+    LaunchedEffect(showAbLoopPanel) {
+        onAbLoopBarVisibilityChange(showAbLoopPanel)
+    }
+
+    LaunchedEffect(abLoopCloseRequest) {
+        if (abLoopCloseRequest > 0) {
+            showAbLoopPanel = false
+            abLoopEditTarget = null
+        }
     }
 
     fun showFutureTool(feature: String) {
@@ -1242,6 +1293,11 @@ private fun VideoControlOverlay(
         onSleepTimerPanelClosed()
     }
 
+    fun openAbLoopTimeEditor(target: VideoAbLoopPoint, currentValueMs: Long?) {
+        abLoopEditTarget = target
+        abLoopEditText = formatDuration(currentValueMs ?: currentPositionMs)
+    }
+
     BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel) {
         if (showSubtitleStylePanel) {
             showSubtitleStylePanel = false
@@ -1260,13 +1316,14 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showSubtitleStylePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel)
     }
 
     DisposableEffect(Unit) {
         onDispose {
             onSpeedPanelVisibilityChange(false)
+            onAbLoopBarVisibilityChange(false)
         }
     }
 
@@ -1298,7 +1355,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showAudioTrackPanel && !showSleepTimerPanel && !showAbLoopPanel && !showInfoPanel && !showQueuePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel
 
         if (ordinaryControlsVisible) {
             Box(
@@ -1489,22 +1546,43 @@ private fun VideoControlOverlay(
         }
 
         if (showAbLoopPanel) {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .clickable { showAbLoopPanel = false }
-            )
-            AbLoopPanel(
+            AbLoopFloatingBar(
                 startMs = abLoopStartMs,
                 endMs = abLoopEndMs,
                 isActive = abLoopStartMs != null && abLoopEndMs != null && abLoopEndMs > abLoopStartMs,
                 onSetStart = onSetAbLoopStart,
                 onSetEnd = onSetAbLoopEnd,
+                onEditStart = { openAbLoopTimeEditor(VideoAbLoopPoint.A, abLoopStartMs) },
+                onEditEnd = { openAbLoopTimeEditor(VideoAbLoopPoint.B, abLoopEndMs) },
+                onEnable = onEnableAbLoop,
                 onClear = onClearAbLoop,
                 onDismiss = { showAbLoopPanel = false },
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 12.dp, end = 14.dp, bottom = 12.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 16.dp, end = 16.dp, bottom = 112.dp)
+            )
+        }
+
+        abLoopEditTarget?.let { target ->
+            AbLoopTimeInputDialog(
+                target = target,
+                value = abLoopEditText,
+                durationMs = durationMs,
+                onValueChange = { abLoopEditText = it },
+                onConfirm = {
+                    val parsedMs = parseAbLoopTimeInput(abLoopEditText, durationMs)
+                    if (parsedMs == null) {
+                        showVideoPlayerToast(context, "请输入有效时间")
+                    } else {
+                        if (target == VideoAbLoopPoint.A) {
+                            onSetAbLoopStartAt(parsedMs)
+                        } else {
+                            onSetAbLoopEndAt(parsedMs)
+                        }
+                        abLoopEditTarget = null
+                    }
+                },
+                onDismiss = { abLoopEditTarget = null }
             )
         }
 
@@ -1672,6 +1750,9 @@ private fun VideoControlOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = {})
+                    }
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
@@ -2641,178 +2722,206 @@ private fun AudioTrackRow(
 }
 
 @Composable
-private fun AbLoopPanel(
+private fun AbLoopFloatingBar(
     startMs: Long?,
     endMs: Long?,
     isActive: Boolean,
     onSetStart: () -> Unit,
     onSetEnd: () -> Unit,
+    onEditStart: () -> Unit,
+    onEditEnd: () -> Unit,
+    onEnable: () -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    SidePanelShell(
-        title = "AB 循环",
-        onDismiss = onDismiss,
-        modifier = modifier
-            .width(390.dp)
-            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION),
-        contentPadding = 14.dp,
-        contentSpacing = 10.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (isActive) PlayerMoonPurple.copy(alpha = 0.10f)
-                        else Color.White.copy(alpha = 0.040f)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .height(28.dp)
-                        .clip(RoundedCornerShape(99.dp))
-                        .background(if (isActive) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.20f))
-                )
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "当前状态",
-                        color = Color.White.copy(alpha = 0.56f),
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = if (isActive) "循环中" else "未开启",
-                        color = if (isActive) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.86f),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.035f)),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
-            ) {
-                AbLoopPointRow(label = "A", value = startMs?.let(::formatDuration) ?: "未设置")
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(Color.White.copy(alpha = 0.050f))
-                )
-                AbLoopPointRow(label = "B", value = endMs?.let(::formatDuration) ?: "未设置")
-            }
-
-            AbLoopButton(
-                text = "设置 A 点",
-                primary = true,
-                onClick = onSetStart
-            )
-            AbLoopButton(
-                text = "设置 B 点",
-                primary = true,
-                onClick = onSetEnd
-            )
-            AbLoopButton(
-                text = "清除 AB 循环",
-                primary = false,
-                onClick = onClear
-            )
-            Text(
-                text = "A/B 点仅对当前视频生效，播放到 B 点后会回到 A 点继续播放。",
-                color = Color.White.copy(alpha = 0.48f),
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-    }
-}
-
-@Composable
-private fun AbLoopPointRow(
-    label: String,
-    value: String
-) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .padding(horizontal = 12.dp),
+        modifier = modifier
+            .widthIn(max = 620.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(PlayerPanelDark.copy(alpha = 0.64f))
+            .clickable(onClick = {})
+            .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = label,
-            color = PlayerMoonPurpleSoft,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.width(20.dp),
-            textAlign = TextAlign.Center,
-            maxLines = 1
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "A-B 循环",
+                color = if (isActive) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.90f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(26.dp)) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "关闭 AB 悬浮条",
+                    tint = Color.White.copy(alpha = 0.66f),
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+        }
+        AbLoopDivider()
+        AbLoopPointChip(
+            label = "设置点 A",
+            timeText = startMs?.let(::formatDuration) ?: "--",
+            selected = startMs != null,
+            onSet = onSetStart,
+            onEdit = onEditStart
         )
-        Text(
-            text = value,
-            color = Color.White.copy(alpha = 0.88f),
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
+        Box(
+            modifier = Modifier
+                .width(22.dp)
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.30f), RoundedCornerShape(99.dp))
+        )
+        AbLoopPointChip(
+            label = "设置点 B",
+            timeText = endMs?.let(::formatDuration) ?: "--",
+            selected = endMs != null,
+            onSet = onSetEnd,
+            onEdit = onEditEnd
+        )
+        AbLoopDivider()
+        AbLoopActionChip(
+            text = "开启循环",
+            highlighted = isActive,
+            onClick = onEnable
+        )
+        AbLoopActionChip(
+            text = "重置",
+            highlighted = false,
+            onClick = onClear
         )
     }
 }
 
 @Composable
-private fun AbLoopButton(
-    text: String,
-    primary: Boolean,
-    onClick: () -> Unit
+private fun AbLoopPointChip(
+    label: String,
+    timeText: String,
+    selected: Boolean,
+    onSet: () -> Unit,
+    onEdit: () -> Unit
 ) {
-    Box(
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .clip(RoundedCornerShape(11.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
-                if (primary) PlayerMoonPurple.copy(alpha = 0.15f)
-                else Color.White.copy(alpha = 0.040f)
+                if (selected) PlayerMoonPurple.copy(alpha = 0.20f)
+                else Color.White.copy(alpha = 0.045f)
             )
-            .border(
-                width = 1.dp,
-                color = if (primary) PlayerMoonPurpleSoft.copy(alpha = 0.48f) else Color.White.copy(alpha = 0.070f),
-                shape = RoundedCornerShape(11.dp)
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
-            text = text,
-            color = if (primary) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.82f),
-            style = MaterialTheme.typography.bodyMedium,
+            text = label,
+            color = if (selected) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.68f),
+            modifier = Modifier.clickable(onClick = onSet),
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1
         )
+        Text(
+            text = timeText,
+            color = if (selected) Color.White.copy(alpha = 0.92f) else Color.White.copy(alpha = 0.44f),
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onEdit)
+                .padding(horizontal = 4.dp, vertical = 1.dp),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1
+        )
     }
+}
+
+@Composable
+private fun AbLoopActionChip(
+    text: String,
+    highlighted: Boolean,
+    onClick: () -> Unit
+) {
+    Text(
+        text = text,
+        color = if (highlighted) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.72f),
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                if (highlighted) PlayerMoonPurple.copy(alpha = 0.16f)
+                else Color.White.copy(alpha = 0.045f)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1
+    )
+}
+
+@Composable
+private fun AbLoopDivider() {
+    Box(
+        modifier = Modifier
+            .width(1.dp)
+            .height(26.dp)
+            .background(Color.White.copy(alpha = 0.08f))
+    )
+}
+
+@Composable
+private fun AbLoopTimeInputDialog(
+    target: VideoAbLoopPoint,
+    value: String,
+    durationMs: Long,
+    onValueChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PlayerPanelDark,
+        title = {
+            Text(
+                text = "手动设置 ${target.label} 点",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = true,
+                    label = { Text("时间，例如 00:45 或 1:02:30") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White)
+                )
+                Text(
+                    text = "视频时长 ${durationMs.takeIf { it > 0L }?.let(::formatDuration) ?: "未知"}",
+                    color = Color.White.copy(alpha = 0.54f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("确定", color = PlayerMoonPurpleSoft)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = Color.White.copy(alpha = 0.72f))
+            }
+        }
+    )
 }
 
 @Composable
@@ -4000,11 +4109,41 @@ private fun safeVideoMarkerPosition(positionMs: Long, durationMs: Long): Long {
     return positionMs.coerceIn(0L, safeDuration)
 }
 
+private fun parseAbLoopTimeInput(input: String, durationMs: Long): Long? {
+    val trimmed = input.trim()
+    if (trimmed.isBlank()) return null
+    val parts = trimmed.split(":").map { it.trim() }
+    if (parts.any { it.isEmpty() || it.any { char -> !char.isDigit() } }) return null
+    val totalSeconds = when (parts.size) {
+        1 -> parts[0].toLongOrNull()
+        2 -> {
+            val minutes = parts[0].toLongOrNull() ?: return null
+            val seconds = parts[1].toLongOrNull() ?: return null
+            if (seconds > 59L) return null
+            minutes * 60L + seconds
+        }
+        3 -> {
+            val hours = parts[0].toLongOrNull() ?: return null
+            val minutes = parts[1].toLongOrNull() ?: return null
+            val seconds = parts[2].toLongOrNull() ?: return null
+            if (minutes > 59L || seconds > 59L) return null
+            hours * 3600L + minutes * 60L + seconds
+        }
+        else -> return null
+    } ?: return null
+    return safeVideoMarkerPosition(totalSeconds * 1000L, durationMs)
+}
+
 private enum class VideoDragMode {
     UNKNOWN,
     BACK,
     VERTICAL,
     SEEK
+}
+
+private enum class VideoAbLoopPoint(val label: String) {
+    A("A"),
+    B("B")
 }
 
 private enum class VideoResizeMode(
