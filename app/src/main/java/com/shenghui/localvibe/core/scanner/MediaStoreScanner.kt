@@ -50,6 +50,7 @@ object MediaStoreScanner {
             if (includeVideoBucketColumns) {
                 add(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
                 add(MediaStore.Video.Media.BUCKET_ID)
+                add(MediaStore.Video.Media.DURATION)
             }
         }.toTypedArray()
         val groupedFiles = linkedMapOf<String, MutableList<LocalMediaFile>>()
@@ -73,6 +74,11 @@ object MediaStoreScanner {
                 } else {
                     -1
                 }
+                val durationColumn = if (includeVideoBucketColumns) {
+                    cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+                } else {
+                    -1
+                }
 
                 while (cursor.moveToNext()) {
                     val mediaId = cursor.getLong(idColumn)
@@ -90,6 +96,10 @@ object MediaStoreScanner {
                         .takeIf { it >= 0 }
                         ?.let { cursor.getString(it).orEmpty() }
                         .orEmpty()
+                    val durationMs = durationColumn
+                        .takeIf { it >= 0 }
+                        ?.let { cursor.getLong(it) }
+                        ?.takeIf { it > 0L }
                     val rawFolderKey = relativePath.toFolderKey()
                         .ifBlank { dataPath.toParentFolderKey() }
                         .ifBlank { fallbackFolderName }
@@ -119,7 +129,8 @@ object MediaStoreScanner {
                             extension = extension,
                             size = size,
                             parentFolderName = folderName,
-                            modifiedAt = modifiedAt
+                            modifiedAt = modifiedAt,
+                            durationMs = durationMs
                         )
                     )
                 }

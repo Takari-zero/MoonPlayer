@@ -142,6 +142,7 @@ fun VideoLibraryScreen(
     var showFolderThumbnail by rememberSaveable { mutableStateOf(true) }
     var showFolderSize by rememberSaveable { mutableStateOf(true) }
     var showFolderDate by rememberSaveable { mutableStateOf(false) }
+    var showThumbnailDuration by rememberSaveable { mutableStateOf(false) }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedFolderIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
     val listState = rememberLazyListState()
@@ -304,6 +305,7 @@ fun VideoLibraryScreen(
                                     VideoFolderGridItem(
                                         item = item,
                                         showThumbnail = showFolderThumbnail,
+                                        showThumbnailDuration = showThumbnailDuration,
                                         showSize = showFolderSize,
                                         showDate = showFolderDate,
                                         isSelectionMode = isMultiSelectMode,
@@ -333,6 +335,7 @@ fun VideoLibraryScreen(
                                         item = item,
                                         compact = false,
                                         showThumbnail = showFolderThumbnail,
+                                        showThumbnailDuration = showThumbnailDuration,
                                         showSize = showFolderSize,
                                         showDate = showFolderDate,
                                         isSelectionMode = isMultiSelectMode,
@@ -376,9 +379,11 @@ fun VideoLibraryScreen(
                     isGridMode = isGridMode,
                     sortMode = sortMode,
                     showThumbnail = showFolderThumbnail,
+                    showThumbnailDuration = showThumbnailDuration,
                     showSize = showFolderSize,
                     showDate = showFolderDate,
                     onShowThumbnailChange = { showFolderThumbnail = it },
+                    onShowThumbnailDurationChange = { showThumbnailDuration = it },
                     onShowSizeChange = { showFolderSize = it },
                     onShowDateChange = { showFolderDate = it },
                     onDismiss = { showMorePanel = false },
@@ -574,9 +579,11 @@ private fun VideoLibraryMorePanelV2(
     isGridMode: Boolean,
     sortMode: VideoLibrarySortMode,
     showThumbnail: Boolean,
+    showThumbnailDuration: Boolean,
     showSize: Boolean,
     showDate: Boolean,
     onShowThumbnailChange: (Boolean) -> Unit,
+    onShowThumbnailDurationChange: (Boolean) -> Unit,
     onShowSizeChange: (Boolean) -> Unit,
     onShowDateChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -723,10 +730,12 @@ private fun VideoLibraryMorePanelV2(
                     )
                     if (advancedExpanded) {
                         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            VideoPanelFutureOptionV2(
-                                label = "缩略图显示长度",
-                                reason = "需要可靠时长数据后再显示"
-                            ) { showBriefFuture("缩略图显示长度") }
+                            VideoPanelToggleOptionV2(
+                                label = "缩略图显示时长",
+                                description = "在封面右下角显示代表视频时长",
+                                checked = showThumbnailDuration,
+                                onCheckedChange = onShowThumbnailDurationChange
+                            )
                             VideoPanelFutureOptionV2(
                                 label = "显示隐藏文件和文件夹",
                                 reason = "不会影响当前手动隐藏内容"
@@ -1141,6 +1150,7 @@ private fun VideoFolderCard(
     item: VideoFolderUiModel,
     compact: Boolean,
     showThumbnail: Boolean,
+    showThumbnailDuration: Boolean,
     showSize: Boolean,
     showDate: Boolean,
     isSelectionMode: Boolean = false,
@@ -1159,6 +1169,11 @@ private fun VideoFolderCard(
                 onLongClick = onLongClick
             )
     ) {
+        val representativeVideo = item.videos.firstOrNull()
+        val durationLabel = representativeVideo
+            ?.takeIf { showThumbnail && showThumbnailDuration }
+            ?.durationMs
+            ?.let(::formatThumbnailDuration)
         if (compact) {
             Column(
                 modifier = Modifier
@@ -1170,8 +1185,9 @@ private fun VideoFolderCard(
             ) {
                 FolderPreview(
                     folderName = item.folder.name,
-                    previewUri = item.videos.firstOrNull()?.uri.takeIf { showThumbnail },
+                    previewUri = representativeVideo?.uri.takeIf { showThumbnail },
                     videoCount = item.videos.size,
+                    durationLabel = durationLabel,
                     compact = true
                 )
                 FolderText(item = item, compact = true, showSize = showSize, showDate = showDate)
@@ -1186,8 +1202,9 @@ private fun VideoFolderCard(
             ) {
                 FolderPreview(
                     folderName = item.folder.name,
-                    previewUri = item.videos.firstOrNull()?.uri.takeIf { showThumbnail },
+                    previewUri = representativeVideo?.uri.takeIf { showThumbnail },
                     videoCount = item.videos.size,
+                    durationLabel = durationLabel,
                     compact = false
                 )
                 FolderText(
@@ -1233,6 +1250,7 @@ private fun VideoFolderCard(
 private fun VideoFolderGridItem(
     item: VideoFolderUiModel,
     showThumbnail: Boolean,
+    showThumbnailDuration: Boolean,
     showSize: Boolean,
     showDate: Boolean,
     isSelectionMode: Boolean,
@@ -1241,6 +1259,11 @@ private fun VideoFolderGridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val representativeVideo = item.videos.firstOrNull()
+    val durationLabel = representativeVideo
+        ?.takeIf { showThumbnail && showThumbnailDuration }
+        ?.durationMs
+        ?.let(::formatThumbnailDuration)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1254,8 +1277,9 @@ private fun VideoFolderGridItem(
         Box {
             FolderPreview(
                 folderName = item.folder.name,
-                previewUri = item.videos.firstOrNull()?.uri.takeIf { showThumbnail },
+                previewUri = representativeVideo?.uri.takeIf { showThumbnail },
                 videoCount = item.videos.size,
+                durationLabel = durationLabel,
                 compact = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1317,6 +1341,7 @@ private fun FolderPreview(
     folderName: String,
     previewUri: String?,
     videoCount: Int,
+    durationLabel: String? = null,
     compact: Boolean,
     modifier: Modifier = Modifier,
     useDefaultSize: Boolean = true,
@@ -1386,6 +1411,28 @@ private fun FolderPreview(
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Medium
                     )
+                )
+            }
+        }
+        if (!durationLabel.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(5.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.Black.copy(alpha = 0.58f))
+                    .height(if (compact) 17.dp else 18.dp)
+                    .padding(horizontal = if (compact) 6.dp else 7.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = durationLabel,
+                    color = Color.White.copy(alpha = 0.92f),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = if (compact) 10.sp else 11.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    maxLines = 1
                 )
             }
         }
@@ -1570,6 +1617,20 @@ private fun folderLatestVideoModifiedAt(item: VideoFolderUiModel): Long? {
 
 private fun formatFolderDate(timestampMs: Long): String {
     return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestampMs))
+}
+
+private fun formatThumbnailDuration(durationMs: Long): String? {
+    val totalSeconds = durationMs / 1_000L
+    if (totalSeconds <= 0L) return null
+
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%02d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
+    }
 }
 
 private fun formatByteCount(bytes: Long): String {
