@@ -409,3 +409,34 @@ adb shell monkey -p com.shenghui.localvibe 1
 - `:app:assembleDebug` 已通过。
 - 真机验证无明显问题。
 - 完成对应功能提交后，工作区应保持 clean。
+
+## Video Home Field / Placeholder Closure Notes
+
+### Do not restore misleading "more actions" placeholders
+- Video library home and video folder detail pages should not expose normal button-style "more actions" placeholders.
+- Unfinished actions must be visibly weakened as future work, or hidden if they add no current value.
+- Do not show fake success copy such as "enabled", "done", or "setting applied" for unfinished actions.
+
+### Completed video home fields must stay real
+- Date display is a real field toggle. List and grid cards can show `最近：yyyy-MM-dd`.
+- Date display uses the latest modified time among videos in the folder. Date sorting and date display should keep the same meaning.
+- Thumbnail duration is a real advanced toggle. It uses MediaStore `DURATION`; when duration is unavailable, do not show a duration badge and do not fake `00:00`.
+- Extension / format display is a real field toggle. It uses existing `LocalMediaFile.extension`; examples: `格式：mp4`, `格式：mp4 / mkv`, `格式：mp4 / mkv +2`.
+
+### Avoid heavyweight metadata work for home fields
+- Do not use batch `MediaMetadataRetriever` or content parsing for video home fields.
+- Do not add new scanning passes just to show date, duration, or extension fields.
+- Do not show fake fallback values such as `1970-01-01` or `00:00` when source data is missing.
+
+### Keep home field changes scoped
+- Do not modify `VideoPlayerScreen.kt` for video library field display.
+- Do not touch music or novel modules for video home field work.
+- Do not restore "more actions" placeholders while editing field settings.
+
+### Deferred field / advanced items
+- Path display remains deferred: paths can be long, private, and unstable across manual/automatic scan sources.
+- Playback progress display remains deferred: folder-level progress has unclear meaning.
+- Folder total duration remains deferred: aggregating all videos has performance and semantic risk.
+- Resolution / frame rate remains deferred: reliable values may require extra metadata scanning.
+- Showing hidden files/folders remains deferred: it affects hidden/recover semantics.
+- `.nomedia` recognition remains deferred: it affects scanning strategy and system media library behavior.
