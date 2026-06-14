@@ -44,6 +44,7 @@ object MediaStoreScanner {
             add(MediaStore.MediaColumns._ID)
             add(MediaStore.MediaColumns.DISPLAY_NAME)
             add(MediaStore.MediaColumns.SIZE)
+            add(MediaStore.MediaColumns.DATE_MODIFIED)
             add(MediaStore.MediaColumns.RELATIVE_PATH)
             add(MediaStore.MediaColumns.DATA)
             if (includeVideoBucketColumns) {
@@ -64,6 +65,7 @@ object MediaStoreScanner {
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
                 val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
                 val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val dateModifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
                 val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
                 val dataColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
                 val bucketNameColumn = if (includeVideoBucketColumns) {
@@ -76,6 +78,9 @@ object MediaStoreScanner {
                     val mediaId = cursor.getLong(idColumn)
                     val name = cursor.getString(nameColumn).orEmpty()
                     val size = cursor.getLong(sizeColumn)
+                    val modifiedAt = cursor.getLong(dateModifiedColumn)
+                        .takeIf { it > 0L }
+                        ?.times(1_000L)
                     val relativePath = cursor.getString(pathColumn).orEmpty()
                     val dataPath = dataColumn
                         .takeIf { it >= 0 }
@@ -113,7 +118,8 @@ object MediaStoreScanner {
                             type = type,
                             extension = extension,
                             size = size,
-                            parentFolderName = folderName
+                            parentFolderName = folderName,
+                            modifiedAt = modifiedAt
                         )
                     )
                 }

@@ -94,6 +94,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -138,6 +141,7 @@ fun VideoLibraryScreen(
     var sortMode by rememberSaveable { mutableStateOf(VideoLibrarySortMode.NAME) }
     var showFolderThumbnail by rememberSaveable { mutableStateOf(true) }
     var showFolderSize by rememberSaveable { mutableStateOf(true) }
+    var showFolderDate by rememberSaveable { mutableStateOf(false) }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedFolderIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
     val listState = rememberLazyListState()
@@ -155,7 +159,11 @@ fun VideoLibraryScreen(
         when (sortMode) {
             VideoLibrarySortMode.NAME -> filtered.sortedBy { it.folder.name.lowercase() }
             VideoLibrarySortMode.COUNT -> filtered.sortedByDescending { it.videos.size }
-            VideoLibrarySortMode.DATE -> filtered
+            VideoLibrarySortMode.DATE -> filtered.sortedWith(
+                compareByDescending<VideoFolderUiModel> {
+                    folderLatestVideoModifiedAt(it) ?: Long.MIN_VALUE
+                }.thenBy { it.folder.name.lowercase() }
+            )
         }
     }
 
@@ -297,6 +305,7 @@ fun VideoLibraryScreen(
                                         item = item,
                                         showThumbnail = showFolderThumbnail,
                                         showSize = showFolderSize,
+                                        showDate = showFolderDate,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = item.folder.id in selectedFolderIds,
                                         onToggleSelected = {
@@ -325,6 +334,7 @@ fun VideoLibraryScreen(
                                         compact = false,
                                         showThumbnail = showFolderThumbnail,
                                         showSize = showFolderSize,
+                                        showDate = showFolderDate,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = item.folder.id in selectedFolderIds,
                                         onToggleSelected = {
@@ -367,8 +377,10 @@ fun VideoLibraryScreen(
                     sortMode = sortMode,
                     showThumbnail = showFolderThumbnail,
                     showSize = showFolderSize,
+                    showDate = showFolderDate,
                     onShowThumbnailChange = { showFolderThumbnail = it },
                     onShowSizeChange = { showFolderSize = it },
+                    onShowDateChange = { showFolderDate = it },
                     onDismiss = { showMorePanel = false },
                     onSearch = {
                         showMorePanel = false
@@ -563,8 +575,10 @@ private fun VideoLibraryMorePanelV2(
     sortMode: VideoLibrarySortMode,
     showThumbnail: Boolean,
     showSize: Boolean,
+    showDate: Boolean,
     onShowThumbnailChange: (Boolean) -> Unit,
     onShowSizeChange: (Boolean) -> Unit,
+    onShowDateChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onSearch: () -> Unit,
     onListMode: () -> Unit,
@@ -686,12 +700,17 @@ private fun VideoLibraryMorePanelV2(
                                 checked = showSize,
                                 onCheckedChange = onShowSizeChange
                             )
+                            VideoPanelToggleOptionV2(
+                                label = "日期显示",
+                                description = "显示最近视频修改日期",
+                                checked = showDate,
+                                onCheckedChange = onShowDateChange
+                            )
                             VideoPanelFutureOptionV2("长度 / 时长") { showFuture("长度显示") }
                             VideoPanelFutureOptionV2("播放时间 / 进度") { showFuture("播放时间显示") }
                             VideoPanelFutureOptionV2("扩展名") { showFuture("扩展名显示") }
                             VideoPanelFutureOptionV2("路径") { showFuture("路径显示") }
                             VideoPanelFutureOptionV2("分辨率 / 帧率") { showFuture("分辨率和帧率显示") }
-                            VideoPanelFutureOptionV2("日期显示") { showFuture("日期显示") }
                         }
                     }
 
@@ -1123,6 +1142,7 @@ private fun VideoFolderCard(
     compact: Boolean,
     showThumbnail: Boolean,
     showSize: Boolean,
+    showDate: Boolean,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelected: () -> Unit = {},
@@ -1154,7 +1174,7 @@ private fun VideoFolderCard(
                     videoCount = item.videos.size,
                     compact = true
                 )
-                FolderText(item = item, compact = true, showSize = showSize)
+                FolderText(item = item, compact = true, showSize = showSize, showDate = showDate)
             }
         } else {
             Row(
@@ -1174,6 +1194,7 @@ private fun VideoFolderCard(
                     item = item,
                     compact = false,
                     showSize = showSize,
+                    showDate = showDate,
                     modifier = Modifier.weight(1f)
                 )
                 if (isSelectionMode) {
@@ -1213,6 +1234,7 @@ private fun VideoFolderGridItem(
     item: VideoFolderUiModel,
     showThumbnail: Boolean,
     showSize: Boolean,
+    showDate: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
@@ -1277,6 +1299,15 @@ private fun VideoFolderGridItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (showDate) {
+                Text(
+                    text = folderDateText(item),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                    color = VideoTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -1366,6 +1397,7 @@ private fun FolderText(
     item: VideoFolderUiModel,
     compact: Boolean,
     showSize: Boolean,
+    showDate: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1388,6 +1420,15 @@ private fun FolderText(
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             color = VideoTextSecondary
         )
+        if (showDate) {
+            Text(
+                text = folderDateText(item),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = if (compact) 11.sp else 12.sp),
+                color = VideoTextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -1514,6 +1555,21 @@ private fun folderMetaText(item: VideoFolderUiModel, showSize: Boolean): String 
     }
     val totalSize = item.videos.sumOf { it.size.coerceAtLeast(0L) }
     return "${item.videos.size} 个视频 · ${formatByteCount(totalSize)}"
+}
+
+private fun folderDateText(item: VideoFolderUiModel): String {
+    val latestModifiedAt = folderLatestVideoModifiedAt(item)
+    return "最近：${latestModifiedAt?.let(::formatFolderDate) ?: "未知"}"
+}
+
+private fun folderLatestVideoModifiedAt(item: VideoFolderUiModel): Long? {
+    return item.videos
+        .mapNotNull { it.modifiedAt?.takeIf { modifiedAt -> modifiedAt > 0L } }
+        .maxOrNull()
+}
+
+private fun formatFolderDate(timestampMs: Long): String {
+    return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestampMs))
 }
 
 private fun formatByteCount(bytes: Long): String {

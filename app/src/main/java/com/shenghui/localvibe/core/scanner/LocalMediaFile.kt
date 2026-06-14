@@ -7,5 +7,6 @@ data class LocalMediaFile(
     val type: LocalMediaType,
     val extension: String,
     val size: Long,
-    val parentFolderName: String?
+    val parentFolderName: String?,
+    val modifiedAt: Long? = null
 )

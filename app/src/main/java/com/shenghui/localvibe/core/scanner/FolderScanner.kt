@@ -71,7 +71,10 @@ object FolderScanner {
                 type = type,
                 extension = extension,
                 size = runCatching { documentFile.length() }.getOrDefault(0L),
-                parentFolderName = parentFolderName
+                parentFolderName = parentFolderName,
+                modifiedAt = runCatching { documentFile.lastModified() }
+                    .getOrDefault(0L)
+                    .takeIf { it > 0L }
             )
         )
     }
