@@ -407,10 +407,6 @@ fun VideoLibraryScreen(
                         showMorePanel = false
                         isMultiSelectMode = true
                         selectedFolderIds = emptySet()
-                    },
-                    onMore = {
-                        showMorePanel = false
-                        Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -578,8 +574,7 @@ private fun VideoLibraryMorePanelV2(
     onSortByName: () -> Unit,
     onSortByCount: () -> Unit,
     onSortByDate: () -> Unit,
-    onMultiDelete: () -> Unit,
-    onMore: () -> Unit
+    onMultiDelete: () -> Unit
 ) {
     val context = LocalContext.current
     var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
