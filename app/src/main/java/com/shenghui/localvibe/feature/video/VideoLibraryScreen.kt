@@ -142,6 +142,7 @@ fun VideoLibraryScreen(
     var showFolderThumbnail by rememberSaveable { mutableStateOf(true) }
     var showFolderSize by rememberSaveable { mutableStateOf(true) }
     var showFolderDate by rememberSaveable { mutableStateOf(false) }
+    var showFolderFormat by rememberSaveable { mutableStateOf(false) }
     var showThumbnailDuration by rememberSaveable { mutableStateOf(false) }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedFolderIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
@@ -258,7 +259,7 @@ fun VideoLibraryScreen(
                         start = 20.dp,
                         end = 20.dp,
                         top = 2.dp,
-                        bottom = 96.dp
+                        bottom = 144.dp
                     ),
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
@@ -284,15 +285,20 @@ fun VideoLibraryScreen(
                         }
                     } else if (isGridMode) {
                         item {
+                            val gridRowCount = ((shownFolders.size + 2) / 3).coerceAtLeast(1)
+                            val gridRowHeight = when {
+                                showFolderDate && showFolderFormat -> 224
+                                showFolderDate || showFolderFormat -> 204
+                                else -> 184
+                            }
+                            val gridRowSpacing = 24
                             LazyVerticalGrid(
                                 columns = GridCells.Fixed(3),
                                 state = gridState,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(
-                                        ((shownFolders.size + 2) / 3 * 176)
-                                            .coerceAtLeast(176)
-                                            .dp
+                                        (gridRowCount * gridRowHeight + (gridRowCount - 1) * gridRowSpacing).dp
                                     ),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(24.dp),
@@ -308,6 +314,7 @@ fun VideoLibraryScreen(
                                         showThumbnailDuration = showThumbnailDuration,
                                         showSize = showFolderSize,
                                         showDate = showFolderDate,
+                                        showFormat = showFolderFormat,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = item.folder.id in selectedFolderIds,
                                         onToggleSelected = {
@@ -338,6 +345,7 @@ fun VideoLibraryScreen(
                                         showThumbnailDuration = showThumbnailDuration,
                                         showSize = showFolderSize,
                                         showDate = showFolderDate,
+                                        showFormat = showFolderFormat,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = item.folder.id in selectedFolderIds,
                                         onToggleSelected = {
@@ -382,10 +390,12 @@ fun VideoLibraryScreen(
                     showThumbnailDuration = showThumbnailDuration,
                     showSize = showFolderSize,
                     showDate = showFolderDate,
+                    showFormat = showFolderFormat,
                     onShowThumbnailChange = { showFolderThumbnail = it },
                     onShowThumbnailDurationChange = { showThumbnailDuration = it },
                     onShowSizeChange = { showFolderSize = it },
                     onShowDateChange = { showFolderDate = it },
+                    onShowFormatChange = { showFolderFormat = it },
                     onDismiss = { showMorePanel = false },
                     onSearch = {
                         showMorePanel = false
@@ -582,10 +592,12 @@ private fun VideoLibraryMorePanelV2(
     showThumbnailDuration: Boolean,
     showSize: Boolean,
     showDate: Boolean,
+    showFormat: Boolean,
     onShowThumbnailChange: (Boolean) -> Unit,
     onShowThumbnailDurationChange: (Boolean) -> Unit,
     onShowSizeChange: (Boolean) -> Unit,
     onShowDateChange: (Boolean) -> Unit,
+    onShowFormatChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onSearch: () -> Unit,
     onListMode: () -> Unit,
@@ -713,9 +725,14 @@ private fun VideoLibraryMorePanelV2(
                                 checked = showDate,
                                 onCheckedChange = onShowDateChange
                             )
+                            VideoPanelToggleOptionV2(
+                                label = "扩展名",
+                                description = "显示文件夹视频格式概览",
+                                checked = showFormat,
+                                onCheckedChange = onShowFormatChange
+                            )
                             VideoPanelFutureOptionV2("长度 / 时长") { showFuture("长度显示") }
                             VideoPanelFutureOptionV2("播放时间 / 进度") { showFuture("播放时间显示") }
-                            VideoPanelFutureOptionV2("扩展名") { showFuture("扩展名显示") }
                             VideoPanelFutureOptionV2("路径") { showFuture("路径显示") }
                             VideoPanelFutureOptionV2("分辨率 / 帧率") { showFuture("分辨率和帧率显示") }
                         }
@@ -1153,6 +1170,7 @@ private fun VideoFolderCard(
     showThumbnailDuration: Boolean,
     showSize: Boolean,
     showDate: Boolean,
+    showFormat: Boolean,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelected: () -> Unit = {},
@@ -1190,7 +1208,13 @@ private fun VideoFolderCard(
                     durationLabel = durationLabel,
                     compact = true
                 )
-                FolderText(item = item, compact = true, showSize = showSize, showDate = showDate)
+                FolderText(
+                    item = item,
+                    compact = true,
+                    showSize = showSize,
+                    showDate = showDate,
+                    showFormat = showFormat
+                )
             }
         } else {
             Row(
@@ -1212,6 +1236,7 @@ private fun VideoFolderCard(
                     compact = false,
                     showSize = showSize,
                     showDate = showDate,
+                    showFormat = showFormat,
                     modifier = Modifier.weight(1f)
                 )
                 if (isSelectionMode) {
@@ -1253,6 +1278,7 @@ private fun VideoFolderGridItem(
     showThumbnailDuration: Boolean,
     showSize: Boolean,
     showDate: Boolean,
+    showFormat: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
@@ -1331,6 +1357,17 @@ private fun VideoFolderGridItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (showFormat) {
+                folderFormatText(item)?.let { formatText ->
+                    Text(
+                        text = formatText,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        color = VideoTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -1445,6 +1482,7 @@ private fun FolderText(
     compact: Boolean,
     showSize: Boolean,
     showDate: Boolean,
+    showFormat: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1475,6 +1513,17 @@ private fun FolderText(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+        if (showFormat) {
+            folderFormatText(item)?.let { formatText ->
+                Text(
+                    text = formatText,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = if (compact) 11.sp else 12.sp),
+                    color = VideoTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -1607,6 +1656,23 @@ private fun folderMetaText(item: VideoFolderUiModel, showSize: Boolean): String 
 private fun folderDateText(item: VideoFolderUiModel): String {
     val latestModifiedAt = folderLatestVideoModifiedAt(item)
     return "最近：${latestModifiedAt?.let(::formatFolderDate) ?: "未知"}"
+}
+
+private fun folderFormatText(item: VideoFolderUiModel): String? {
+    val extensions = item.videos
+        .map { it.extension.trim().lowercase(Locale.getDefault()) }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .sorted()
+    if (extensions.isEmpty()) return null
+
+    val visibleFormats = extensions.take(2).joinToString(" / ")
+    val extraCount = extensions.size - 2
+    return if (extraCount > 0) {
+        "格式：$visibleFormats +$extraCount"
+    } else {
+        "格式：$visibleFormats"
+    }
 }
 
 private fun folderLatestVideoModifiedAt(item: VideoFolderUiModel): Long? {
