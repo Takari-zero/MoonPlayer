@@ -440,3 +440,30 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Resolution / frame rate remains deferred: reliable values may require extra metadata scanning.
 - Showing hidden files/folders remains deferred: it affects hidden/recover semantics.
 - `.nomedia` recognition remains deferred: it affects scanning strategy and system media library behavior.
+
+## Video Folder Detail Closure Notes
+
+### Completed detail fields and grid behavior
+- Date display is complete for video folder detail rows and grid items. It uses `LocalMediaFile.modifiedAt`, formats as `yyyy-MM-dd`, and must omit empty/invalid dates instead of showing `1970-01-01`.
+- Detail grid UI is aligned with the video home grid: 3-column lightweight grid, transparent ordinary state, rounded thumbnails, one-line ellipsized titles, compact metadata, and thumbnail duration badges.
+- Detail format display is complete. It uses existing `LocalMediaFile.extension`, shows the lowercased extension in the list/grid metadata row, and omits empty extensions instead of showing fake values such as `未知格式`.
+
+### Do not regress detail grid layout
+- Do not change the video folder detail grid back to a 2-column large-card layout.
+- Do not restore heavy blue-black full-card backgrounds for ordinary grid items.
+- Do not let grid titles become multi-line and stretch item height.
+- Do not show meaningless progress such as `上次 0:00`; only show real previous playback progress.
+- Do not show fake fallback metadata such as `1970-01-01`, `00:00`, or `未知格式`.
+
+### Keep detail field work scoped
+- Do not modify scanners, `VideoPlayerScreen.kt`, `VideoLibraryScreen.kt`, music, or novel modules just to show detail-page fields.
+- Do not use batch `MediaMetadataRetriever`, file-content parsing, or extra scan passes for detail date/format display.
+- Do not change delete authorization flow or scanning strategy while polishing detail metadata UI.
+
+### Deferred detail items
+- Path display remains deferred.
+- Dedicated missing-file / invalid-file states remain deferred.
+- Folder total duration remains deferred.
+- Resolution / frame rate remains deferred.
+- Delete authorization flow redesign remains deferred.
+- Scan strategy changes remain deferred.
