@@ -304,6 +304,7 @@ private fun LocalVideoPlayer(
     var gestureOverlay by remember { mutableStateOf<String?>(null) }
     var seekPreviewOverlay by remember { mutableStateOf<VideoSeekPreview?>(null) }
     var resizeModeOverlay by remember { mutableStateOf<String?>(null) }
+    var lastPlaybackError by remember(mediaFile.uri) { mutableStateOf<VideoPlaybackErrorInfo?>(null) }
     var showControls by remember { mutableStateOf(true) }
     var currentPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
     var draggingPositionMs by remember(mediaFile.uri) { mutableLongStateOf(initialPositionMs.coerceAtLeast(0L)) }
@@ -709,9 +710,11 @@ private fun LocalVideoPlayer(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val errorInfo = error.toVideoPlaybackErrorInfo()
+                lastPlaybackError = errorInfo
                 showVideoPlayerToast(
                     context,
-                    "播放失败：当前设备或系统解码器可能不支持此视频编码",
+                    "播放失败：${errorInfo.detail}",
                     ERROR_HINT_MS
                 )
             }
@@ -864,8 +867,20 @@ private fun LocalVideoPlayer(
                                         } else {
                                             VideoDragMode.SEEK_UNAVAILABLE
                                         }
+                                    } else if (
+                                        absY > absX * VIDEO_GESTURE_HORIZONTAL_RATIO &&
+                                        gestureStart.x < size.width / 2f &&
+                                        latestGestureSettings.brightnessGestureEnabled
+                                    ) {
+                                        VideoDragMode.BRIGHTNESS
+                                    } else if (
+                                        absY > absX * VIDEO_GESTURE_HORIZONTAL_RATIO &&
+                                        gestureStart.x >= size.width / 2f &&
+                                        latestGestureSettings.volumeGestureEnabled
+                                    ) {
+                                        VideoDragMode.VOLUME
                                     } else {
-                                        VideoDragMode.VERTICAL
+                                        VideoDragMode.UNKNOWN
                                     }
                                 }
                             }
@@ -883,8 +898,28 @@ private fun LocalVideoPlayer(
                                     }
                                     showControls = true
                                 }
-                                VideoDragMode.VERTICAL -> {
-                                    Unit
+                                VideoDragMode.BRIGHTNESS -> {
+                                    val height = size.height.toFloat().coerceAtLeast(1f)
+                                    val percentDelta = (-totalDragY / height) * 1.8f
+                                    val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
+                                    activity?.setScreenBrightness(brightness)
+                                    if (latestGestureSettings.showHints) {
+                                        gestureOverlay = "亮度 ${(brightness * 100).toInt()}%"
+                                    }
+                                    showControls = true
+                                }
+                                VideoDragMode.VOLUME -> {
+                                    val height = size.height.toFloat().coerceAtLeast(1f)
+                                    val percentDelta = (-totalDragY / height) * 1.8f
+                                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                    val volumeDelta = round(percentDelta * maxVolume).toInt()
+                                    val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
+                                    if (latestGestureSettings.showHints) {
+                                        val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
+                                        gestureOverlay = "音量 $percent%"
+                                    }
+                                    showControls = true
                                 }
                                 VideoDragMode.SEEK_UNAVAILABLE -> Unit
                                 VideoDragMode.UNKNOWN -> Unit
@@ -895,7 +930,9 @@ private fun LocalVideoPlayer(
                             if (
                                 dragMode == VideoDragMode.SEEK ||
                                 dragMode == VideoDragMode.SEEK_UNAVAILABLE ||
-                                dragMode == VideoDragMode.BACK
+                                dragMode == VideoDragMode.BACK ||
+                                dragMode == VideoDragMode.BRIGHTNESS ||
+                                dragMode == VideoDragMode.VOLUME
                             ) {
                                 change.consume()
                             }
@@ -929,6 +966,7 @@ private fun LocalVideoPlayer(
                 durationMs = durationMs,
                 mediaFile = mediaFile,
                 player = player,
+                lastPlaybackError = lastPlaybackError,
                 navigationQueue = navigationQueue,
                 currentQueueUri = mediaFile.uri,
                 isPlaying = isPlaying,
@@ -1079,7 +1117,7 @@ private fun LocalVideoPlayer(
         }
 
         gestureOverlay?.let { text ->
-            val isBrightness = text.startsWith("浜害")
+            val isBrightness = text.startsWith("亮度")
             GestureValueOverlay(
                 text = text,
                 percent = text.substringAfter(" ").substringBefore("%").toIntOrNull() ?: 0,
@@ -1219,6 +1257,7 @@ private fun VideoControlOverlay(
     durationMs: Long,
     mediaFile: LocalMediaFile,
     player: ExoPlayer,
+    lastPlaybackError: VideoPlaybackErrorInfo?,
     navigationQueue: List<LocalMediaFile>,
     currentQueueUri: String,
     isPlaying: Boolean,
@@ -1843,6 +1882,7 @@ private fun VideoControlOverlay(
             VideoDecodeFormatPanel(
                 mediaFile = mediaFile,
                 player = player,
+                lastPlaybackError = lastPlaybackError,
                 onDismiss = { showDecodeFormatPanel = false },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -3552,11 +3592,13 @@ private fun formatSleepTimerOptionLabel(minutes: Int): String {
 private fun VideoDecodeFormatPanel(
     mediaFile: LocalMediaFile,
     player: ExoPlayer,
+    lastPlaybackError: VideoPlaybackErrorInfo?,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val videoInfo = remember(player.currentTracks) { player.currentDecodeTrackInfo(C.TRACK_TYPE_VIDEO) }
     val audioInfo = remember(player.currentTracks) { player.currentDecodeTrackInfo(C.TRACK_TYPE_AUDIO) }
+    val subtitleInfos = remember(player.currentTracks) { player.currentSubtitleTrackInfos() }
     val extension = mediaFile.extension.trim().lowercase(Locale.US).ifBlank { "未知" }
 
     SidePanelShell(
@@ -3570,18 +3612,60 @@ private fun VideoDecodeFormatPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            VideoDecodeSectionHeader("基本信息")
             VideoInfoRow("播放内核", "Media3 / 系统解码")
             VideoInfoRow("文件格式", extension)
-            VideoInfoRow("视频 MIME", videoInfo?.mimeType ?: "未知")
-            VideoInfoRow("视频 codec", videoInfo?.codec ?: "未知", maxValueLines = 2)
+            Text(
+                text = "只读诊断：本页只展示当前文件和轨道信息，不提供硬解/软解切换，也不代表万能解码。",
+                color = Color.White.copy(alpha = 0.52f),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.White.copy(alpha = 0.032f))
+                    .padding(horizontal = 11.dp, vertical = 8.dp)
+            )
+
+            VideoDecodeSectionHeader("视频轨道")
+            VideoInfoRow("视频编码类型", videoInfo?.mimeType ?: "未知")
+            VideoInfoRow("编码标识", videoInfo?.codec ?: "未知", maxValueLines = 2)
             VideoInfoRow("分辨率", videoInfo?.resolution ?: "未知")
-            VideoInfoRow("视频轨道", videoInfo?.supportText ?: "当前设备解码信息暂不可用")
-            VideoInfoRow("音频 MIME", audioInfo?.mimeType ?: "未知")
-            VideoInfoRow("音频 codec", audioInfo?.codec ?: "未知", maxValueLines = 2)
-            VideoInfoRow("音频轨道", audioInfo?.supportText ?: "当前设备解码信息暂不可用")
+            VideoInfoRow("帧率", videoInfo?.frameRate ?: "未知")
+            VideoInfoRow("系统报告", videoInfo?.supportText ?: "未知")
+
+            VideoDecodeSectionHeader("音频轨道")
+            VideoInfoRow("音频编码类型", audioInfo?.mimeType ?: "未知")
+            VideoInfoRow("编码标识", audioInfo?.codec ?: "未知", maxValueLines = 2)
+            VideoInfoRow("声道", audioInfo?.channelCount ?: "未知")
+            VideoInfoRow("采样率", audioInfo?.sampleRate ?: "未知")
+            VideoInfoRow("系统报告", audioInfo?.supportText ?: "未知")
+
+            if (subtitleInfos.isNotEmpty()) {
+                VideoDecodeSectionHeader("字幕轨道")
+                subtitleInfos.take(3).forEachIndexed { index, subtitleInfo ->
+                    VideoInfoRow(
+                        label = "字幕 ${index + 1}",
+                        value = subtitleInfo.displayText,
+                        maxValueLines = 2
+                    )
+                }
+            } else {
+                VideoDecodeSectionHeader("字幕轨道")
+                VideoInfoRow("字幕轨道", "暂无字幕轨道")
+            }
+
+            if (lastPlaybackError != null) {
+                VideoDecodeSectionHeader("最近播放错误")
+                VideoInfoRow("类型", lastPlaybackError.title)
+                VideoInfoRow("说明", lastPlaybackError.detail, maxValueLines = 2)
+                VideoInfoRow("错误码", lastPlaybackError.code, maxValueLines = 2)
+                VideoInfoRow("时间", lastPlaybackError.timeText)
+                VideoInfoRow("原始摘要", lastPlaybackError.rawSummary, maxValueLines = 3)
+            }
 
             Column(
                 modifier = Modifier
@@ -3598,7 +3682,7 @@ private fun VideoDecodeFormatPanel(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = "可识别格式不等于一定能解码播放；实际播放能力取决于当前设备、系统解码器与 Media3 返回的轨道支持状态。本页不提供硬解/软解切换，也不声明万能解码。",
+                    text = "本页只展示当前文件和轨道的可读信息，不提供硬解/软解切换，也不声明万能解码。未知表示当前播放器未拿到可靠数据。",
                     color = Color.White.copy(alpha = 0.52f),
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -3610,6 +3694,17 @@ private fun VideoDecodeFormatPanel(
             }
         }
     }
+}
+
+@Composable
+private fun VideoDecodeSectionHeader(text: String) {
+    Text(
+        text = text,
+        color = PlayerMoonPurpleSoft.copy(alpha = 0.94f),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 4.dp)
+    )
 }
 
 @Composable
@@ -3920,6 +4015,8 @@ private fun VideoQueueItem(
 private data class VideoGestureSettings(
     val doubleTapSeekEnabled: Boolean = true,
     val horizontalSeekEnabled: Boolean = true,
+    val brightnessGestureEnabled: Boolean = true,
+    val volumeGestureEnabled: Boolean = true,
     val showHints: Boolean = true
 )
 
@@ -3949,8 +4046,20 @@ private fun VideoGestureSettingsPanel(
             onCheckedChange = { onSettingsChange(settings.copy(horizontalSeekEnabled = it)) }
         )
         VideoControlSettingRow(
+            title = "左侧上下滑动调亮度",
+            description = "在画面左半屏上下滑动，只调整当前播放页窗口亮度",
+            checked = settings.brightnessGestureEnabled,
+            onCheckedChange = { onSettingsChange(settings.copy(brightnessGestureEnabled = it)) }
+        )
+        VideoControlSettingRow(
+            title = "右侧上下滑动调音量",
+            description = "在画面右半屏上下滑动，调整媒体音量",
+            checked = settings.volumeGestureEnabled,
+            onCheckedChange = { onSettingsChange(settings.copy(volumeGestureEnabled = it)) }
+        )
+        VideoControlSettingRow(
             title = "显示手势提示",
-            description = "触发快退、快进或滑动跳转时显示中心提示",
+            description = "触发快退、快进、亮度或音量手势时显示中心提示",
             checked = settings.showHints,
             onCheckedChange = { onSettingsChange(settings.copy(showHints = it)) }
         )
@@ -3969,7 +4078,7 @@ private fun VideoGestureSettingsPanel(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "亮度、音量、缩放等复杂手势需要单独处理冲突，本轮不做假开关。",
+                text = "双指缩放和更复杂手势后续专项处理，不做假开关。",
                 color = Color.White.copy(alpha = 0.48f),
                 style = MaterialTheme.typography.labelSmall
             )
@@ -4698,7 +4807,8 @@ private fun parseAbLoopTimeInput(input: String, durationMs: Long): Long? {
 private enum class VideoDragMode {
     UNKNOWN,
     BACK,
-    VERTICAL,
+    BRIGHTNESS,
+    VOLUME,
     SEEK,
     SEEK_UNAVAILABLE
 }
@@ -4949,8 +5059,35 @@ private data class VideoDecodeTrackInfo(
     val mimeType: String,
     val codec: String,
     val resolution: String?,
+    val frameRate: String?,
+    val channelCount: String?,
+    val sampleRate: String?,
     val supportText: String
 )
+
+private data class VideoSubtitleTrackInfo(
+    val mimeType: String,
+    val language: String,
+    val label: String
+) {
+    val displayText: String
+        get() = listOf(
+            mimeType.takeIf { it.isNotBlank() },
+            language.takeIf { it.isNotBlank() },
+            label.takeIf { it.isNotBlank() }
+        ).filterNotNull().joinToString(" · ").ifBlank { "未知" }
+}
+
+private data class VideoPlaybackErrorInfo(
+    val title: String,
+    val detail: String,
+    val code: String,
+    val rawSummary: String,
+    val happenedAtMs: Long
+) {
+    val timeText: String
+        get() = formatVideoInfoDate(happenedAtMs)
+}
 
 private fun ExoPlayer.currentDecodeTrackInfo(trackType: Int): VideoDecodeTrackInfo? {
     val selected = currentTracks.groups
@@ -4972,10 +5109,25 @@ private fun ExoPlayer.currentDecodeTrackInfo(trackType: Int): VideoDecodeTrackIn
                 }
         }
     val (format, isSupported) = fallback ?: return null
-    return format.toDecodeTrackInfo(isSupported)
+    return format.toDecodeTrackInfo(isSupported, trackType)
 }
 
-private fun Format.toDecodeTrackInfo(isSupported: Boolean): VideoDecodeTrackInfo {
+private fun ExoPlayer.currentSubtitleTrackInfos(): List<VideoSubtitleTrackInfo> {
+    return currentTracks.groups
+        .filter { it.type == C.TRACK_TYPE_TEXT }
+        .flatMap { group ->
+            (0 until group.length).map { trackIndex ->
+                val format = group.getTrackFormat(trackIndex)
+                VideoSubtitleTrackInfo(
+                    mimeType = format.sampleMimeType?.trim()?.takeIf { it.isNotBlank() } ?: "未知",
+                    language = format.language?.trim()?.takeIf { it.isNotBlank() } ?: "",
+                    label = format.label?.trim()?.takeIf { it.isNotBlank() } ?: ""
+                )
+            }
+        }
+}
+
+private fun Format.toDecodeTrackInfo(isSupported: Boolean, trackType: Int): VideoDecodeTrackInfo {
     val mimeText = sampleMimeType?.trim()?.takeIf { it.isNotBlank() } ?: "未知"
     val codecText = codecs?.trim()?.takeIf { it.isNotBlank() } ?: "未知"
     val resolutionText = if (width > 0 && height > 0) {
@@ -4983,12 +5135,116 @@ private fun Format.toDecodeTrackInfo(isSupported: Boolean): VideoDecodeTrackInfo
     } else {
         null
     }
+    val frameRateText = frameRate.takeIf { it > 0f }?.let {
+        String.format(Locale.US, "%.2f", it).trimEnd('0').trimEnd('.') + " fps"
+    }
+    val channelCountText = channelCount.takeIf { it > 0 }?.let { "$it 声道" }
+    val sampleRateText = sampleRate.takeIf { it > 0 }?.let { "${it / 1000.0}".trimEnd('0').trimEnd('.') + " kHz" }
+    val trackLabel = when (trackType) {
+        C.TRACK_TYPE_VIDEO -> "视频"
+        C.TRACK_TYPE_AUDIO -> "音频"
+        else -> ""
+    }
     return VideoDecodeTrackInfo(
         mimeType = mimeText,
         codec = codecText,
         resolution = resolutionText,
-        supportText = if (isSupported) "当前轨道可由设备尝试播放" else "当前设备报告不支持此轨道"
+        frameRate = frameRateText,
+        channelCount = channelCountText,
+        sampleRate = sampleRateText,
+        supportText = if (isSupported) {
+            "支持当前${trackLabel}轨道"
+        } else {
+            "可能不支持当前${trackLabel}轨道"
+        }
     )
+}
+
+private fun PlaybackException.toVideoPlaybackErrorInfo(): VideoPlaybackErrorInfo {
+    val codeText = errorCodeName.takeIf { it.isNotBlank() } ?: "ERROR_CODE_$errorCode"
+    val causeText = cause.chainSummary()
+    val joinedText = listOfNotNull(codeText, message, causeText)
+        .joinToString(" ")
+        .lowercase(Locale.US)
+    val category = when {
+        joinedText.containsAny(
+            "source",
+            "io",
+            "file",
+            "permission",
+            "securityexception",
+            "filenotfoundexception",
+            "cleartext",
+            "network"
+        ) -> VideoPlaybackErrorCategory(
+            title = "文件读取失败",
+            detail = "视频文件无法读取，可能已移动、损坏或无访问权限"
+        )
+
+        joinedText.containsAny("parser", "parsing", "extractor", "container", "malformed", "unrecognized") -> {
+            VideoPlaybackErrorCategory(
+                title = "容器解析失败",
+                detail = "当前视频容器或封装格式可能不受系统播放器支持"
+            )
+        }
+
+        joinedText.contains("audio") && joinedText.containsAny("decoder", "codec", "format", "mime", "unsupported", "init") -> {
+            VideoPlaybackErrorCategory(
+                title = "音频解码可能不支持",
+                detail = "当前设备可能不支持此视频的音频编码，画面或声音可能无法播放"
+            )
+        }
+
+        joinedText.containsAny("decoder", "codec", "mediacodec", "decode", "decoding", "init failed", "unsupported") -> {
+            VideoPlaybackErrorCategory(
+                title = "视频解码可能不支持",
+                detail = "当前设备或系统解码器可能不支持此视频编码"
+            )
+        }
+
+        else -> VideoPlaybackErrorCategory(
+            title = "播放失败",
+            detail = "播放失败，当前设备或系统解码器可能不支持此文件"
+        )
+    }
+    return VideoPlaybackErrorInfo(
+        title = category.title,
+        detail = category.detail,
+        code = codeText,
+        rawSummary = listOfNotNull(message, causeText)
+            .joinToString(" · ")
+            .ifBlank { "无原始错误摘要" }
+            .compactPanelText(),
+        happenedAtMs = System.currentTimeMillis()
+    )
+}
+
+private data class VideoPlaybackErrorCategory(
+    val title: String,
+    val detail: String
+)
+
+private fun Throwable?.chainSummary(maxDepth: Int = 4): String {
+    var current = this
+    val parts = mutableListOf<String>()
+    var depth = 0
+    while (current != null && depth < maxDepth) {
+        val name = current::class.java.simpleName
+        val msg = current.message?.takeIf { it.isNotBlank() }
+        parts += listOfNotNull(name, msg).joinToString(": ")
+        current = current.cause
+        depth += 1
+    }
+    return parts.joinToString(" <- ")
+}
+
+private fun String.containsAny(vararg needles: String): Boolean {
+    return needles.any { contains(it) }
+}
+
+private fun String.compactPanelText(maxLength: Int = 180): String {
+    val compact = replace(Regex("\\s+"), " ").trim()
+    return if (compact.length <= maxLength) compact else compact.take(maxLength - 1) + "…"
 }
 
 private fun Float.formatSpeed(): String {
