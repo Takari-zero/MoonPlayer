@@ -81,7 +81,8 @@ object FolderScanner {
 
     private fun String.toLocalMediaType(): LocalMediaType {
         return when (this) {
-            "mp4", "mkv", "avi", "mov", "webm", "m4v", "3gp" -> LocalMediaType.VIDEO
+            "mp4", "mkv", "webm", "avi", "mov", "m4v", "3gp", "3gpp",
+            "ts", "m2ts", "mts", "flv", "wmv", "asf" -> LocalMediaType.VIDEO
             "mp3", "flac", "m4a", "aac", "wav", "ogg" -> LocalMediaType.AUDIO
             "txt" -> LocalMediaType.BOOK
             "srt", "ass", "ssa", "vtt" -> LocalMediaType.SUBTITLE

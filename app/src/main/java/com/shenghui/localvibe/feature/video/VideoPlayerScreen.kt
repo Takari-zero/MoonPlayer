@@ -62,21 +62,26 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Loop
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
@@ -125,8 +130,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
@@ -673,6 +680,14 @@ private fun LocalVideoPlayer(
                     }
                 }
             }
+
+            override fun onPlayerError(error: PlaybackException) {
+                showVideoPlayerToast(
+                    context,
+                    "播放失败：当前设备或系统解码器可能不支持此视频编码",
+                    ERROR_HINT_MS
+                )
+            }
         }
         player.addListener(listener)
         onDispose {
@@ -1187,6 +1202,7 @@ private fun VideoControlOverlay(
     var showSleepTimerPanel by remember { mutableStateOf(false) }
     var showAbLoopPanel by remember { mutableStateOf(false) }
     var showSubtitleStylePanel by remember { mutableStateOf(false) }
+    var showDecodeFormatPanel by remember { mutableStateOf(false) }
     var showControlSettingsPanel by remember { mutableStateOf(false) }
     var showAdvancedFuturePanel by remember { mutableStateOf(false) }
     var showTopToolbarSetting by remember { mutableStateOf(true) }
@@ -1234,6 +1250,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showControlSettingsPanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showSubtitleStylePanel = true
     }
@@ -1248,6 +1265,7 @@ private fun VideoControlOverlay(
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         audioTrackRevision += 1
         showAudioTrackPanel = true
@@ -1263,6 +1281,7 @@ private fun VideoControlOverlay(
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showSleepTimerPanel = true
     }
@@ -1277,6 +1296,7 @@ private fun VideoControlOverlay(
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showAbLoopPanel = true
     }
@@ -1291,6 +1311,7 @@ private fun VideoControlOverlay(
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showInfoPanel = true
     }
@@ -1305,6 +1326,7 @@ private fun VideoControlOverlay(
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showQueuePanel = true
     }
@@ -1319,6 +1341,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showControlSettingsPanel = true
     }
@@ -1333,8 +1356,24 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showAdvancedFuturePanel = true
+    }
+
+    fun openDecodeFormatPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        showAbLoopPanel = false
+        showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
+        onQuickToolsExpandedChange(false)
+        showDecodeFormatPanel = true
     }
 
     fun closeSleepTimerPanel() {
@@ -1347,9 +1386,11 @@ private fun VideoControlOverlay(
         abLoopEditText = formatDuration(currentValueMs ?: currentPositionMs)
     }
 
-    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showControlSettingsPanel || showAdvancedFuturePanel) {
+    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showAdvancedFuturePanel) {
         if (showSubtitleStylePanel) {
             showSubtitleStylePanel = false
+        } else if (showDecodeFormatPanel) {
+            showDecodeFormatPanel = false
         } else if (showControlSettingsPanel) {
             showControlSettingsPanel = false
         } else if (showAdvancedFuturePanel) {
@@ -1369,8 +1410,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showControlSettingsPanel, showAdvancedFuturePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showControlSettingsPanel || showAdvancedFuturePanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showAdvancedFuturePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showAdvancedFuturePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1383,6 +1424,7 @@ private fun VideoControlOverlay(
     fun closePanelOrBack() {
         when {
             showSubtitleStylePanel -> showSubtitleStylePanel = false
+            showDecodeFormatPanel -> showDecodeFormatPanel = false
             showControlSettingsPanel -> showControlSettingsPanel = false
             showAdvancedFuturePanel -> showAdvancedFuturePanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
@@ -1400,7 +1442,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSubtitleStylePanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, showControlSettingsPanel, showAdvancedFuturePanel, isQuickToolsExpanded) {
+            .pointerInput(showSubtitleStylePanel, showDecodeFormatPanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, showControlSettingsPanel, showAdvancedFuturePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1409,7 +1451,7 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showAdvancedFuturePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showAdvancedFuturePanel
 
         if (ordinaryControlsVisible && showTopToolbarSetting) {
             Box(
@@ -1662,6 +1704,22 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showDecodeFormatPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showDecodeFormatPanel = false }
+            )
+            VideoDecodeFormatPanel(
+                mediaFile = mediaFile,
+                player = player,
+                onDismiss = { showDecodeFormatPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 20.dp)
+            )
+        }
+
         if (showQueuePanel) {
             Box(
                 modifier = Modifier
@@ -1765,12 +1823,12 @@ private fun VideoControlOverlay(
                         onClick = { openAudioTrackPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Settings,
+                        icon = Icons.Filled.Info,
                         label = "信息",
                         onClick = { openInfoPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Settings,
+                        icon = Icons.Filled.QueueMusic,
                         label = "播放列表",
                         onClick = { openQueuePanel() }
                     )
@@ -1780,17 +1838,22 @@ private fun VideoControlOverlay(
                         onClick = { openAbLoopPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Settings,
+                        icon = Icons.Filled.Timer,
                         label = "睡眠",
                         onClick = { openSleepTimerPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Settings,
+                        icon = Icons.Filled.Tune,
                         label = "控制栏",
                         onClick = { openControlSettingsPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Settings,
+                        icon = Icons.Filled.Memory,
+                        label = "解码",
+                        onClick = { openDecodeFormatPanel() }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.MoreHoriz,
                         label = "高级",
                         onClick = { openAdvancedFuturePanel() }
                     )
@@ -3335,6 +3398,70 @@ private fun formatSleepTimerOptionLabel(minutes: Int): String {
 }
 
 @Composable
+private fun VideoDecodeFormatPanel(
+    mediaFile: LocalMediaFile,
+    player: ExoPlayer,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val videoInfo = remember(player.currentTracks) { player.currentDecodeTrackInfo(C.TRACK_TYPE_VIDEO) }
+    val audioInfo = remember(player.currentTracks) { player.currentDecodeTrackInfo(C.TRACK_TYPE_AUDIO) }
+    val extension = mediaFile.extension.trim().lowercase(Locale.US).ifBlank { "未知" }
+
+    SidePanelShell(
+        title = "解码与格式",
+        onDismiss = onDismiss,
+        modifier = modifier
+            .width(360.dp)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            VideoInfoRow("播放内核", "Media3 / 系统解码")
+            VideoInfoRow("文件格式", extension)
+            VideoInfoRow("视频 MIME", videoInfo?.mimeType ?: "未知")
+            VideoInfoRow("视频 codec", videoInfo?.codec ?: "未知", maxValueLines = 2)
+            VideoInfoRow("分辨率", videoInfo?.resolution ?: "未知")
+            VideoInfoRow("视频轨道", videoInfo?.supportText ?: "当前设备解码信息暂不可用")
+            VideoInfoRow("音频 MIME", audioInfo?.mimeType ?: "未知")
+            VideoInfoRow("音频 codec", audioInfo?.codec ?: "未知", maxValueLines = 2)
+            VideoInfoRow("音频轨道", audioInfo?.supportText ?: "当前设备解码信息暂不可用")
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.045f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "兼容性说明",
+                    color = Color.White.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "可识别格式不等于一定能解码播放；实际播放能力取决于当前设备、系统解码器与 Media3 返回的轨道支持状态。本页不提供硬解/软解切换，也不声明万能解码。",
+                    color = Color.White.copy(alpha = 0.52f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = "手动文件夹识别：mp4 / mkv / webm / avi / mov / m4v / 3gp / 3gpp / ts / m2ts / mts / flv / wmv / asf；系统媒体库扫描仍由 Android MediaStore 决定。",
+                    color = Color.White.copy(alpha = 0.44f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun VideoInfoPanel(
     mediaFile: LocalMediaFile,
     durationMs: Long,
@@ -3755,7 +3882,6 @@ private fun VideoAdvancedFuturePanel(
 ) {
     SidePanelShell(title = "后续专项", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
         VideoFutureItem("均衡器", "需要真实音频处理链路，不能只调整 UI 滑杆。")
-        VideoFutureItem("解码方式", "涉及 Media3 解码选择和兼容性，需要专项验证。")
         VideoFutureItem("画面调节", "对比度、饱和度、锐化等需要可靠渲染链路；当前不做假成功。")
         VideoFutureItem("手势设置", "涉及点击、拖动、进度条、AB 浮条和锁屏手势冲突，需单独收口。")
         VideoFutureItem("字幕时间同步", "Media3 原生字幕链路未接入真实时间轴偏移，继续后置。")
@@ -4606,6 +4732,52 @@ private data class VideoAudioTrackOption(
             "采样率：$sampleRateText",
             "格式：$formatText"
         ).joinToString(" · ")
+}
+
+private data class VideoDecodeTrackInfo(
+    val mimeType: String,
+    val codec: String,
+    val resolution: String?,
+    val supportText: String
+)
+
+private fun ExoPlayer.currentDecodeTrackInfo(trackType: Int): VideoDecodeTrackInfo? {
+    val selected = currentTracks.groups
+        .filter { it.type == trackType }
+        .firstNotNullOfOrNull { group ->
+            (0 until group.length)
+                .firstOrNull { group.isTrackSelected(it) }
+                ?.let { trackIndex ->
+                    group.getTrackFormat(trackIndex) to group.isTrackSupported(trackIndex)
+                }
+        }
+    val fallback = selected ?: currentTracks.groups
+        .filter { it.type == trackType }
+        .firstNotNullOfOrNull { group ->
+            (0 until group.length)
+                .firstOrNull { group.isTrackSupported(it) }
+                ?.let { trackIndex ->
+                    group.getTrackFormat(trackIndex) to group.isTrackSupported(trackIndex)
+                }
+        }
+    val (format, isSupported) = fallback ?: return null
+    return format.toDecodeTrackInfo(isSupported)
+}
+
+private fun Format.toDecodeTrackInfo(isSupported: Boolean): VideoDecodeTrackInfo {
+    val mimeText = sampleMimeType?.trim()?.takeIf { it.isNotBlank() } ?: "未知"
+    val codecText = codecs?.trim()?.takeIf { it.isNotBlank() } ?: "未知"
+    val resolutionText = if (width > 0 && height > 0) {
+        "$width × $height"
+    } else {
+        null
+    }
+    return VideoDecodeTrackInfo(
+        mimeType = mimeText,
+        codec = codecText,
+        resolution = resolutionText,
+        supportText = if (isSupported) "当前轨道可由设备尝试播放" else "当前设备报告不支持此轨道"
+    )
 }
 
 private fun Float.formatSpeed(): String {
