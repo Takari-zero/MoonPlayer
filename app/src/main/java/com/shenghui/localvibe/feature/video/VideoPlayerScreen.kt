@@ -82,6 +82,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
@@ -336,6 +337,7 @@ private fun LocalVideoPlayer(
     var isBackRequested by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
     var isAbLoopBarVisible by remember { mutableStateOf(false) }
+    var gestureSettings by remember { mutableStateOf(VideoGestureSettings()) }
     var closeAbLoopBarRequest by remember { mutableIntStateOf(0) }
     var keepControlsVisible by remember { mutableStateOf(false) }
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
@@ -350,6 +352,12 @@ private fun LocalVideoPlayer(
     var sleepTimerEndOfVideoEnabled by remember { mutableStateOf(false) }
     val latestSleepTimerMode by rememberUpdatedState(sleepTimerMode)
     val latestSleepTimerEndOfVideoEnabled by rememberUpdatedState(sleepTimerEndOfVideoEnabled)
+    val latestGestureSettings by rememberUpdatedState(gestureSettings)
+    val latestShowControls by rememberUpdatedState(showControls)
+    val latestIsScreenLocked by rememberUpdatedState(isScreenLocked)
+    val latestIsSpeedPanelVisible by rememberUpdatedState(isSpeedPanelVisible)
+    val latestIsAbLoopBarVisible by rememberUpdatedState(isAbLoopBarVisible)
+    val latestDurationMs by rememberUpdatedState(durationMs)
     var abLoopStartMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     var abLoopEndMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     val subtitleLauncher = rememberLauncherForActivityResult(
@@ -512,6 +520,25 @@ private fun LocalVideoPlayer(
             }
         }
         return target
+    }
+
+    fun seekByGesture(deltaMs: Long, durationForClampMs: Long, showHint: Boolean) {
+        val start = player.currentPosition.coerceAtLeast(0L)
+        val target = safeVideoSeekPosition(start + deltaMs, durationForClampMs)
+        isSeekingByUser = false
+        draggingPositionMs = target
+        currentPositionMs = target
+        player.seekTo(target)
+        coroutineScope.launch {
+            delay(120L)
+            if (!isSeekingByUser) {
+                currentPositionMs = player.currentPosition.coerceAtLeast(0L)
+            }
+        }
+        if (showHint) {
+            seekPreviewOverlay = VideoSeekPreview(target, target - start)
+        }
+        showControls = true
     }
 
     fun currentAbMarkerPosition(): Long {
@@ -716,20 +743,47 @@ private fun LocalVideoPlayer(
     Box(
         modifier = modifier
             .background(Color.Black)
-            .pointerInput(isScreenLocked, isSpeedPanelVisible, showControls, isQuickToolsExpanded) {
+            .pointerInput(Unit) {
                 detectTapGestures(
+                    onDoubleTap = { offset ->
+                        val settings = latestGestureSettings
+                        if (
+                            latestIsScreenLocked ||
+                            latestIsSpeedPanelVisible ||
+                            latestIsAbLoopBarVisible ||
+                            !settings.doubleTapSeekEnabled
+                        ) {
+                            return@detectTapGestures
+                        }
+                        if (latestDurationMs <= 0L) {
+                            if (settings.showHints) {
+                                showVideoPlayerToast(context, "视频时长未知", ERROR_HINT_MS)
+                            }
+                            return@detectTapGestures
+                        }
+                        val deltaMs = if (offset.x < size.width / 2f) {
+                            -VIDEO_DOUBLE_TAP_SEEK_MS
+                        } else {
+                            VIDEO_DOUBLE_TAP_SEEK_MS
+                        }
+                        seekByGesture(
+                            deltaMs = deltaMs,
+                            durationForClampMs = latestDurationMs,
+                            showHint = settings.showHints
+                        )
+                    },
                     onTap = {
-                        if (isScreenLocked) {
+                        if (latestIsScreenLocked) {
                             showLockedUnlockButton = true
                             return@detectTapGestures
                         }
-                        if (isSpeedPanelVisible) {
+                        if (latestIsSpeedPanelVisible) {
                             isSpeedPanelVisible = false
                             showControls = true
-                        } else if (isAbLoopBarVisible && showControls) {
+                        } else if (latestIsAbLoopBarVisible && latestShowControls) {
                             closeAbLoopBarRequest += 1
                             showControls = true
-                        } else if (showControls) {
+                        } else if (latestShowControls) {
                             showControls = false
                             isQuickToolsExpanded = false
                         } else {
@@ -738,10 +792,18 @@ private fun LocalVideoPlayer(
                     }
                 )
             }
-            .pointerInput(isScreenLocked, isSpeedPanelVisible) {
-                if (!isScreenLocked && !isSpeedPanelVisible) {
+            .pointerInput(Unit) {
+                var isDragGestureBlocked = false
                     detectDragGestures(
                         onDragStart = { offset ->
+                            isDragGestureBlocked = latestIsScreenLocked ||
+                                latestIsSpeedPanelVisible ||
+                                latestIsAbLoopBarVisible
+                            if (isDragGestureBlocked) {
+                                dragMode = VideoDragMode.UNKNOWN
+                                seekPreviewOverlay = null
+                                return@detectDragGestures
+                            }
                             gestureStart = offset
                             dragMode = VideoDragMode.UNKNOWN
                             totalDragX = 0f
@@ -753,33 +815,55 @@ private fun LocalVideoPlayer(
                             startVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                         },
                         onDragEnd = {
+                            if (isDragGestureBlocked) {
+                                isDragGestureBlocked = false
+                                dragMode = VideoDragMode.UNKNOWN
+                                seekPreviewOverlay = null
+                                return@detectDragGestures
+                            }
                             if (dragMode == VideoDragMode.BACK) {
                                 requestBack()
                             } else if (dragMode == VideoDragMode.SEEK) {
                                 val target = seekToUserPosition(gestureSeekPreviewMs)
-                                seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
+                                if (latestGestureSettings.showHints) {
+                                    seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
+                                }
                                 showControls = true
+                            } else if (dragMode == VideoDragMode.SEEK_UNAVAILABLE) {
+                                if (latestGestureSettings.showHints) {
+                                    showVideoPlayerToast(context, "视频时长未知", ERROR_HINT_MS)
+                                }
                             }
                             dragMode = VideoDragMode.UNKNOWN
                         },
                         onDragCancel = {
+                            isDragGestureBlocked = false
+                            seekPreviewOverlay = null
                             dragMode = VideoDragMode.UNKNOWN
                         },
                         onDrag = { change, dragAmount ->
+                            if (isDragGestureBlocked) {
+                                return@detectDragGestures
+                            }
                             totalDragX += dragAmount.x
                             totalDragY += dragAmount.y
                             if (dragMode == VideoDragMode.UNKNOWN) {
                                 val absX = totalDragX.absoluteValue
                                 val absY = totalDragY.absoluteValue
-                                if (absX > 18f || absY > 18f) {
+                                val threshold = VIDEO_GESTURE_DRAG_THRESHOLD_DP.dp.toPx()
+                                if (absX > threshold || absY > threshold) {
                                     dragMode = if (
                                         gestureStart.x > size.width - 56.dp.toPx() &&
                                         totalDragX < -40f &&
-                                        absX > absY * 1.25f
+                                        absX > absY * VIDEO_GESTURE_HORIZONTAL_RATIO
                                     ) {
                                         VideoDragMode.BACK
-                                    } else if (absX > absY * 1.25f) {
-                                        VideoDragMode.SEEK
+                                    } else if (latestGestureSettings.horizontalSeekEnabled && absX > absY * VIDEO_GESTURE_HORIZONTAL_RATIO) {
+                                        if (latestDurationMs > 0L) {
+                                            VideoDragMode.SEEK
+                                        } else {
+                                            VideoDragMode.SEEK_UNAVAILABLE
+                                        }
                                     } else {
                                         VideoDragMode.VERTICAL
                                     }
@@ -792,38 +876,31 @@ private fun LocalVideoPlayer(
                                         .toLong()
                                         .coerceIn(-300_000L, 300_000L)
                                     val target = (gestureSeekStartMs + deltaMs)
-                                        .coerceIn(0L, durationMs.coerceAtLeast(1L))
+                                        .coerceIn(0L, latestDurationMs.coerceAtLeast(1L))
                                     gestureSeekPreviewMs = target
-                                    seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
+                                    if (latestGestureSettings.showHints) {
+                                        seekPreviewOverlay = VideoSeekPreview(target, target - gestureSeekStartMs)
+                                    }
                                     showControls = true
                                 }
                                 VideoDragMode.VERTICAL -> {
-                                    val height = size.height.toFloat().coerceAtLeast(1f)
-                                    val percentDelta = (-totalDragY / height) * 1.8f
-                                    if (gestureStart.x < size.width / 2f) {
-                                        val brightness = (startBrightness + percentDelta).coerceIn(0.05f, 1f)
-                                        activity?.setScreenBrightness(brightness)
-                                        gestureOverlay = "浜害 ${(brightness * 100).toInt()}%"
-                                        showControls = true
-                                    } else {
-                                        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                                        val volumeDelta = (percentDelta * maxVolume).toInt()
-                                        val nextVolume = (startVolume + volumeDelta).coerceIn(0, maxVolume)
-                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, nextVolume, 0)
-                                        val percent = if (maxVolume == 0) 0 else nextVolume * 100 / maxVolume
-                                        gestureOverlay = "闊抽噺 $percent%"
-                                        showControls = true
-                                    }
+                                    Unit
                                 }
+                                VideoDragMode.SEEK_UNAVAILABLE -> Unit
                                 VideoDragMode.UNKNOWN -> Unit
                                 VideoDragMode.BACK -> {
                                     showControls = true
                                 }
                             }
-                            change.consume()
+                            if (
+                                dragMode == VideoDragMode.SEEK ||
+                                dragMode == VideoDragMode.SEEK_UNAVAILABLE ||
+                                dragMode == VideoDragMode.BACK
+                            ) {
+                                change.consume()
+                            }
                         }
                     )
-                }
             }
     ) {
         AndroidView(
@@ -979,6 +1056,8 @@ private fun LocalVideoPlayer(
                 onAbLoopBarVisibilityChange = { isAbLoopBarVisible = it },
                 isQuickToolsExpanded = isQuickToolsExpanded,
                 onQuickToolsExpandedChange = { isQuickToolsExpanded = it },
+                gestureSettings = gestureSettings,
+                onGestureSettingsChange = { gestureSettings = it },
                 keepControlsVisible = keepControlsVisible,
                 onKeepControlsVisibleChange = { keepControlsVisible = it }
             )
@@ -1189,6 +1268,8 @@ private fun VideoControlOverlay(
     onAbLoopBarVisibilityChange: (Boolean) -> Unit,
     isQuickToolsExpanded: Boolean,
     onQuickToolsExpandedChange: (Boolean) -> Unit,
+    gestureSettings: VideoGestureSettings,
+    onGestureSettingsChange: (VideoGestureSettings) -> Unit,
     keepControlsVisible: Boolean,
     onKeepControlsVisibleChange: (Boolean) -> Unit
 ) {
@@ -1204,6 +1285,7 @@ private fun VideoControlOverlay(
     var showSubtitleStylePanel by remember { mutableStateOf(false) }
     var showDecodeFormatPanel by remember { mutableStateOf(false) }
     var showControlSettingsPanel by remember { mutableStateOf(false) }
+    var showGestureSettingsPanel by remember { mutableStateOf(false) }
     var showAdvancedFuturePanel by remember { mutableStateOf(false) }
     var showTopToolbarSetting by remember { mutableStateOf(true) }
     var showBottomControlsSetting by remember { mutableStateOf(true) }
@@ -1249,6 +1331,7 @@ private fun VideoControlOverlay(
         showSleepTimerPanel = false
         showAbLoopPanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
@@ -1264,6 +1347,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
@@ -1280,6 +1364,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
@@ -1295,6 +1380,7 @@ private fun VideoControlOverlay(
         showSleepTimerPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
@@ -1310,6 +1396,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
@@ -1325,6 +1412,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
@@ -1340,10 +1428,27 @@ private fun VideoControlOverlay(
         showSleepTimerPanel = false
         showAbLoopPanel = false
         showSubtitleStylePanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showControlSettingsPanel = true
+    }
+
+    fun openGestureSettingsPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        showAbLoopPanel = false
+        showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
+        onQuickToolsExpandedChange(false)
+        showGestureSettingsPanel = true
     }
 
     fun openAdvancedFuturePanel() {
@@ -1356,6 +1461,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showDecodeFormatPanel = false
         onQuickToolsExpandedChange(false)
         showAdvancedFuturePanel = true
@@ -1371,6 +1477,7 @@ private fun VideoControlOverlay(
         showAbLoopPanel = false
         showSubtitleStylePanel = false
         showControlSettingsPanel = false
+        showGestureSettingsPanel = false
         showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         showDecodeFormatPanel = true
@@ -1386,13 +1493,15 @@ private fun VideoControlOverlay(
         abLoopEditText = formatDuration(currentValueMs ?: currentPositionMs)
     }
 
-    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showAdvancedFuturePanel) {
+    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showAdvancedFuturePanel) {
         if (showSubtitleStylePanel) {
             showSubtitleStylePanel = false
         } else if (showDecodeFormatPanel) {
             showDecodeFormatPanel = false
         } else if (showControlSettingsPanel) {
             showControlSettingsPanel = false
+        } else if (showGestureSettingsPanel) {
+            showGestureSettingsPanel = false
         } else if (showAdvancedFuturePanel) {
             showAdvancedFuturePanel = false
         } else if (showAudioTrackPanel) {
@@ -1410,8 +1519,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showAdvancedFuturePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showAdvancedFuturePanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showGestureSettingsPanel, showAdvancedFuturePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showAdvancedFuturePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1426,6 +1535,7 @@ private fun VideoControlOverlay(
             showSubtitleStylePanel -> showSubtitleStylePanel = false
             showDecodeFormatPanel -> showDecodeFormatPanel = false
             showControlSettingsPanel -> showControlSettingsPanel = false
+            showGestureSettingsPanel -> showGestureSettingsPanel = false
             showAdvancedFuturePanel -> showAdvancedFuturePanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
             showSleepTimerPanel -> closeSleepTimerPanel()
@@ -1439,19 +1549,39 @@ private fun VideoControlOverlay(
         }
     }
 
+    val panelGestureEnabled = showSubtitleStylePanel ||
+        showDecodeFormatPanel ||
+        showAudioTrackPanel ||
+        showSleepTimerPanel ||
+        showAbLoopPanel ||
+        showInfoPanel ||
+        showQueuePanel ||
+        showSpeedPanel ||
+        showResizePanel ||
+        showControlSettingsPanel ||
+        showGestureSettingsPanel ||
+        showAdvancedFuturePanel ||
+        isQuickToolsExpanded
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSubtitleStylePanel, showDecodeFormatPanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, showControlSettingsPanel, showAdvancedFuturePanel, isQuickToolsExpanded) {
-                detectDragGestures { change, dragAmount ->
-                    if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
-                        closePanelOrBack()
-                        change.consume()
+            .then(
+                if (panelGestureEnabled) {
+                    Modifier.pointerInput(panelGestureEnabled) {
+                        detectDragGestures { change, dragAmount ->
+                            if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
+                                closePanelOrBack()
+                                change.consume()
+                            }
+                        }
                     }
+                } else {
+                    Modifier
                 }
-            }
+            )
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showAdvancedFuturePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showGestureSettingsPanel && !showAdvancedFuturePanel
 
         if (ordinaryControlsVisible && showTopToolbarSetting) {
             Box(
@@ -1772,6 +1902,22 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showGestureSettingsPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showGestureSettingsPanel = false }
+            )
+            VideoGestureSettingsPanel(
+                settings = gestureSettings,
+                onSettingsChange = onGestureSettingsChange,
+                onDismiss = { showGestureSettingsPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 20.dp)
+            )
+        }
+
         if (showAdvancedFuturePanel) {
             Box(
                 modifier = Modifier
@@ -1846,6 +1992,11 @@ private fun VideoControlOverlay(
                         icon = Icons.Filled.Tune,
                         label = "控制栏",
                         onClick = { openControlSettingsPanel() }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.TouchApp,
+                        label = "手势",
+                        onClick = { openGestureSettingsPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Memory,
@@ -3766,6 +3917,66 @@ private fun VideoQueueItem(
     }
 }
 
+private data class VideoGestureSettings(
+    val doubleTapSeekEnabled: Boolean = true,
+    val horizontalSeekEnabled: Boolean = true,
+    val showHints: Boolean = true
+)
+
+@Composable
+private fun VideoGestureSettingsPanel(
+    settings: VideoGestureSettings,
+    onSettingsChange: (VideoGestureSettings) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(title = "手势设置", onDismiss = onDismiss, modifier = modifier.width(320.dp)) {
+        Text(
+            text = "仅影响当前播放页，不写入持久设置。",
+            color = Color.White.copy(alpha = 0.48f),
+            style = MaterialTheme.typography.labelSmall
+        )
+        VideoControlSettingRow(
+            title = "双击快退/快进",
+            description = "左侧双击快退 10 秒，右侧双击快进 10 秒",
+            checked = settings.doubleTapSeekEnabled,
+            onCheckedChange = { onSettingsChange(settings.copy(doubleTapSeekEnabled = it)) }
+        )
+        VideoControlSettingRow(
+            title = "左右滑动快退/快进",
+            description = "在画面空白处左右滑动预览位置，松手后跳转",
+            checked = settings.horizontalSeekEnabled,
+            onCheckedChange = { onSettingsChange(settings.copy(horizontalSeekEnabled = it)) }
+        )
+        VideoControlSettingRow(
+            title = "显示手势提示",
+            description = "触发快退、快进或滑动跳转时显示中心提示",
+            checked = settings.showHints,
+            onCheckedChange = { onSettingsChange(settings.copy(showHints = it)) }
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.045f))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "后续专项",
+                color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "亮度、音量、缩放等复杂手势需要单独处理冲突，本轮不做假开关。",
+                color = Color.White.copy(alpha = 0.48f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+}
+
 @Composable
 private fun VideoControlSettingsPanel(
     showTopToolbar: Boolean,
@@ -3883,7 +4094,6 @@ private fun VideoAdvancedFuturePanel(
     SidePanelShell(title = "后续专项", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
         VideoFutureItem("均衡器", "需要真实音频处理链路，不能只调整 UI 滑杆。")
         VideoFutureItem("画面调节", "对比度、饱和度、锐化等需要可靠渲染链路；当前不做假成功。")
-        VideoFutureItem("手势设置", "涉及点击、拖动、进度条、AB 浮条和锁屏手势冲突，需单独收口。")
         VideoFutureItem("字幕时间同步", "Media3 原生字幕链路未接入真实时间轴偏移，继续后置。")
     }
 }
@@ -4489,7 +4699,8 @@ private enum class VideoDragMode {
     UNKNOWN,
     BACK,
     VERTICAL,
-    SEEK
+    SEEK,
+    SEEK_UNAVAILABLE
 }
 
 private enum class VideoAbLoopPoint(val label: String) {
@@ -4963,8 +5174,16 @@ private data class VideoNamePart(
 )
 
 private fun formatSeekDelta(deltaMs: Long): String {
-    val sign = if (deltaMs >= 0L) "+" else "-"
-    return "$sign${formatDuration(deltaMs.absoluteValue)}"
+    val direction = if (deltaMs >= 0L) "快进" else "快退"
+    val totalSeconds = (deltaMs.absoluteValue / 1000L).coerceAtLeast(1L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    val durationText = when {
+        minutes > 0L && seconds > 0L -> "${minutes}分${seconds}秒"
+        minutes > 0L -> "${minutes}分钟"
+        else -> "${seconds}秒"
+    }
+    return "$direction $durationText"
 }
 
 private fun formatSignedDelay(delayMs: Long): String {
@@ -5243,3 +5462,6 @@ private const val LOCKED_UNLOCK_HINT_MS = 1_500L
 private const val SHORT_HINT_MS = 900L
 private const val GESTURE_HINT_MS = 650L
 private const val ERROR_HINT_MS = 1_400L
+private const val VIDEO_DOUBLE_TAP_SEEK_MS = 10_000L
+private const val VIDEO_GESTURE_DRAG_THRESHOLD_DP = 22f
+private const val VIDEO_GESTURE_HORIZONTAL_RATIO = 1.2f
