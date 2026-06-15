@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,9 +64,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.media.formatDuration
@@ -75,6 +78,9 @@ import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private val Categories = listOf("全部", "视频", "音乐", "小说")
 
@@ -206,9 +212,11 @@ fun FolderScreen(
             Column(
                 modifier = Modifier
                     .padding(
-                    horizontal = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
-                    vertical = if (targetType == LocalMediaType.VIDEO) 12.dp else 20.dp
-                )
+                        start = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
+                        end = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
+                        top = if (targetType == LocalMediaType.VIDEO) 12.dp else 20.dp,
+                        bottom = if (targetType == LocalMediaType.VIDEO) 96.dp else 20.dp
+                    )
                     .verticalScroll(rememberScrollState())
                     .fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(
@@ -349,7 +357,8 @@ fun FolderScreen(
                     )
                 ) {
                     if (targetType == LocalMediaType.VIDEO && isVideoGridMode) {
-                        visibleFiles.chunked(2).forEach { rowFiles ->
+                        val gridColumnCount = 3
+                        visibleFiles.chunked(gridColumnCount).forEach { rowFiles ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -379,7 +388,7 @@ fun FolderScreen(
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
-                                if (rowFiles.size == 1) {
+                                repeat(gridColumnCount - rowFiles.size) {
                                     Box(modifier = Modifier.weight(1f))
                                 }
                             }
@@ -1210,6 +1219,7 @@ private fun VideoFileCard(
     } else {
         "\u672a\u89c2\u770b"
     }
+    val modifiedDateText = fileModifiedDateText(file)
     LaunchedEffect(file.id, metadata) {
         if (metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
@@ -1261,6 +1271,15 @@ private fun VideoFileCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFFA7A0B8)
                 )
+                if (modifiedDateText != null) {
+                    Text(
+                        text = modifiedDateText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF7E8795),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1309,6 +1328,25 @@ private fun videoProgressFraction(progressMs: Long, durationMs: Long?): Float {
     return (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
 }
 
+private fun fileModifiedDateText(file: LocalMediaFile): String? {
+    return fileModifiedDateValue(file)?.let { "日期：$it" }
+}
+
+private fun fileModifiedDateValue(file: LocalMediaFile): String? {
+    val modifiedAt = file.modifiedAt?.takeIf { it > 0L } ?: return null
+    return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(modifiedAt))
+}
+
+private fun videoGridMetaText(file: LocalMediaFile): String? {
+    val sizeText = file.size
+        .takeIf { it > 0L }
+        ?.let(::formatFileSize)
+    val dateText = fileModifiedDateValue(file)
+    return listOfNotNull(sizeText, dateText)
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString(" · ")
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoGridFileCard(
@@ -1326,6 +1364,8 @@ private fun VideoGridFileCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val metaText = videoGridMetaText(file)
+    val shouldShowProgress = progressMs >= 1_000L
     LaunchedEffect(file.id, metadata) {
         if (metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
@@ -1334,24 +1374,19 @@ private fun VideoGridFileCard(
         onMetadataLoaded(file.id, loadedMetadata)
     }
 
-    Card(
-        modifier = modifier.combinedClickable(
-            onClick = onOpenVideo,
-            onLongClick = onLongPress
-        ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) {
-                Color(0x44264D8D)
-            } else {
-                Color(0xFF101722)
-            }
-        ),
-        border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) Color(0x44264D8D) else Color.Transparent)
+            .combinedClickable(
+                onClick = onOpenVideo,
+                onLongClick = onLongPress
+            ),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Box {
                 VideoThumbnail(
@@ -1359,7 +1394,7 @@ private fun VideoGridFileCard(
                     durationMs = metadata?.durationMs,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(76.dp)
+                        .aspectRatio(1.12f)
                 )
                 if (isSelectionMode) {
                     Checkbox(
@@ -1384,19 +1419,27 @@ private fun VideoGridFileCard(
             }
             Text(
                 text = file.name,
-                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.height(20.dp),
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = Color(0xFFF5F7FA),
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                text = formatFileSize(file.size),
-                style = MaterialTheme.typography.labelMedium,
-                color = Color(0xFFA8B2C2)
-            )
-            if (progressMs > 0L) {
+            if (metaText != null) {
                 Text(
-                    text = "上次播放到 ${formatDuration(progressMs)}",
+                    text = metaText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFA8B2C2),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (shouldShowProgress) {
+                Text(
+                    text = "上次 ${formatDuration(progressMs)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFF8AB6FF),
                     maxLines = 1,

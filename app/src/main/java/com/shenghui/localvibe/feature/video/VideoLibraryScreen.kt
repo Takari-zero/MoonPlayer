@@ -1333,12 +1333,13 @@ private fun VideoFolderGridItem(
         ) {
             Text(
                 text = item.folder.name,
+                modifier = Modifier.height(20.dp),
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
                 color = VideoTextPrimary,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Start
             )
