@@ -1219,7 +1219,7 @@ private fun VideoFileCard(
     } else {
         "\u672a\u89c2\u770b"
     }
-    val modifiedDateText = fileModifiedDateText(file)
+    val metaText = videoListMetaText(file, progressText)
     LaunchedEffect(file.id, metadata) {
         if (metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
@@ -1267,19 +1267,12 @@ private fun VideoFileCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${formatFileSize(file.size)} \u00b7 $progressText",
+                    text = metaText,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFA7A0B8)
+                    color = Color(0xFFA7A0B8),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (modifiedDateText != null) {
-                    Text(
-                        text = modifiedDateText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF7E8795),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1328,13 +1321,29 @@ private fun videoProgressFraction(progressMs: Long, durationMs: Long?): Float {
     return (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
 }
 
-private fun fileModifiedDateText(file: LocalMediaFile): String? {
-    return fileModifiedDateValue(file)?.let { "日期：$it" }
-}
-
 private fun fileModifiedDateValue(file: LocalMediaFile): String? {
     val modifiedAt = file.modifiedAt?.takeIf { it > 0L } ?: return null
     return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(modifiedAt))
+}
+
+private fun fileExtensionText(file: LocalMediaFile): String? {
+    return file.extension
+        .trim()
+        .trimStart('.')
+        .lowercase(Locale.getDefault())
+        .takeIf { it.isNotBlank() }
+}
+
+private fun videoListMetaText(file: LocalMediaFile, progressText: String): String {
+    val sizeText = file.size
+        .takeIf { it > 0L }
+        ?.let(::formatFileSize)
+    return listOfNotNull(
+        sizeText,
+        fileModifiedDateValue(file),
+        fileExtensionText(file),
+        progressText
+    ).joinToString(" · ")
 }
 
 private fun videoGridMetaText(file: LocalMediaFile): String? {
@@ -1342,7 +1351,8 @@ private fun videoGridMetaText(file: LocalMediaFile): String? {
         .takeIf { it > 0L }
         ?.let(::formatFileSize)
     val dateText = fileModifiedDateValue(file)
-    return listOfNotNull(sizeText, dateText)
+    val extensionText = fileExtensionText(file)
+    return listOfNotNull(sizeText, dateText, extensionText)
         .takeIf { it.isNotEmpty() }
         ?.joinToString(" · ")
 }
