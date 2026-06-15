@@ -330,6 +330,7 @@ private fun LocalVideoPlayer(
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
     var isAbLoopBarVisible by remember { mutableStateOf(false) }
     var closeAbLoopBarRequest by remember { mutableIntStateOf(0) }
+    var keepControlsVisible by remember { mutableStateOf(false) }
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
     var isPortraitPlayback by remember(mediaFile.uri) { mutableStateOf(false) }
     var isSavingScreenshot by remember { mutableStateOf(false) }
@@ -572,10 +573,10 @@ private fun LocalVideoPlayer(
             seekPreviewOverlay = null
         }
     }
-    LaunchedEffect(showControls, isSpeedPanelVisible, isAbLoopBarVisible, isScreenLocked, isQuickToolsExpanded) {
-        if (showControls && !isSpeedPanelVisible && !isAbLoopBarVisible && !isScreenLocked && !isQuickToolsExpanded) {
+    LaunchedEffect(showControls, isSpeedPanelVisible, isAbLoopBarVisible, isScreenLocked, isQuickToolsExpanded, keepControlsVisible) {
+        if (showControls && !keepControlsVisible && !isSpeedPanelVisible && !isAbLoopBarVisible && !isScreenLocked && !isQuickToolsExpanded) {
             delay(2_000)
-            if (!isSpeedPanelVisible && !isAbLoopBarVisible && !isScreenLocked && !isQuickToolsExpanded) {
+            if (!keepControlsVisible && !isSpeedPanelVisible && !isAbLoopBarVisible && !isScreenLocked && !isQuickToolsExpanded) {
                 showControls = false
             }
         }
@@ -962,7 +963,9 @@ private fun LocalVideoPlayer(
                 abLoopCloseRequest = closeAbLoopBarRequest,
                 onAbLoopBarVisibilityChange = { isAbLoopBarVisible = it },
                 isQuickToolsExpanded = isQuickToolsExpanded,
-                onQuickToolsExpandedChange = { isQuickToolsExpanded = it }
+                onQuickToolsExpandedChange = { isQuickToolsExpanded = it },
+                keepControlsVisible = keepControlsVisible,
+                onKeepControlsVisibleChange = { keepControlsVisible = it }
             )
         }
 
@@ -1170,25 +1173,28 @@ private fun VideoControlOverlay(
     abLoopCloseRequest: Int,
     onAbLoopBarVisibilityChange: (Boolean) -> Unit,
     isQuickToolsExpanded: Boolean,
-    onQuickToolsExpandedChange: (Boolean) -> Unit
+    onQuickToolsExpandedChange: (Boolean) -> Unit,
+    keepControlsVisible: Boolean,
+    onKeepControlsVisibleChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val quickToolsScrollState = rememberScrollState()
     var showSpeedPanel by remember { mutableStateOf(false) }
     var showResizePanel by remember { mutableStateOf(false) }
-    var showEqualizerPanel by remember { mutableStateOf(false) }
     var showInfoPanel by remember { mutableStateOf(false) }
     var showQueuePanel by remember { mutableStateOf(false) }
     var showAudioTrackPanel by remember { mutableStateOf(false) }
     var showSleepTimerPanel by remember { mutableStateOf(false) }
     var showAbLoopPanel by remember { mutableStateOf(false) }
     var showSubtitleStylePanel by remember { mutableStateOf(false) }
+    var showControlSettingsPanel by remember { mutableStateOf(false) }
+    var showAdvancedFuturePanel by remember { mutableStateOf(false) }
+    var showTopToolbarSetting by remember { mutableStateOf(true) }
+    var showBottomControlsSetting by remember { mutableStateOf(true) }
+    var showProgressTimeSetting by remember { mutableStateOf(true) }
     var abLoopEditTarget by remember { mutableStateOf<VideoAbLoopPoint?>(null) }
     var abLoopEditText by remember { mutableStateOf("") }
     var audioTrackRevision by remember(player) { mutableIntStateOf(0) }
-    var eqBass by remember { mutableFloatStateOf(0f) }
-    var eqMid by remember { mutableFloatStateOf(0f) }
-    var eqTreble by remember { mutableFloatStateOf(0f) }
     val audioTracks = remember(player, audioTrackRevision) { player.availableAudioTracks() }
 
     DisposableEffect(player) {
@@ -1218,19 +1224,16 @@ private fun VideoControlOverlay(
         }
     }
 
-    fun showFutureTool(feature: String) {
-        showFutureToolToast(context, feature)
-    }
-
     fun openSubtitleStylePanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         showSubtitleStylePanel = true
     }
@@ -1238,12 +1241,13 @@ private fun VideoControlOverlay(
     fun openAudioTrackPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
         showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         audioTrackRevision += 1
         showAudioTrackPanel = true
@@ -1252,12 +1256,13 @@ private fun VideoControlOverlay(
     fun openSleepTimerPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showAbLoopPanel = false
         showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         showSleepTimerPanel = true
     }
@@ -1265,12 +1270,13 @@ private fun VideoControlOverlay(
     fun openAbLoopPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showEqualizerPanel = false
         showInfoPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
         showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         showAbLoopPanel = true
     }
@@ -1278,12 +1284,13 @@ private fun VideoControlOverlay(
     fun openInfoPanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showEqualizerPanel = false
         showQueuePanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
         showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         showInfoPanel = true
     }
@@ -1291,14 +1298,43 @@ private fun VideoControlOverlay(
     fun openQueuePanel() {
         showSpeedPanel = false
         showResizePanel = false
-        showEqualizerPanel = false
         showInfoPanel = false
         showAudioTrackPanel = false
         showSleepTimerPanel = false
         showAbLoopPanel = false
         showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showAdvancedFuturePanel = false
         onQuickToolsExpandedChange(false)
         showQueuePanel = true
+    }
+
+    fun openControlSettingsPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        showAbLoopPanel = false
+        showSubtitleStylePanel = false
+        showAdvancedFuturePanel = false
+        onQuickToolsExpandedChange(false)
+        showControlSettingsPanel = true
+    }
+
+    fun openAdvancedFuturePanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        showAbLoopPanel = false
+        showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        onQuickToolsExpandedChange(false)
+        showAdvancedFuturePanel = true
     }
 
     fun closeSleepTimerPanel() {
@@ -1311,9 +1347,13 @@ private fun VideoControlOverlay(
         abLoopEditText = formatDuration(currentValueMs ?: currentPositionMs)
     }
 
-    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel) {
+    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showControlSettingsPanel || showAdvancedFuturePanel) {
         if (showSubtitleStylePanel) {
             showSubtitleStylePanel = false
+        } else if (showControlSettingsPanel) {
+            showControlSettingsPanel = false
+        } else if (showAdvancedFuturePanel) {
+            showAdvancedFuturePanel = false
         } else if (showAudioTrackPanel) {
             showAudioTrackPanel = false
         } else if (showSleepTimerPanel) {
@@ -1329,8 +1369,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showControlSettingsPanel, showAdvancedFuturePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showControlSettingsPanel || showAdvancedFuturePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1343,7 +1383,8 @@ private fun VideoControlOverlay(
     fun closePanelOrBack() {
         when {
             showSubtitleStylePanel -> showSubtitleStylePanel = false
-            showEqualizerPanel -> showEqualizerPanel = false
+            showControlSettingsPanel -> showControlSettingsPanel = false
+            showAdvancedFuturePanel -> showAdvancedFuturePanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
             showSleepTimerPanel -> closeSleepTimerPanel()
             showAbLoopPanel -> showAbLoopPanel = false
@@ -1359,7 +1400,7 @@ private fun VideoControlOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(showSubtitleStylePanel, showEqualizerPanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, isQuickToolsExpanded) {
+            .pointerInput(showSubtitleStylePanel, showAudioTrackPanel, showSleepTimerPanel, showAbLoopPanel, showInfoPanel, showQueuePanel, showSpeedPanel, showResizePanel, showControlSettingsPanel, showAdvancedFuturePanel, isQuickToolsExpanded) {
                 detectDragGestures { change, dragAmount ->
                     if (change.position.x > size.width - 72.dp.toPx() && dragAmount.x < -26f) {
                         closePanelOrBack()
@@ -1368,9 +1409,9 @@ private fun VideoControlOverlay(
                 }
             }
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showAdvancedFuturePanel
 
-        if (ordinaryControlsVisible) {
+        if (ordinaryControlsVisible && showTopToolbarSetting) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -1645,15 +1686,42 @@ private fun VideoControlOverlay(
             )
         }
 
-        if (showEqualizerPanel) {
-            VideoEqualizerPanel(
-                bass = eqBass,
-                mid = eqMid,
-                treble = eqTreble,
-                onBassChange = { eqBass = it },
-                onMidChange = { eqMid = it },
-                onTrebleChange = { eqTreble = it },
-                onDismiss = { showEqualizerPanel = false },
+        if (showControlSettingsPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showControlSettingsPanel = false }
+            )
+            VideoControlSettingsPanel(
+                showTopToolbar = showTopToolbarSetting,
+                onShowTopToolbarChange = { showTopToolbarSetting = it },
+                showBottomControls = showBottomControlsSetting,
+                onShowBottomControlsChange = { showBottomControlsSetting = it },
+                showProgressTime = showProgressTimeSetting,
+                onShowProgressTimeChange = { showProgressTimeSetting = it },
+                keepControlsVisible = keepControlsVisible,
+                onKeepControlsVisibleChange = onKeepControlsVisibleChange,
+                onReset = {
+                    showTopToolbarSetting = true
+                    showBottomControlsSetting = true
+                    showProgressTimeSetting = true
+                    onKeepControlsVisibleChange(false)
+                },
+                onDismiss = { showControlSettingsPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 20.dp)
+            )
+        }
+
+        if (showAdvancedFuturePanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showAdvancedFuturePanel = false }
+            )
+            VideoAdvancedFuturePanel(
+                onDismiss = { showAdvancedFuturePanel = false },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 56.dp, end = 20.dp)
@@ -1669,12 +1737,6 @@ private fun VideoControlOverlay(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                VideoQuickToolButton(
-                    icon = Icons.Filled.Tune,
-                    label = "均衡器",
-                    isFuture = true,
-                    onClick = { showFutureTool("均衡器") }
-                )
                 VideoQuickToolButton(
                     icon = Icons.Filled.Speed,
                     label = "${playbackSpeed.formatSpeed()}x",
@@ -1698,23 +1760,9 @@ private fun VideoControlOverlay(
                 )
                 if (isQuickToolsExpanded) {
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Settings,
-                        label = "解码",
-                        isFuture = true,
-                        onClick = {
-                            showFutureTool("解码方式")
-                        }
-                    )
-                    VideoQuickToolButton(
                         icon = Icons.Filled.Audiotrack,
                         label = "音轨",
                         onClick = { openAudioTrackPanel() }
-                    )
-                    VideoQuickToolButton(
-                        icon = Icons.Filled.Tune,
-                        label = "画面调节",
-                        isFuture = true,
-                        onClick = { showFutureTool("画面调节") }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
@@ -1737,16 +1785,14 @@ private fun VideoControlOverlay(
                         onClick = { openSleepTimerPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Tune,
-                        label = "手势",
-                        isFuture = true,
-                        onClick = { showFutureTool("手势设置") }
+                        icon = Icons.Filled.Settings,
+                        label = "控制栏",
+                        onClick = { openControlSettingsPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Settings,
-                        label = "控制栏",
-                        isFuture = true,
-                        onClick = { showFutureTool("控制栏设置") }
+                        label = "高级",
+                        onClick = { openAdvancedFuturePanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.KeyboardArrowLeft,
@@ -1762,6 +1808,7 @@ private fun VideoControlOverlay(
                 }
             }
 
+            if (showBottomControlsSetting) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1786,12 +1833,14 @@ private fun VideoControlOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        formatDuration(currentPositionMs),
-                        color = Color.White.copy(alpha = 0.92f),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    if (showProgressTimeSetting) {
+                        Text(
+                            formatDuration(currentPositionMs),
+                            color = Color.White.copy(alpha = 0.92f),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                     ThinVideoProgressBar(
                         currentPositionMs = currentPositionMs,
                         durationMs = durationMs,
@@ -1800,12 +1849,14 @@ private fun VideoControlOverlay(
                         onSeekFinished = onSeekFinished,
                         modifier = Modifier.weight(1f)
                     )
-                    Text(
-                        formatDuration(durationMs),
-                        color = Color.White.copy(alpha = 0.92f),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    if (showProgressTimeSetting) {
+                        Text(
+                            formatDuration(durationMs),
+                            color = Color.White.copy(alpha = 0.92f),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
                 Box(
                     modifier = Modifier
@@ -1881,89 +1932,7 @@ private fun VideoControlOverlay(
         }
     }
 }
-@Composable
-private fun VideoToolPanel(
-    playbackSpeed: Float,
-    isRepeatOne: Boolean,
-    onToolClick: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val tools = listOf(
-        VideoToolAction("解码", "后续", Icons.Filled.Settings, enabled = false),
-        VideoToolAction("倍速", "${playbackSpeed.formatSpeed()}x", Icons.Filled.Speed),
-        VideoToolAction("循环", if (isRepeatOne) "开启" else "关闭", Icons.Filled.Loop),
-        VideoToolAction("截图", "可用", Icons.Filled.PhotoCamera)
-    )
-    Column(
-        modifier = modifier
-            .width(244.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(PlayerPanelDark)
-            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(22.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        tools.chunked(3).forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                row.forEach { tool ->
-                    VideoToolItem(
-                        label = tool.label,
-                        value = tool.value,
-                        icon = tool.icon,
-                        enabled = tool.enabled,
-                        onClick = { onToolClick(tool.label) }
-                    )
-                }
-            }
-        }
-    }
-}
-@Composable
-private fun VideoToolItem(
-    label: String,
-    value: String? = null,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    val itemAlpha = if (enabled) 1f else 0.48f
-    Column(
-        modifier = Modifier
-            .width(58.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .background(
-                    if (enabled) Color(0xFF151E2B) else Color(0xFF11151D),
-                    CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (enabled) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.42f),
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Text(
-            text = value?.let { "$label\n$it" } ?: label,
-            color = Color.White.copy(alpha = 0.86f * itemAlpha),
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-        )
-    }
+
 }
 
 @Composable
@@ -2224,7 +2193,7 @@ private fun SubtitleTimingSection(
                 .clip(RoundedCornerShape(10.dp))
                 .background(Color(0xFF1B263A).copy(alpha = 0.42f))
                 .border(1.dp, Color.White.copy(alpha = 0.045f), RoundedCornerShape(10.dp))
-                .clickable { showFutureToolToast(context, "字幕时间调整") },
+                .clickable { showVideoPlayerToast(context, "字幕时间调整后续实现") },
             verticalAlignment = Alignment.CenterVertically
         ) {
             SubtitleTimingCell(
@@ -3671,24 +3640,165 @@ private fun VideoQueueItem(
 }
 
 @Composable
-private fun VideoEqualizerPanel(
-    bass: Float,
-    mid: Float,
-    treble: Float,
-    onBassChange: (Float) -> Unit,
-    onMidChange: (Float) -> Unit,
-    onTrebleChange: (Float) -> Unit,
+private fun VideoControlSettingsPanel(
+    showTopToolbar: Boolean,
+    onShowTopToolbarChange: (Boolean) -> Unit,
+    showBottomControls: Boolean,
+    onShowBottomControlsChange: (Boolean) -> Unit,
+    showProgressTime: Boolean,
+    onShowProgressTimeChange: (Boolean) -> Unit,
+    keepControlsVisible: Boolean,
+    onKeepControlsVisibleChange: (Boolean) -> Unit,
+    onReset: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    SidePanelShell(title = "均衡器", onDismiss = onDismiss, modifier = modifier.width(250.dp)) {
-        EqualizerSlider("低频", bass, onBassChange)
-        EqualizerSlider("中频", mid, onMidChange)
-        EqualizerSlider("高频", treble, onTrebleChange)
+    SidePanelShell(title = "控制栏设置", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
         Text(
-            text = "当前为播放器内调节面板，真实音效处理后续专项接入。",
-            color = Color.White.copy(alpha = 0.5f),
+            text = "仅影响当前播放页显示，不写入持久设置。",
+            color = Color.White.copy(alpha = 0.48f),
             style = MaterialTheme.typography.labelSmall
+        )
+        VideoControlSettingRow(
+            title = "显示顶部工具栏",
+            description = "返回、标题、字幕和音轨入口",
+            checked = showTopToolbar,
+            onCheckedChange = onShowTopToolbarChange
+        )
+        VideoControlSettingRow(
+            title = "显示底部控制栏",
+            description = "播放、上一集、下一集、锁屏和画面比例",
+            checked = showBottomControls,
+            onCheckedChange = onShowBottomControlsChange
+        )
+        VideoControlSettingRow(
+            title = "显示进度时间",
+            description = "进度条两侧当前时间和总时长",
+            checked = showProgressTime,
+            onCheckedChange = onShowProgressTimeChange
+        )
+        VideoControlSettingRow(
+            title = "控制层常亮",
+            description = "打开后不再 2 秒自动隐藏，点击空白仍可收起",
+            checked = keepControlsVisible,
+            onCheckedChange = onKeepControlsVisibleChange
+        )
+        TextButton(
+            onClick = onReset,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text("恢复默认", color = PlayerMoonPurpleSoft)
+        }
+    }
+}
+
+@Composable
+private fun VideoControlSettingRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = if (checked) 0.09f else 0.045f))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = title,
+                color = Color.White.copy(alpha = 0.9f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = description,
+                color = Color.White.copy(alpha = 0.48f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(start = 12.dp)
+                .width(46.dp)
+                .height(26.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (checked) PlayerMoonPurple.copy(alpha = 0.92f) else Color.White.copy(alpha = 0.12f)),
+            contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = if (checked) 0.96f else 0.72f))
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoAdvancedFuturePanel(
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SidePanelShell(title = "后续专项", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
+        VideoFutureItem("均衡器", "需要真实音频处理链路，不能只调整 UI 滑杆。")
+        VideoFutureItem("解码方式", "涉及 Media3 解码选择和兼容性，需要专项验证。")
+        VideoFutureItem("画面调节", "对比度、饱和度、锐化等需要可靠渲染链路；当前不做假成功。")
+        VideoFutureItem("手势设置", "涉及点击、拖动、进度条、AB 浮条和锁屏手势冲突，需单独收口。")
+        VideoFutureItem("字幕时间同步", "Media3 原生字幕链路未接入真实时间轴偏移，继续后置。")
+    }
+}
+
+@Composable
+private fun VideoFutureItem(
+    title: String,
+    reason: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.045f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White.copy(alpha = 0.86f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "后续",
+                color = Color.White.copy(alpha = 0.46f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        Text(
+            text = reason,
+            color = Color.White.copy(alpha = 0.48f),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -4030,30 +4140,6 @@ private fun SidePanelShell(
             }
         }
         content()
-    }
-}
-
-@Composable
-private fun EqualizerSlider(
-    label: String,
-    value: Float,
-    onValueChange: (Float) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(label, color = Color.White.copy(alpha = 0.78f), style = MaterialTheme.typography.labelMedium)
-            Text("${value.toInt()} dB", color = PlayerMoonPurpleSoft, style = MaterialTheme.typography.labelSmall)
-        }
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = -10f..10f,
-            colors = videoSliderColors()
-        )
     }
 }
 
@@ -4485,13 +4571,6 @@ private val VideoSleepTimerFixedOptions = listOf(
     VideoSleepTimerOption.SixtyMinutes,
     VideoSleepTimerOption.NinetyMinutes,
     VideoSleepTimerOption.OneHundredTwentyMinutes
-)
-
-private data class VideoToolAction(
-    val label: String,
-    val value: String?,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val enabled: Boolean = true
 )
 
 private data class VideoSeekPreview(
@@ -4979,10 +5058,6 @@ private fun showVideoPlayerToast(
     val toast = Toast.makeText(context, message, Toast.LENGTH_SHORT)
     toast.show()
     Handler(Looper.getMainLooper()).postDelayed({ toast.cancel() }, durationMs)
-}
-
-private fun showFutureToolToast(context: Context, feature: String) {
-    showVideoPlayerToast(context, "${feature}后续实现")
 }
 
 private const val FINISHED_THRESHOLD_MS = 5_000L
