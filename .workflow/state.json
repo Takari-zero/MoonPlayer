@@ -1,4 +1,4 @@
-{
+﻿{
   "project": "LocalVibe",
   "module": "video",
   "currentTask": "TODO-001",
@@ -6,13 +6,13 @@
   "adbPort": 62001,
   "requireUserConfirmationBeforeCommit": true,
   "allowAutoPush": false,
-  "lastKnownMainCommit": "66a1c4a",
-  "uiDesignRule": "新弹窗、新面板、新复杂 UI 开发前，必须先提醒用户使用 Stitch / Product Design 生成 UI 效果图。",
+  "lastKnownMainCommit": "8ddff8a",
+  "uiDesignRule": "Before new dialogs, panels, or complex UI work, remind the user to create a UI mockup with Stitch or Product Design first.",
   "notes": [
-    "视频模块未完全完成前，不进入音乐或小说模块",
-    "高风险功能不能直接跳过，必须拆解或调研",
-    "不能假成功",
-    "真机 UI / 声音 / 手势必须人工确认",
-    "ADB 必须使用 -P 62001"
+    "Do not enter music or novel modules before the video module is completed.",
+    "Do not fake success.",
+    "High-risk work must be split or researched first.",
+    "Real-device UI, audio, and gesture behavior require user confirmation.",
+    "ADB must use -P 62001."
   ]
 }

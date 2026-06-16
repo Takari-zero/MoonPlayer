@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $workflowDir = Split-Path -Parent $scriptDir
@@ -18,7 +18,7 @@ $templatePath = Join-Path $workflowDir "templates\codex_task.md"
 $agentsPath = Join-Path $projectRoot "AGENTS.md"
 $currentTaskPath = Join-Path $workflowDir "current-task.md"
 
-$state = Get-Content $statePath -Raw | ConvertFrom-Json
+$state = Get-Content $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $queue = Get-Content $queuePath -Raw
 $template = Get-Content $templatePath -Raw
 $agents = if (Test-Path $agentsPath) { Get-Content $agentsPath -Raw } else { "" }
@@ -29,7 +29,7 @@ $taskMatch = [regex]::Match($queue, $taskPattern)
 $taskText = if ($taskMatch.Success) { $taskMatch.Value.Trim() } else { "Could not extract the exact task. Full queue follows:`n`n$queue" }
 
 $agentsSummary = ($agents -split "`r?`n" | Where-Object {
-    $_ -match "不允许|不主动|假成功|Stitch|Product Design|ADB|logcat|每轮|提交|push|真机"
+    $_ -match "涓嶅厑璁竱涓嶄富鍔▅鍋囨垚鍔焲Stitch|Product Design|ADB|logcat|姣忚疆|鎻愪氦|push|鐪熸満"
 }) -join "`n"
 
 $content = @"
@@ -78,3 +78,4 @@ $answer = Read-Host "Run android-check.ps1? Type y to continue"
 if ($answer -eq "y") {
     & (Join-Path $scriptDir "android-check.ps1")
 }
+
