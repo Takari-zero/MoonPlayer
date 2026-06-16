@@ -392,6 +392,7 @@ private fun LocalVideoPlayer(
     val latestIsSpeedPanelVisible by rememberUpdatedState(isSpeedPanelVisible)
     val latestIsAbLoopBarVisible by rememberUpdatedState(isAbLoopBarVisible)
     val latestDurationMs by rememberUpdatedState(durationMs)
+    val latestCurrentPositionMs by rememberUpdatedState(currentPositionMs)
     var abLoopStartMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     var abLoopEndMs by remember(mediaFile.uri) { mutableStateOf<Long?>(null) }
     val subtitleLauncher = rememberLauncherForActivityResult(
@@ -540,10 +541,15 @@ private fun LocalVideoPlayer(
                 sleepTimerSelectedOption = option
                 sleepTimerEndAtElapsedMs = SystemClock.elapsedRealtime() + durationMs
                 sleepTimerRemainingMs = durationMs
+                sleepTimerEndOfVideoEnabled = false
                 showVideoPlayerToast(context, "已设置睡眠定时 ${option.label}")
             }
 
             VideoSleepTimerMode.END_OF_VIDEO -> {
+                sleepTimerMode = VideoSleepTimerMode.END_OF_VIDEO
+                sleepTimerSelectedOption = option
+                sleepTimerEndAtElapsedMs = 0L
+                sleepTimerRemainingMs = 0L
                 sleepTimerEndOfVideoEnabled = true
                 showVideoPlayerToast(context, "已设置当前视频结束后暂停")
             }
@@ -563,10 +569,44 @@ private fun LocalVideoPlayer(
         coroutineScope.launch {
             delay(120L)
             if (!isSeekingByUser) {
-                currentPositionMs = player.currentPosition.coerceAtLeast(0L)
+                val refreshedPosition = player.currentPosition.coerceAtLeast(0L)
+                currentPositionMs = if ((refreshedPosition - target).absoluteValue <= 1_500L) {
+                    refreshedPosition
+                } else {
+                    target
+                }
             }
         }
         return target
+    }
+
+    fun performQuickSeek(deltaMs: Long, durationForClampMs: Long, basePositionMs: Long, showHint: Boolean) {
+        val playerPosition = player.currentPosition.coerceAtLeast(0L)
+        val start = if ((playerPosition - basePositionMs).absoluteValue <= 1_500L) {
+            playerPosition
+        } else {
+            basePositionMs.coerceAtLeast(0L)
+        }
+        val target = safeVideoSeekPosition(start + deltaMs, durationForClampMs)
+        isSeekingByUser = false
+        draggingPositionMs = target
+        currentPositionMs = target
+        player.seekTo(target)
+        coroutineScope.launch {
+            delay(120L)
+            if (!isSeekingByUser) {
+                val refreshedPosition = player.currentPosition.coerceAtLeast(0L)
+                currentPositionMs = if ((refreshedPosition - target).absoluteValue <= 1_500L) {
+                    refreshedPosition
+                } else {
+                    target
+                }
+            }
+        }
+        if (showHint) {
+            seekPreviewOverlay = VideoSeekPreview(target, target - start)
+        }
+        showControls = true
     }
 
     fun seekByGesture(deltaMs: Long, durationForClampMs: Long, showHint: Boolean) {
@@ -579,7 +619,12 @@ private fun LocalVideoPlayer(
         coroutineScope.launch {
             delay(120L)
             if (!isSeekingByUser) {
-                currentPositionMs = player.currentPosition.coerceAtLeast(0L)
+                val refreshedPosition = player.currentPosition.coerceAtLeast(0L)
+                currentPositionMs = if ((refreshedPosition - target).absoluteValue <= 1_500L) {
+                    refreshedPosition
+                } else {
+                    target
+                }
             }
         }
         if (showHint) {
@@ -1058,9 +1103,10 @@ private fun LocalVideoPlayer(
                         } else {
                             VIDEO_DOUBLE_TAP_SEEK_MS
                         }
-                        seekByGesture(
+                        performQuickSeek(
                             deltaMs = deltaMs,
                             durationForClampMs = latestDurationMs,
+                            basePositionMs = latestCurrentPositionMs,
                             showHint = settings.showHints
                         )
                     },
@@ -3586,7 +3632,7 @@ private fun SleepTimerPanel(
     modifier: Modifier = Modifier
 ) {
     val isTimedActive = mode == VideoSleepTimerMode.TIMED && remainingMs > 0L
-    val isAnyTimerActive = isTimedActive || endOfVideoEnabled
+    val isAnyTimerActive = isTimedActive || endOfVideoEnabled || mode == VideoSleepTimerMode.END_OF_VIDEO
     val activeRemainingMinutes = remember(remainingMs) { remainingMs.toDisplayMinutes() }
     var draftMinutes by remember(mode, selectedOption) {
         mutableIntStateOf(
@@ -3601,21 +3647,31 @@ private fun SleepTimerPanel(
             }
         )
     }
+    var draftEndOfVideoEnabled by remember(mode, selectedOption, endOfVideoEnabled) {
+        mutableStateOf(
+            mode == VideoSleepTimerMode.END_OF_VIDEO ||
+                selectedOption.mode == VideoSleepTimerMode.END_OF_VIDEO ||
+                endOfVideoEnabled
+        )
+    }
     var userAdjustedTime by remember(mode, selectedOption) { mutableStateOf(false) }
     val displayedMinutes = if (isTimedActive && !userAdjustedTime) activeRemainingMinutes else draftMinutes
     val normalizedDisplayMinutes = displayedMinutes.coerceIn(0, VIDEO_SLEEP_TIMER_MAX_MINUTES)
     val displayHours = normalizedDisplayMinutes / 60
     val displayMinutes = normalizedDisplayMinutes % 60
-    val selectedQuickMinutes = if (isTimedActive && !userAdjustedTime) {
+    val selectedQuickMinutes = if (draftEndOfVideoEnabled) {
+        null
+    } else if (isTimedActive && !userAdjustedTime) {
         selectedOption.durationMs?.let { (it / 60_000L).toInt() }
     } else {
         draftMinutes
     }
-    val canStartTimer = draftMinutes >= VIDEO_SLEEP_TIMER_MIN_MINUTES
+    val canStartTimer = draftEndOfVideoEnabled || draftMinutes >= VIDEO_SLEEP_TIMER_MIN_MINUTES
     val primaryText = "确认"
 
     fun updateDraft(minutes: Int) {
         draftMinutes = minutes.coerceIn(0, VIDEO_SLEEP_TIMER_MAX_MINUTES)
+        draftEndOfVideoEnabled = false
         userAdjustedTime = true
     }
 
@@ -3706,12 +3762,14 @@ private fun SleepTimerPanel(
                 )
             }
             Text(
-                text = if (isTimedActive && !userAdjustedTime) {
+                text = if (draftEndOfVideoEnabled) {
+                    "点击确认后将在当前视频结束时暂停"
+                } else if (isTimedActive && !userAdjustedTime) {
                     "剩余 ${formatSleepTimerCountdown(remainingMs)} · 拖动后点击确认更新"
                 } else {
                     "上下拖动修改时间，点击确认后开始倒计时"
                 },
-                color = if (isTimedActive && !userAdjustedTime) {
+                color = if (draftEndOfVideoEnabled || (isTimedActive && !userAdjustedTime)) {
                     PlayerMoonPurpleSoft.copy(alpha = 0.78f)
                 } else {
                     Color.White.copy(alpha = 0.42f)
@@ -3768,8 +3826,11 @@ private fun SleepTimerPanel(
                 maxLines = 1
             )
             SleepTimerToggle(
-                checked = endOfVideoEnabled,
-                onClick = { onEndOfVideoChange(!endOfVideoEnabled) }
+                checked = draftEndOfVideoEnabled,
+                onClick = {
+                    draftEndOfVideoEnabled = !draftEndOfVideoEnabled
+                    userAdjustedTime = false
+                }
             )
         }
 
@@ -3792,6 +3853,7 @@ private fun SleepTimerPanel(
                     if (isAnyTimerActive) {
                         onSelect(VideoSleepTimerOption.Off)
                     }
+                    draftEndOfVideoEnabled = false
                     updateDraft(VIDEO_SLEEP_TIMER_DEFAULT_MINUTES)
                 },
                 modifier = Modifier.weight(1f)
@@ -3802,7 +3864,13 @@ private fun SleepTimerPanel(
                 enabled = canStartTimer,
                 onClick = {
                     if (canStartTimer) {
-                        onSelect(draftOption)
+                        onSelect(
+                            if (draftEndOfVideoEnabled) {
+                                VideoSleepTimerOption.EndOfVideo
+                            } else {
+                                draftOption
+                            }
+                        )
                         userAdjustedTime = false
                     }
                 },
