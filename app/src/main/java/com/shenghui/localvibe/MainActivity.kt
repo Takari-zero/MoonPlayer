@@ -522,6 +522,38 @@ private fun LocalVibeApp() {
         }
     }
 
+    suspend fun isLocalMediaFileReadable(file: LocalMediaFile): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                context.contentResolver.openFileDescriptor(Uri.parse(file.uri), "r")?.use { true } == true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    fun showUnavailableVideoHint() {
+        Toast.makeText(context, "文件已失效，可从列表移除", Toast.LENGTH_SHORT).show()
+    }
+
+    fun openVideoIfReadable(file: LocalMediaFile, queue: List<LocalMediaFile>) {
+        coroutineScope.launch {
+            if (!isLocalMediaFileReadable(file)) {
+                showUnavailableVideoHint()
+                return@launch
+            }
+            videoQueue = queue.ifEmpty { listOf(file) }
+            currentVideoIndex = videoQueue.indexOfFirst { it.uri == file.uri }
+                .takeIf { it >= 0 } ?: 0
+            selectedMediaFile = file
+            selectedVideoUri = file.uri
+            recentVideoFile = file
+            recentVideoUri = file.uri
+            appStateStore.saveRecentVideoUri(file.uri)
+            navController.navigate(LocalVibeRoute.VideoPlayer)
+        }
+    }
+
     fun completeFolderVideoDelete(deletedFiles: List<LocalMediaFile>, requestedCount: Int) {
         coroutineScope.launch {
             val uniqueDeletedFiles = deletedFiles
@@ -1457,16 +1489,7 @@ private fun LocalVibeApp() {
                             navController.navigate(LocalVibeRoute.Folder)
                         },
                         onContinueVideo = { file ->
-                            selectedMediaFile = file
-                            selectedVideoUri = file.uri
-                            videoQueue = listOf(file)
-                            currentVideoIndex = 0
-                            recentVideoFile = file
-                            recentVideoUri = file.uri
-                            coroutineScope.launch {
-                                appStateStore.saveRecentVideoUri(file.uri)
-                            }
-                            navController.navigate(LocalVibeRoute.VideoPlayer)
+                            openVideoIfReadable(file, listOf(file))
                         },
                         onRemoveFolders = { folders ->
                             coroutineScope.launch {
@@ -1672,29 +1695,10 @@ private fun LocalVibeApp() {
                                 typedFolderKey(currentFolderTargetType ?: LocalMediaType.VIDEO, folder.id)
                             ]
                         }.orEmpty().filter { it.type == LocalMediaType.VIDEO }
-                        videoQueue = files.ifEmpty { listOf(file) }
-                        currentVideoIndex = videoQueue.indexOfFirst { it.uri == file.uri }
-                            .takeIf { it >= 0 } ?: 0
-                        selectedMediaFile = file
-                        selectedVideoUri = file.uri
-                        recentVideoFile = file
-                        recentVideoUri = file.uri
-                        coroutineScope.launch {
-                            appStateStore.saveRecentVideoUri(file.uri)
-                        }
-                        navController.navigate(LocalVibeRoute.VideoPlayer)
+                        openVideoIfReadable(file, files)
                     },
                     onContinueVideo = { file ->
-                        selectedMediaFile = file
-                        selectedVideoUri = file.uri
-                        videoQueue = listOf(file)
-                        currentVideoIndex = 0
-                        recentVideoFile = file
-                        recentVideoUri = file.uri
-                        coroutineScope.launch {
-                            appStateStore.saveRecentVideoUri(file.uri)
-                        }
-                        navController.navigate(LocalVibeRoute.VideoPlayer)
+                        openVideoIfReadable(file, listOf(file))
                     },
                     onOpenAudio = { file ->
                         val files = currentFolder?.let { folder ->

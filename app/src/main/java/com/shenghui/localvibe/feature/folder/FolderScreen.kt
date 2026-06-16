@@ -1,5 +1,6 @@
 package com.shenghui.localvibe.feature.folder
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -51,11 +52,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -77,6 +81,7 @@ import com.shenghui.localvibe.core.media.loadVideoMetadata
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -114,6 +119,7 @@ fun FolderScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var selectedCategory by rememberSaveable(targetType) {
         mutableStateOf(if (targetType == LocalMediaType.VIDEO) "视频" else Categories.first())
     }
@@ -125,6 +131,7 @@ fun FolderScreen(
     var videoSearchKeyword by rememberSaveable { mutableStateOf("") }
     var isVideoGridMode by rememberSaveable { mutableStateOf(false) }
     var videoSortMode by rememberSaveable { mutableStateOf(VideoFolderSortMode.NAME) }
+    val unavailableVideoUris = remember { mutableStateMapOf<String, Boolean>() }
     val categoryFiles = remember(files, selectedCategory, targetType) {
         if (targetType != null) files.filter { it.type == targetType } else files.filterForCategory(selectedCategory)
     }
@@ -161,6 +168,31 @@ fun FolderScreen(
         if (deleteSuccessSignal > 0L) {
             selectedUris = emptySet()
             isMultiSelectMode = false
+        }
+    }
+
+    LaunchedEffect(categoryFiles) {
+        val visibleVideoUris = categoryFiles
+            .filter { it.type == LocalMediaType.VIDEO }
+            .map { it.uri }
+            .toSet()
+        unavailableVideoUris.keys
+            .filterNot { it in visibleVideoUris }
+            .toList()
+            .forEach { unavailableVideoUris.remove(it) }
+    }
+
+    fun openVideoIfAvailable(file: LocalMediaFile) {
+        coroutineScope.launch {
+            val isAvailable = withContext(Dispatchers.IO) {
+                isMediaFileReadable(context.applicationContext, file)
+            }
+            unavailableVideoUris[file.uri] = !isAvailable
+            if (isAvailable) {
+                onOpenVideo(file)
+            } else {
+                Toast.makeText(context, "文件已失效，可从列表移除", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -364,21 +396,28 @@ fun FolderScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 rowFiles.forEach { file ->
+                                    val isFileUnavailable = unavailableVideoUris[file.uri] == true
                                     VideoGridFileCard(
                                         file = file,
                                         progressMs = videoProgressMap[file.uri] ?: 0L,
                                         metadata = videoMetadataCache[file.id],
+                                        isFileUnavailable = isFileUnavailable,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = file.uri in selectedUris,
                                         onToggleSelected = { selectedUris = selectedUris.toggle(file.uri) },
                                         onMetadataLoaded = onVideoMetadataLoaded,
+                                        onAvailabilityChanged = { isUnavailable ->
+                                            unavailableVideoUris[file.uri] = isUnavailable
+                                        },
                                         onRemove = { onRemoveFile(file) },
                                         onDelete = { onDeleteFile(file) },
                                         onOpenVideo = {
                                             if (isMultiSelectMode) {
                                                 selectedUris = selectedUris.toggle(file.uri)
+                                            } else if (isFileUnavailable) {
+                                                Toast.makeText(context, "文件已失效，可从列表移除", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                onOpenVideo(file)
+                                                openVideoIfAvailable(file)
                                             }
                                         },
                                         onLongPress = {
@@ -396,28 +435,37 @@ fun FolderScreen(
                     } else {
                         visibleFiles.forEach { file ->
                             when (file.type) {
-                                LocalMediaType.VIDEO -> VideoFileCard(
-                                    file = file,
-                                    progressMs = videoProgressMap[file.uri] ?: 0L,
-                                    metadata = videoMetadataCache[file.id],
-                                    isSelectionMode = isMultiSelectMode,
-                                    isSelected = file.uri in selectedUris,
-                                    onToggleSelected = { selectedUris = selectedUris.toggle(file.uri) },
-                                    onMetadataLoaded = onVideoMetadataLoaded,
-                                    onRemove = { onRemoveFile(file) },
-                                    onDelete = { onDeleteFile(file) },
-                                    onOpenVideo = {
-                                        if (isMultiSelectMode) {
-                                            selectedUris = selectedUris.toggle(file.uri)
-                                        } else {
-                                            onOpenVideo(file)
+                                LocalMediaType.VIDEO -> {
+                                    val isFileUnavailable = unavailableVideoUris[file.uri] == true
+                                    VideoFileCard(
+                                        file = file,
+                                        progressMs = videoProgressMap[file.uri] ?: 0L,
+                                        metadata = videoMetadataCache[file.id],
+                                        isFileUnavailable = isFileUnavailable,
+                                        isSelectionMode = isMultiSelectMode,
+                                        isSelected = file.uri in selectedUris,
+                                        onToggleSelected = { selectedUris = selectedUris.toggle(file.uri) },
+                                        onMetadataLoaded = onVideoMetadataLoaded,
+                                        onAvailabilityChanged = { isUnavailable ->
+                                            unavailableVideoUris[file.uri] = isUnavailable
+                                        },
+                                        onRemove = { onRemoveFile(file) },
+                                        onDelete = { onDeleteFile(file) },
+                                        onOpenVideo = {
+                                            if (isMultiSelectMode) {
+                                                selectedUris = selectedUris.toggle(file.uri)
+                                            } else if (isFileUnavailable) {
+                                                Toast.makeText(context, "文件已失效，可从列表移除", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                openVideoIfAvailable(file)
+                                            }
+                                        },
+                                        onLongPress = {
+                                            isMultiSelectMode = true
+                                            selectedUris = setOf(file.uri)
                                         }
-                                    },
-                                    onLongPress = {
-                                        isMultiSelectMode = true
-                                        selectedUris = setOf(file.uri)
-                                    }
-                                )
+                                    )
+                                }
 
                                 LocalMediaType.AUDIO -> TypedFileCard(
                                     file = file,
@@ -1202,10 +1250,12 @@ private fun VideoFileCard(
     file: LocalMediaFile,
     progressMs: Long,
     metadata: VideoMetadata?,
+    isFileUnavailable: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
     onMetadataLoaded: (String, VideoMetadata) -> Unit,
+    onAvailabilityChanged: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onDelete: () -> Unit,
     onOpenVideo: () -> Unit,
@@ -1221,7 +1271,11 @@ private fun VideoFileCard(
     }
     val metaText = videoListMetaText(file, progressText)
     LaunchedEffect(file.id, metadata) {
-        if (metadata != null) return@LaunchedEffect
+        val isAvailable = withContext(Dispatchers.IO) {
+            isMediaFileReadable(context.applicationContext, file)
+        }
+        onAvailabilityChanged(!isAvailable)
+        if (!isAvailable || metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
             loadVideoMetadata(context.applicationContext, file.uri)
         }
@@ -1231,6 +1285,7 @@ private fun VideoFileCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(if (isFileUnavailable) 0.58f else 1f)
             .combinedClickable(
                 onClick = onOpenVideo,
                 onLongClick = onLongPress
@@ -1252,7 +1307,8 @@ private fun VideoFileCard(
         ) {
             VideoThumbnail(
                 metadata = metadata,
-                durationMs = metadata?.durationMs,
+                durationMs = if (isFileUnavailable) null else metadata?.durationMs,
+                isUnavailable = isFileUnavailable,
                 modifier = Modifier.size(width = 150.dp, height = 84.dp)
             )
             Column(
@@ -1267,24 +1323,26 @@ private fun VideoFileCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = metaText,
+                    text = if (isFileUnavailable) "文件已失效" else metaText,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFA7A0B8),
+                    color = if (isFileUnavailable) Color(0xFFF97066) else Color(0xFFA7A0B8),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp)
-                        .background(Color(0xFF1B1724))
-                ) {
+                if (!isFileUnavailable) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                            .fillMaxWidth()
                             .height(2.dp)
-                            .background(Color(0xFF8B52FF))
-                    )
+                            .background(Color(0xFF1B1724))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                                .height(2.dp)
+                                .background(Color(0xFF8B52FF))
+                        )
+                    }
                 }
                 if (false && progressMs > 0L) {
                     Text(
@@ -1309,6 +1367,7 @@ private fun VideoFileCard(
                     file = file,
                     onRemove = onRemove,
                     onDelete = onDelete,
+                    isFileUnavailable = isFileUnavailable,
                     iconTint = Color(0xFF5E576A)
                 )
             }
@@ -1363,10 +1422,12 @@ private fun VideoGridFileCard(
     file: LocalMediaFile,
     progressMs: Long,
     metadata: VideoMetadata?,
+    isFileUnavailable: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
     onMetadataLoaded: (String, VideoMetadata) -> Unit,
+    onAvailabilityChanged: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onDelete: () -> Unit,
     onOpenVideo: () -> Unit,
@@ -1377,7 +1438,11 @@ private fun VideoGridFileCard(
     val metaText = videoGridMetaText(file)
     val shouldShowProgress = progressMs >= 1_000L
     LaunchedEffect(file.id, metadata) {
-        if (metadata != null) return@LaunchedEffect
+        val isAvailable = withContext(Dispatchers.IO) {
+            isMediaFileReadable(context.applicationContext, file)
+        }
+        onAvailabilityChanged(!isAvailable)
+        if (!isAvailable || metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
             loadVideoMetadata(context.applicationContext, file.uri)
         }
@@ -1387,6 +1452,7 @@ private fun VideoGridFileCard(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
+            .alpha(if (isFileUnavailable) 0.58f else 1f)
             .background(if (isSelected) Color(0x44264D8D) else Color.Transparent)
             .combinedClickable(
                 onClick = onOpenVideo,
@@ -1401,7 +1467,8 @@ private fun VideoGridFileCard(
             Box {
                 VideoThumbnail(
                     metadata = metadata,
-                    durationMs = metadata?.durationMs,
+                    durationMs = if (isFileUnavailable) null else metadata?.durationMs,
+                    isUnavailable = isFileUnavailable,
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1.12f)
@@ -1422,7 +1489,8 @@ private fun VideoGridFileCard(
                         FileMoreMenu(
                             file = file,
                             onRemove = onRemove,
-                            onDelete = onDelete
+                            onDelete = onDelete,
+                            isFileUnavailable = isFileUnavailable
                         )
                     }
                 }
@@ -1438,7 +1506,15 @@ private fun VideoGridFileCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (metaText != null) {
+            if (isFileUnavailable) {
+                Text(
+                    text = "文件已失效",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFF97066),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else if (metaText != null) {
                 Text(
                     text = metaText,
                     style = MaterialTheme.typography.labelSmall,
@@ -1447,7 +1523,7 @@ private fun VideoGridFileCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (shouldShowProgress) {
+            if (!isFileUnavailable && shouldShowProgress) {
                 Text(
                     text = "上次 ${formatDuration(progressMs)}",
                     style = MaterialTheme.typography.labelSmall,
@@ -1464,6 +1540,7 @@ private fun VideoGridFileCard(
 private fun VideoThumbnail(
     metadata: VideoMetadata?,
     durationMs: Long? = null,
+    isUnavailable: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val bitmap = metadata?.thumbnail
@@ -1473,7 +1550,9 @@ private fun VideoThumbnail(
             .background(Color(0xFF151E2B)),
         contentAlignment = Alignment.Center
     ) {
-        if (bitmap != null) {
+        if (isUnavailable) {
+            VideoUnavailableThumbnail()
+        } else if (bitmap != null) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
@@ -1483,7 +1562,7 @@ private fun VideoThumbnail(
         } else {
             VideoThumbnailPlaceholder()
         }
-        if (durationMs != null && durationMs > 0L) {
+        if (!isUnavailable && durationMs != null && durationMs > 0L) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -1499,6 +1578,24 @@ private fun VideoThumbnail(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun VideoUnavailableThumbnail() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF252733)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "文件已失效",
+            color = Color(0xFFB8B3C6),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -1576,6 +1673,7 @@ private fun FileMoreMenu(
     file: LocalMediaFile,
     onRemove: () -> Unit,
     onDelete: () -> Unit,
+    isFileUnavailable: Boolean = false,
     iconTint: Color? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -1601,6 +1699,7 @@ private fun FileMoreMenu(
                     showRemoveConfirm = true
                 }
             )
+            if (!isFileUnavailable) {
             DropdownMenuItem(
                 text = { Text("永久删除文件") },
                 onClick = {
@@ -1608,6 +1707,7 @@ private fun FileMoreMenu(
                     showDeleteConfirm = true
                 }
             )
+            }
         }
     }
 
@@ -1747,4 +1847,12 @@ private fun LocalMediaType.displayName(): String {
 
 private fun Set<String>.toggle(value: String): Set<String> {
     return if (value in this) this - value else this + value
+}
+
+private fun isMediaFileReadable(context: android.content.Context, file: LocalMediaFile): Boolean {
+    return try {
+        context.contentResolver.openFileDescriptor(Uri.parse(file.uri), "r")?.use { true } == true
+    } catch (_: Exception) {
+        false
+    }
 }
