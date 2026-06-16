@@ -1136,7 +1136,8 @@ private fun LocalVideoPlayer(
                         onDragStart = { offset ->
                             isDragGestureBlocked = latestIsScreenLocked ||
                                 latestIsSpeedPanelVisible ||
-                                latestIsAbLoopBarVisible
+                                latestIsAbLoopBarVisible ||
+                                offset.y >= size.height - VIDEO_SYSTEM_GESTURE_BOTTOM_SAFE_DP.dp.toPx()
                             if (isDragGestureBlocked) {
                                 dragMode = VideoDragMode.UNKNOWN
                                 seekPreviewOverlay = null
@@ -7198,3 +7199,4 @@ private const val ERROR_HINT_MS = 1_400L
 private const val VIDEO_DOUBLE_TAP_SEEK_MS = 10_000L
 private const val VIDEO_GESTURE_DRAG_THRESHOLD_DP = 22f
 private const val VIDEO_GESTURE_HORIZONTAL_RATIO = 1.2f
+private const val VIDEO_SYSTEM_GESTURE_BOTTOM_SAFE_DP = 96
