@@ -503,3 +503,14 @@ adb shell monkey -p com.shenghui.localvibe 1
 - The effect toggle must bypass effects without clearing user parameters.
 - Video player `ON_STOP` must pause playback so returning to the desktop does not leave video audio playing.
 - Do not add sharpening, dark enhancement, advanced filters, or native decode changes as fake or partial features.
+
+## Video Playback Regression Review Notes
+
+- TODO-006 video playback regression review is complete after equalizer and picture adjustment changes.
+- Fixed double-tap seek regression: left-side double tap must really seek backward, right-side double tap must really seek forward, and the hint must not appear without an actual seek.
+- Fixed sleep timer end-of-current-video mode: `播完当前视频后停止` must stay independent from timed countdowns, must not fall back to 30 minutes, and should pause at current video end without auto-playing the next item.
+- Timed sleep options such as 30 minutes remain valid countdown modes and must not be removed while fixing end-of-current-video mode.
+- Fixed full-screen navigation gesture conflict: drags that start in the bottom system gesture safe area must not trigger player brightness, volume, horizontal seek, or other full-screen gestures.
+- Middle-screen gestures remain valid: left-side brightness, right-side volume, horizontal seek, and double-tap seek should continue to work outside the bottom system gesture area.
+- Current accepted background behavior: pressing Home pauses video playback, and returning to the app does not auto-resume; the user manually resumes playback.
+- Still deferred: subtitle time sync, two-finger zoom and more complex gestures, FFmpeg/mpv/native decoder work, advanced filters, sharpening, and dark enhancement. Do not document these as completed.

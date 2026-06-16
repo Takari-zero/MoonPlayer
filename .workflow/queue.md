@@ -142,7 +142,7 @@ d1b2022
 
 ### TODO-006 Video playback regression review
 
-Status: doing
+Status: done
 
 Goal:
 Review video playback after equalizer and picture adjustment changes.
@@ -169,3 +169,22 @@ Rules:
 * Only verify and document remaining video playback issues.
 
 Needs real-device confirmation: yes
+
+---
+
+### TODO-007 Video remaining feature planning
+
+Status: doing
+
+Goal:
+Review the remaining video-module features and decide the next work item.
+
+Rules:
+
+* Do not enter music or novel modules yet.
+* Do not start coding a new dialog or panel directly.
+* If the next item is a new dialog, panel, or complex UI, first ask the user to create a Stitch / Product Design mockup.
+* Keep all Codex descriptions in Chinese by default.
+* Preserve necessary English terms only when useful.
+
+Needs real-device confirmation: no
