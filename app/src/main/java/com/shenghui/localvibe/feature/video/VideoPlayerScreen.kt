@@ -7,6 +7,9 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.RenderEffect
 import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.media.audiofx.BassBoost
@@ -21,6 +24,7 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.TypedValue
+import android.view.LayoutInflater
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -294,6 +298,7 @@ private fun LocalVideoPlayer(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
     val audioManager = remember(context) {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -352,6 +357,7 @@ private fun LocalVideoPlayer(
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
     var isAbLoopBarVisible by remember { mutableStateOf(false) }
     var gestureSettings by remember { mutableStateOf(VideoGestureSettings()) }
+    var pictureAdjustmentSettings by remember { mutableStateOf(VideoPictureAdjustmentSettings()) }
     var audioSessionId by remember(mediaFile.uri) { mutableIntStateOf(C.AUDIO_SESSION_ID_UNSET) }
     var systemEqualizer by remember(mediaFile.uri) { mutableStateOf<Equalizer?>(null) }
     var systemBassBoost by remember(mediaFile.uri) { mutableStateOf<BassBoost?>(null) }
@@ -378,6 +384,9 @@ private fun LocalVideoPlayer(
     val latestSleepTimerMode by rememberUpdatedState(sleepTimerMode)
     val latestSleepTimerEndOfVideoEnabled by rememberUpdatedState(sleepTimerEndOfVideoEnabled)
     val latestGestureSettings by rememberUpdatedState(gestureSettings)
+    val pictureRenderEffect = remember(pictureAdjustmentSettings) {
+        pictureAdjustmentSettings.toAndroidRenderEffectOrNull()
+    }
     val latestShowControls by rememberUpdatedState(showControls)
     val latestIsScreenLocked by rememberUpdatedState(isScreenLocked)
     val latestIsSpeedPanelVisible by rememberUpdatedState(isSpeedPanelVisible)
@@ -418,6 +427,19 @@ private fun LocalVideoPlayer(
             latestPendingFolderSpeedSave?.let { pending ->
                 latestOnFolderPlaybackSpeedChanged(pending.first, pending.second)
             }
+        }
+    }
+
+    DisposableEffect(player, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                isPlaying = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -1210,19 +1232,28 @@ private fun LocalVideoPlayer(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
-                PlayerView(viewContext).apply {
+                (LayoutInflater.from(viewContext).inflate(
+                    com.shenghui.localvibe.R.layout.video_player_texture_view,
+                    null,
+                    false
+                ) as PlayerView).apply {
                     this.player = player
-                    useController = true
                     useController = false
                     resizeMode = videoResizeMode.playerResizeMode
                     setBackgroundColor(android.graphics.Color.BLACK)
                     applyVideoSubtitleStyle(subtitleStyleSettings)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        setRenderEffect(pictureRenderEffect)
+                    }
                 }
             },
             update = { playerView ->
                 playerView.player = player
                 playerView.resizeMode = videoResizeMode.playerResizeMode
                 playerView.applyVideoSubtitleStyle(subtitleStyleSettings)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    playerView.setRenderEffect(pictureRenderEffect)
+                }
             }
         )
 
@@ -1363,6 +1394,8 @@ private fun LocalVideoPlayer(
                 onQuickToolsExpandedChange = { isQuickToolsExpanded = it },
                 gestureSettings = gestureSettings,
                 onGestureSettingsChange = { gestureSettings = it },
+                pictureAdjustmentSettings = pictureAdjustmentSettings,
+                onPictureAdjustmentChange = { pictureAdjustmentSettings = it },
                 equalizerState = equalizerState,
                 onEqualizerBandLevelChange = ::setEqualizerBandLevel,
                 onEqualizerPresetSelected = ::applyEqualizerPreset,
@@ -1584,6 +1617,8 @@ private fun VideoControlOverlay(
     onQuickToolsExpandedChange: (Boolean) -> Unit,
     gestureSettings: VideoGestureSettings,
     onGestureSettingsChange: (VideoGestureSettings) -> Unit,
+    pictureAdjustmentSettings: VideoPictureAdjustmentSettings,
+    onPictureAdjustmentChange: (VideoPictureAdjustmentSettings) -> Unit,
     equalizerState: VideoEqualizerUiState,
     onEqualizerBandLevelChange: (Short, Short) -> Unit,
     onEqualizerPresetSelected: (VideoEqualizerPreset) -> Unit,
@@ -1609,6 +1644,7 @@ private fun VideoControlOverlay(
     var showControlSettingsPanel by remember { mutableStateOf(false) }
     var showGestureSettingsPanel by remember { mutableStateOf(false) }
     var showEqualizerPanel by remember { mutableStateOf(false) }
+    var showPictureAdjustmentPanel by remember { mutableStateOf(false) }
     var showAdvancedFuturePanel by remember { mutableStateOf(false) }
     var showTopToolbarSetting by remember { mutableStateOf(true) }
     var showBottomControlsSetting by remember { mutableStateOf(true) }
@@ -1791,6 +1827,24 @@ private fun VideoControlOverlay(
         showEqualizerPanel = true
     }
 
+    fun openPictureAdjustmentPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        showAbLoopPanel = false
+        showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showGestureSettingsPanel = false
+        showEqualizerPanel = false
+        showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
+        onQuickToolsExpandedChange(false)
+        showPictureAdjustmentPanel = true
+    }
+
     fun openAdvancedFuturePanel() {
         showSpeedPanel = false
         showResizePanel = false
@@ -1833,7 +1887,7 @@ private fun VideoControlOverlay(
         abLoopEditText = formatDuration(currentValueMs ?: currentPositionMs)
     }
 
-    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showEqualizerPanel || showAdvancedFuturePanel) {
+    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showEqualizerPanel || showPictureAdjustmentPanel || showAdvancedFuturePanel) {
         if (showSubtitleStylePanel) {
             showSubtitleStylePanel = false
         } else if (showDecodeFormatPanel) {
@@ -1844,6 +1898,8 @@ private fun VideoControlOverlay(
             showGestureSettingsPanel = false
         } else if (showEqualizerPanel) {
             showEqualizerPanel = false
+        } else if (showPictureAdjustmentPanel) {
+            showPictureAdjustmentPanel = false
         } else if (showAdvancedFuturePanel) {
             showAdvancedFuturePanel = false
         } else if (showAudioTrackPanel) {
@@ -1861,8 +1917,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showGestureSettingsPanel, showEqualizerPanel, showAdvancedFuturePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showEqualizerPanel || showAdvancedFuturePanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showGestureSettingsPanel, showEqualizerPanel, showPictureAdjustmentPanel, showAdvancedFuturePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showEqualizerPanel || showPictureAdjustmentPanel || showAdvancedFuturePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1879,6 +1935,7 @@ private fun VideoControlOverlay(
             showControlSettingsPanel -> showControlSettingsPanel = false
             showGestureSettingsPanel -> showGestureSettingsPanel = false
             showEqualizerPanel -> showEqualizerPanel = false
+            showPictureAdjustmentPanel -> showPictureAdjustmentPanel = false
             showAdvancedFuturePanel -> showAdvancedFuturePanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
             showSleepTimerPanel -> closeSleepTimerPanel()
@@ -1904,6 +1961,7 @@ private fun VideoControlOverlay(
         showControlSettingsPanel ||
         showGestureSettingsPanel ||
         showEqualizerPanel ||
+        showPictureAdjustmentPanel ||
         showAdvancedFuturePanel ||
         isQuickToolsExpanded
 
@@ -1925,7 +1983,7 @@ private fun VideoControlOverlay(
                 }
             )
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showGestureSettingsPanel && !showEqualizerPanel && !showAdvancedFuturePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showGestureSettingsPanel && !showEqualizerPanel && !showPictureAdjustmentPanel && !showAdvancedFuturePanel
 
         if (ordinaryControlsVisible && showTopToolbarSetting) {
             Box(
@@ -2285,6 +2343,22 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showPictureAdjustmentPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showPictureAdjustmentPanel = false }
+            )
+            VideoPictureAdjustmentPanel(
+                settings = pictureAdjustmentSettings,
+                onSettingsChange = onPictureAdjustmentChange,
+                onDismiss = { showPictureAdjustmentPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 12.dp, bottom = 8.dp)
+            )
+        }
+
         if (showAdvancedFuturePanel) {
             Box(
                 modifier = Modifier
@@ -2369,6 +2443,11 @@ private fun VideoControlOverlay(
                         icon = Icons.Filled.Tune,
                         label = "均衡器",
                         onClick = { openEqualizerPanel() }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Brightness6,
+                        label = "画调",
+                        onClick = { openPictureAdjustmentPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Memory,
@@ -4352,6 +4431,48 @@ private data class VideoGestureSettings(
     val showHints: Boolean = true
 )
 
+private enum class VideoPicturePreset(
+    val label: String,
+    val brightnessPercent: Int,
+    val contrastPercent: Int,
+    val saturationPercent: Int,
+    val temperatureStep: Int
+) {
+    Default("默认", 100, 100, 100, 0),
+    Bright("明亮", 116, 106, 106, -1),
+    Cinema("影院", 94, 116, 92, 1),
+    EyeCare("护眼", 98, 94, 88, 2),
+    Vivid("鲜艳", 106, 112, 132, -1)
+}
+
+private data class VideoPictureAdjustmentSettings(
+    val enabled: Boolean = true,
+    val selectedPreset: VideoPicturePreset? = VideoPicturePreset.Default,
+    val brightnessPercent: Int = 100,
+    val contrastPercent: Int = 100,
+    val saturationPercent: Int = 100,
+    val temperatureStep: Int = 0
+) {
+    fun withPreset(preset: VideoPicturePreset): VideoPictureAdjustmentSettings = copy(
+        enabled = true,
+        selectedPreset = preset,
+        brightnessPercent = preset.brightnessPercent,
+        contrastPercent = preset.contrastPercent,
+        saturationPercent = preset.saturationPercent,
+        temperatureStep = preset.temperatureStep
+    )
+
+    fun withoutPreset(): VideoPictureAdjustmentSettings = copy(selectedPreset = null)
+
+    fun reset(): VideoPictureAdjustmentSettings = VideoPictureAdjustmentSettings().withPreset(VideoPicturePreset.Default)
+
+    val isNeutral: Boolean
+        get() = brightnessPercent == 100 &&
+            contrastPercent == 100 &&
+            saturationPercent == 100 &&
+            temperatureStep == 0
+}
+
 private enum class VideoEqualizerStatus {
     WAITING_SESSION,
     AVAILABLE,
@@ -4419,6 +4540,329 @@ private data class VideoAudioEffectStrengthUiState(
             supported = true,
             message = "可用",
             percent = percent.coerceIn(0, 100)
+        )
+    }
+}
+
+@Composable
+private fun VideoPictureAdjustmentPanel(
+    settings: VideoPictureAdjustmentSettings,
+    onSettingsChange: (VideoPictureAdjustmentSettings) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val renderSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val controlsEnabled = renderSupported && settings.enabled
+    Column(
+        modifier = modifier
+            .width(352.dp)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(18.dp))
+            .background(PlayerPanelDark)
+            .clickable(onClick = {})
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Tune,
+                    contentDescription = null,
+                    tint = VideoLibrarySelectionPurple,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "画面调节",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("效果", color = Color.White.copy(alpha = 0.68f), style = MaterialTheme.typography.labelSmall)
+                VideoPictureEffectToggle(
+                    checked = settings.enabled,
+                    enabled = renderSupported,
+                    onCheckedChange = { onSettingsChange(settings.copy(enabled = it)) }
+                )
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "关闭",
+                        tint = Color.White.copy(alpha = 0.76f)
+                    )
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            if (!renderSupported) {
+                VideoPictureUnsupportedCard()
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    text = "画面预设",
+                    color = Color.White.copy(alpha = 0.48f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    VideoPicturePreset.values().forEach { preset ->
+                        VideoPicturePresetChip(
+                            preset = preset,
+                            selected = settings.selectedPreset == preset,
+                            enabled = renderSupported,
+                            onClick = { onSettingsChange(settings.withPreset(preset)) }
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = "细致微调",
+                color = Color.White.copy(alpha = 0.48f),
+                style = MaterialTheme.typography.labelSmall
+            )
+            VideoPictureAdjustmentSliderRow(
+                sliderKey = "picture-brightness",
+                title = "亮度",
+                valueText = "${settings.brightnessPercent}%",
+                value = settings.brightnessPercent.toFloat(),
+                valueRange = 70f..130f,
+                enabled = controlsEnabled,
+                onValueChange = { next ->
+                    onSettingsChange(
+                        settings.copy(brightnessPercent = round(next).toInt().coerceIn(70, 130)).withoutPreset()
+                    )
+                }
+            )
+            VideoPictureAdjustmentSliderRow(
+                sliderKey = "picture-contrast",
+                title = "对比度",
+                valueText = "${settings.contrastPercent}%",
+                value = settings.contrastPercent.toFloat(),
+                valueRange = 70f..130f,
+                enabled = controlsEnabled,
+                onValueChange = { next ->
+                    onSettingsChange(
+                        settings.copy(contrastPercent = round(next).toInt().coerceIn(70, 130)).withoutPreset()
+                    )
+                }
+            )
+            VideoPictureAdjustmentSliderRow(
+                sliderKey = "picture-saturation",
+                title = "饱和度",
+                valueText = "${settings.saturationPercent}%",
+                value = settings.saturationPercent.toFloat(),
+                valueRange = 50f..150f,
+                enabled = controlsEnabled,
+                onValueChange = { next ->
+                    onSettingsChange(
+                        settings.copy(saturationPercent = round(next).toInt().coerceIn(50, 150)).withoutPreset()
+                    )
+                }
+            )
+            VideoPictureAdjustmentSliderRow(
+                sliderKey = "picture-temperature",
+                title = "色温",
+                valueText = settings.temperatureStep.temperatureLabel(),
+                value = settings.temperatureStep.toFloat(),
+                valueRange = -2f..2f,
+                enabled = controlsEnabled,
+                onValueChange = { next ->
+                    onSettingsChange(
+                        settings.copy(temperatureStep = round(next).toInt().coerceIn(-2, 2)).withoutPreset()
+                    )
+                }
+            )
+            Text(
+                text = "仅调整当前播放页画面显示，不修改原视频文件。",
+                color = Color.White.copy(alpha = 0.42f),
+                style = MaterialTheme.typography.labelSmall,
+                lineHeight = 15.sp
+            )
+        }
+
+        TextButton(
+            onClick = onDismiss,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.textButtonColors(
+                containerColor = VideoLibrarySelectionPurple.copy(alpha = VideoLibrarySelectionContainerAlpha),
+                contentColor = Color.White
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+        ) {
+            Text("完成", fontWeight = FontWeight.SemiBold)
+        }
+        TextButton(
+            onClick = { onSettingsChange(settings.reset()) },
+            enabled = renderSupported,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .padding(bottom = 4.dp)
+        ) {
+            Text(
+                "恢复默认设置",
+                color = Color.White.copy(alpha = 0.58f),
+                lineHeight = 16.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoPicturePresetChip(
+    preset: VideoPicturePreset,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .height(26.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                when {
+                    !enabled -> Color.White.copy(alpha = 0.035f)
+                    selected -> VideoLibrarySelectionPurple.copy(alpha = VideoLibrarySelectionContainerAlpha)
+                    else -> Color.White.copy(alpha = 0.055f)
+                }
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = preset.label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = when {
+                !enabled -> Color.White.copy(alpha = 0.32f)
+                selected -> Color.White
+                else -> Color.White.copy(alpha = 0.76f)
+            },
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun VideoPictureAdjustmentSliderRow(
+    sliderKey: Any,
+    title: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    enabled: Boolean,
+    onValueChange: (Float) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(34.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = title,
+            color = Color.White.copy(alpha = if (enabled) 0.76f else 0.42f),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.width(48.dp)
+        )
+        ThinEqualizerSlider(
+            sliderKey = sliderKey,
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            enabled = enabled,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = valueText,
+            color = Color.White.copy(alpha = if (enabled) 0.72f else 0.38f),
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.width(48.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoPictureEffectToggle(
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .width(38.dp)
+            .height(20.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                when {
+                    !enabled -> Color.White.copy(alpha = 0.10f)
+                    checked -> VideoLibrarySelectionPurple.copy(alpha = 0.72f)
+                    else -> Color.White.copy(alpha = 0.14f)
+                }
+            )
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(horizontal = 3.dp),
+        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = if (enabled) 0.94f else 0.42f))
+        )
+    }
+}
+
+@Composable
+private fun VideoPictureUnsupportedCard() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.045f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = "当前系统版本暂不支持画面滤镜",
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = "画面调节依赖 Android 12 及以上系统渲染层能力；本页不会显示假成功。",
+            color = Color.White.copy(alpha = 0.48f),
+            style = MaterialTheme.typography.labelSmall,
+            lineHeight = 15.sp
         )
     }
 }
@@ -4716,7 +5160,8 @@ private fun ThinEqualizerSlider(
     onValueChange: (Float) -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    sliderKey: Any = Unit
 ) {
     val safeStart = valueRange.start
     val safeEnd = if (valueRange.endInclusive > valueRange.start) {
@@ -4736,7 +5181,7 @@ private fun ThinEqualizerSlider(
         modifier = modifier
             .fillMaxWidth()
             .height(touchHeight)
-            .pointerInput(enabled, safeStart, safeEnd) {
+            .pointerInput(sliderKey, enabled, safeStart, safeEnd) {
                 if (!enabled) return@pointerInput
 
                 fun updateFromX(x: Float) {
@@ -4987,7 +5432,6 @@ private fun VideoAdvancedFuturePanel(
     modifier: Modifier = Modifier
 ) {
     SidePanelShell(title = "后续专项", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
-        VideoFutureItem("画面调节", "对比度、饱和度、锐化等需要可靠渲染链路；当前不做假成功。")
         VideoFutureItem("字幕时间同步", "Media3 原生字幕链路未接入真实时间轴偏移，继续后置。")
     }
 }
@@ -6163,6 +6607,48 @@ private fun Float.toEqualizerBandLevel(minLevel: Short, maxLevel: Short): Short 
         .toInt()
         .coerceIn(minLevel.toInt(), maxLevel.toInt())
         .toShort()
+}
+
+private fun VideoPictureAdjustmentSettings.toAndroidRenderEffectOrNull(): RenderEffect? {
+    if (!enabled || isNeutral || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+    val saturation = saturationPercent / 100f
+    val contrast = contrastPercent / 100f
+    val brightnessOffset = (brightnessPercent - 100) * 1.6f
+    val contrastOffset = (1f - contrast) * 127.5f + brightnessOffset
+    val temperature = temperatureStep.coerceIn(-2, 2) / 2f
+
+    val matrix = ColorMatrix().apply {
+        setSaturation(saturation)
+    }
+    val contrastMatrix = ColorMatrix(
+        floatArrayOf(
+            contrast, 0f, 0f, 0f, contrastOffset,
+            0f, contrast, 0f, 0f, contrastOffset,
+            0f, 0f, contrast, 0f, contrastOffset,
+            0f, 0f, 0f, 1f, 0f
+        )
+    )
+    matrix.postConcat(contrastMatrix)
+
+    if (temperature != 0f) {
+        val redScale = (1f + temperature * 0.10f).coerceIn(0.82f, 1.18f)
+        val greenScale = (1f + kotlin.math.abs(temperature) * 0.02f).coerceIn(0.90f, 1.08f)
+        val blueScale = (1f - temperature * 0.12f).coerceIn(0.78f, 1.22f)
+        val temperatureMatrix = ColorMatrix().apply {
+            setScale(redScale, greenScale, blueScale, 1f)
+        }
+        matrix.postConcat(temperatureMatrix)
+    }
+
+    return RenderEffect.createColorFilterEffect(ColorMatrixColorFilter(matrix))
+}
+
+private fun Int.temperatureLabel(): String = when (coerceIn(-2, 2)) {
+    -2 -> "偏冷"
+    -1 -> "微冷"
+    0 -> "标准"
+    1 -> "微暖"
+    else -> "偏暖"
 }
 
 private fun formatEqualizerFrequencyHz(hz: Float): String {
