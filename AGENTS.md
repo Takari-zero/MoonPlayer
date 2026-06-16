@@ -1,17 +1,17 @@
-# LocalVibe / Moon 播放器项目规则
+# LocalVibe / Moon Player Project Rules
 
-1. 视频模块未完成前，不主动进入音乐 / 小说模块。
-2. 不允许假成功：未真实生效的功能不能写成“已完成 / 已开启 / 设置成功”。
-3. 高风险功能不能一句“后置”就跳过，必须拆解风险、调研可行方案、查开源参考，并给出小步试验路线。
-4. UI 反复不满意时，不要继续直接写代码，应先重新确认效果图和交互目标。
-5. 新弹窗、新面板、新复杂 UI 开发前，必须先提醒用户使用 Stitch / Product Design 生成 UI 效果图。
-6. 用户发送效果图或截图后，再让 Codex 按图落地。
-7. 每轮只改用户明确允许的文件。
-8. 不允许自动提交，除非用户明确要求。
-9. 不允许自动 push。
-10. 真机功能必须等待用户确认，包括播放器 UI、弹窗 / 面板、手势、字幕、睡眠、AB 循环、均衡器声音、删除 / 移除。
-11. ADB 固定使用 `E:\Android\platform-tools\adb.exe -P 62001`。
-12. logcat 只把 `Process: com.shenghui.localvibe` 的崩溃视为 App 崩溃。
-13. 系统 / MIUI / 其它进程日志不要误判为 App 崩溃。
-14. 不要新增依赖 / 权限 / Gradle 改动，除非任务明确允许。
-15. 每次完成任务后必须输出：开始状态、修改说明、未改动确认、测试结果、需要用户确认项。
+1. Do not move into music or novel modules before the video module is completed.
+2. Do not fake success. A feature that is not truly working must not be reported as completed.
+3. High-risk work must not be skipped with a simple "defer it". It must be split, researched, and validated in small steps.
+4. When UI feedback repeats, do not keep coding blindly. Confirm the intended visual design and interaction first.
+5. Before building a new dialog, panel, or complex UI, remind the user to create a mockup with Stitch or Product Design first.
+6. Implement new UI only after the user confirms the mockup or screenshot.
+7. Modify only the files explicitly allowed by the current task.
+8. Do not auto-commit unless the user explicitly asks.
+9. Do not auto-push.
+10. Real-device behavior requires user confirmation, including player UI, dialogs, panels, gestures, subtitles, sleep timer, AB repeat, equalizer audio, deletion, and removal.
+11. ADB must use E:\Android\platform-tools\adb.exe -P 62001.
+12. Treat only crashes with `Process: com.shenghui.localvibe` as app crashes.
+13. Do not misread system, MIUI, or other-process logs as app crashes.
+14. Do not add dependencies, permissions, or Gradle changes unless the task explicitly allows them.
+15. Every task result must include start status, changes made, unchanged confirmation, test results, and user confirmation items.

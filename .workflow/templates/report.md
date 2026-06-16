@@ -1,17 +1,17 @@
-# 自动任务报告
+# Workflow Task Report
 
-* 任务编号：
-* 任务名称：
-* 当前分支：
-* 当前 HEAD：
-* 是否 clean：
-* 修改文件：
-* 编译结果：
-* 安装结果：
-* 启动结果：
-* logcat 结果：
-* 是否有 App 崩溃：
-* 是否需要用户手动确认：
-* 是否建议提交：
-* 建议提交信息：
-* 下一步：
+* Task id:
+* Task name:
+* Branch:
+* HEAD:
+* Working tree clean:
+* Modified files:
+* Build result:
+* Install result:
+* Launch result:
+* Logcat result:
+* App crash:
+* User confirmation required:
+* Suggested commit:
+* Suggested commit message:
+* Next step:

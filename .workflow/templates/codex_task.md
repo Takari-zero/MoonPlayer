@@ -1,47 +1,47 @@
-# Codex 任务模板
+# Codex Task Template
 
-## 当前任务
+## Current task
 
-从 `.workflow/state.json` 读取 `currentTask`。
-从 `.workflow/queue.md` 找到对应任务内容。
+Read currentTask from .workflow/state.json.
+Find the corresponding task in .workflow/queue.md.
 
-## 开始前检查
+## Pre-flight checks
 
-必须执行：
+Run:
 
-* `git status`
-* `git rev-parse --abbrev-ref HEAD`
-* `git rev-parse --short HEAD`
+* git status
+* git rev-parse --abbrev-ref HEAD
+* git rev-parse --short HEAD
 
-如果工作区不 clean，停止。
+Stop if the working tree is not clean, unless the task explicitly allows the current dirty files.
 
-## 工作边界
+## Work boundary
 
-* 只改当前任务允许文件
-* 不改禁止文件
-* 不提交
-* 不 push
-* 不假成功
+* Modify only allowed files.
+* Do not modify forbidden files.
+* Do not commit.
+* Do not push.
+* Do not fake success.
 
-## UI 规则
+## UI rule
 
-新弹窗、新面板、新复杂 UI 开发前，必须先提醒用户使用 Stitch / Product Design 生成 UI 效果图。
-用户确认效果图后再实现。
+Before building any new dialog, new panel, or complex UI, remind the user to create a Stitch or Product Design mockup first.
+Implement only after the user confirms the mockup or screenshot.
 
-## 测试要求
+## Android test flow
 
-Android 项目默认执行：
+Default Android checks:
 
-* `.\gradlew.bat :app:assembleDebug --console=plain`
-* `adb -P 62001 install`
-* `adb -P 62001 shell monkey`
+* .\gradlew.bat :app:assembleDebug --console=plain
+* E:\Android\platform-tools\adb.exe -P 62001 install
+* E:\Android\platform-tools\adb.exe -P 62001 shell monkey
 
-## 输出格式
+## Output format
 
-一、开始状态
-二、当前任务
-三、修改说明
-四、未改动确认
-五、测试结果
-六、需要用户确认
-七、下一步建议
+1. Start status
+2. Current task
+3. Changes made
+4. Unchanged confirmation
+5. Test results
+6. Items requiring user confirmation
+7. Recommended next step
