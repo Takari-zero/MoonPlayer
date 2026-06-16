@@ -76,7 +76,7 @@ Needs real-device confirmation: no
 
 ### TODO-003 New UI mockup reminder
 
-Status: doing
+Status: done
 
 Goal:
 Before any new dialog, panel, or complex UI work, remind the user to create a Stitch or Product Design mockup first.
@@ -96,7 +96,7 @@ Needs real-device confirmation: no
 
 ### TODO-004 Video picture adjustment first real version
 
-Status: todo
+Status: doing
 
 Goal:
 Before implementation, ask the user to create a Stitch or Product Design mockup for the dialog or panel.
