@@ -525,3 +525,15 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Do not claim embedded subtitles or ASS/SSA full sync are supported unless their rendering path is truly implemented and verified.
 - Sync failures should show a clear error and suggest reloading the subtitle file; never fake success.
 - Local validation files such as `test_subtitle_sync.srt` may be used during manual testing, but test SRT files must not be committed.
+
+## Unavailable Video File State Notes
+
+- Video unavailable-file state first version is complete.
+- Current coverage: video folder detail list, video folder detail grid, click interception for unavailable videos, and existing remove-from-list flow.
+- Detection is intentionally lightweight: check whether the video URI is still readable with `contentResolver.openFileDescriptor(uri, "r")`.
+- Do not add permissions, do not run full-disk validation, and do not change the scanner architecture for this state.
+- UI behavior: unavailable video rows/cards are dimmed, the thumbnail area shows `文件已失效`, and the metadata line shows `文件已失效`.
+- Interaction behavior: tapping an unavailable video must not enter the player; show `文件已失效，可从列表移除`.
+- Unavailable videos may reuse remove-from-list. Do not show `永久删除文件` for an unavailable item, and do not report a fake permanent delete success for a file that no longer exists.
+- Regression boundaries: do not let unavailable videos behave like normal playable videos, do not add heavy checks that make list scrolling or folder entry slow, and do not change music or novel modules.
+- Deferred enhancements: batch unavailable-file cleanup, a unified unavailable-file management view, and automatic cleanup after rescan.
