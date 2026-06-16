@@ -514,3 +514,14 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Middle-screen gestures remain valid: left-side brightness, right-side volume, horizontal seek, and double-tap seek should continue to work outside the bottom system gesture area.
 - Current accepted background behavior: pressing Home pauses video playback, and returning to the app does not auto-resume; the user manually resumes playback.
 - Still deferred: subtitle time sync, two-finger zoom and more complex gestures, FFmpeg/mpv/native decoder work, advanced filters, sharpening, and dark enhancement. Do not document these as completed.
+
+## External SRT Subtitle Sync Notes
+
+- External SRT subtitle time sync first version is complete for manually selected `.srt` subtitles.
+- Supported scope: whole-subtitle offset from `-5s` to `+5s`, quick buttons (`-1s`, `-0.5s`, reset, `+0.5s`, `+1s`), thin slider control, and reset to `0s`.
+- Implementation boundary: read the selected external SRT, parse cue timestamps, apply one global offset, clamp times below `0` to `0`, write an adjusted temporary SRT under app cache, and reload it through `MediaItem.SubtitleConfiguration` while preserving playback position and playback state as much as possible.
+- Do not regress this feature back to a "future" placeholder, and do not implement a UI-only number that does not change the rendered subtitle timing.
+- Unsupported cases remain explicit: embedded subtitles, ASS/SSA advanced subtitle sync, and universal subtitle sync are not completed.
+- Do not claim embedded subtitles or ASS/SSA full sync are supported unless their rendering path is truly implemented and verified.
+- Sync failures should show a clear error and suggest reloading the subtitle file; never fake success.
+- Local validation files such as `test_subtitle_sync.srt` may be used during manual testing, but test SRT files must not be committed.

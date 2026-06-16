@@ -239,7 +239,7 @@ Needs real-device confirmation: no
 
 ### TODO-009 Subtitle sync panel mockup request
 
-Status: doing
+Status: done
 
 Goal:
 Ask the user to create a Stitch / Product Design mockup for the subtitle time sync panel before implementation.
@@ -270,3 +270,48 @@ Rules:
 * Use Chinese for future Codex task descriptions by default.
 
 Needs real-device confirmation: no
+
+---
+
+### TODO-010 External SRT subtitle offset first real version
+
+Status: done
+
+Goal:
+Implement the first real subtitle time sync version for manually selected external SRT subtitles.
+
+Completed scope:
+
+* External .srt only
+* Offset range -5s to +5s
+* Quick buttons and thin slider
+* Temporary adjusted SRT file
+* Reload subtitle configuration
+* Preserve playback position/state as much as possible
+* Clear unsupported cases without fake success
+
+Unsupported:
+
+* Embedded subtitles
+* ASS / SSA advanced subtitles
+* Universal subtitle sync
+
+---
+
+### TODO-011 Video subtitle sync regression review
+
+Status: doing
+
+Goal:
+Verify external SRT subtitle sync on a real device and document any remaining issues.
+
+Scope:
+
+* Load external SRT
+* Test +1s / -1s / reset
+* Test slider offset
+* Confirm subtitles still display
+* Confirm unsupported embedded/non-SRT cases do not show fake success
+* Confirm playback, subtitle style, AB, sleep, gestures, equalizer, and picture adjustment do not regress
+
+Needs real-device confirmation: yes
