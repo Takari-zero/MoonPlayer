@@ -174,7 +174,7 @@ Needs real-device confirmation: yes
 
 ### TODO-007 Video remaining feature planning
 
-Status: doing
+Status: done
 
 Goal:
 Review the remaining video-module features and decide the next work item.
@@ -186,5 +186,51 @@ Rules:
 * If the next item is a new dialog, panel, or complex UI, first ask the user to create a Stitch / Product Design mockup.
 * Keep all Codex descriptions in Chinese by default.
 * Preserve necessary English terms only when useful.
+
+Needs real-device confirmation: no
+
+---
+
+### TODO-008 Video subtitle time sync feasibility review
+
+Status: doing
+
+Goal:
+Review the real feasibility of subtitle time synchronization before implementation.
+
+Scope:
+
+* Check current subtitle sources and rendering path.
+* Check whether Media3 subtitle offset is supported in the current architecture.
+* Check whether external subtitle parsing can safely support offset.
+* Identify the smallest safe implementation path.
+* Identify risks and unsupported cases.
+* Do not create fake sliders or fake success.
+* Do not implement UI in this task.
+* Do not modify app code in this task.
+
+Rules:
+
+* Do not enter music or novel modules.
+* Do not implement a subtitle sync panel yet.
+* If a new subtitle sync panel is needed later, ask the user to create a Stitch / Product Design mockup first.
+* Use Chinese for future Codex task descriptions by default.
+* Preserve necessary English technical terms only when useful.
+
+Allowed files:
+
+* docs/DEVELOPMENT_PITFALLS.md
+* docs/PROJECT_ROADMAP.md
+* docs/MODULE_TECH_STACK.md
+* .workflow/queue.md
+* .workflow/state.json
+
+Forbidden files:
+
+* app/**
+* gradle/**
+* build.gradle
+* settings.gradle
+* AndroidManifest.xml
 
 Needs real-device confirmation: no
