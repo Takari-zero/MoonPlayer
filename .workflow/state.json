@@ -1,7 +1,7 @@
 ﻿{
   "project": "LocalVibe",
   "module": "video",
-  "currentTask": "TODO-001",
+  "currentTask": "TODO-002",
   "adbPath": "E:\\Android\\platform-tools\\adb.exe",
   "adbPort": 62001,
   "requireUserConfirmationBeforeCommit": true,

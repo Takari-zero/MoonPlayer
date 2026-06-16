@@ -4,7 +4,7 @@
 
 ### TODO-001 Workflow smoke test
 
-Status: doing
+Status: done
 
 Goal:
 Verify the local workflow scripts:
@@ -43,7 +43,7 @@ Needs real-device confirmation: no
 
 ### TODO-002 Equalizer documentation sync
 
-Status: todo
+Status: doing
 
 Goal:
 Document the completed system equalizer panel:
