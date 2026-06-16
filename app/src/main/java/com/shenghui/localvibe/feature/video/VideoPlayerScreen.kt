@@ -9,6 +9,9 @@ import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer
+import android.media.audiofx.Virtualizer
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -26,8 +29,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -86,6 +92,7 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -158,15 +165,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 import kotlin.math.round
+import kotlin.math.roundToInt
 
 private val PlayerMoonPurple = Color(0xFF7B55FF)
 private val PlayerMoonPurpleSoft = Color(0xFFB7A7FF)
+private val VideoLibrarySelectionPurple = Color(0xFF8B5CFF)
+private const val VideoLibrarySelectionContainerAlpha = 0.34f
 private val PlayerPanelDark = Color(0xE60B0A12)
 private val PlayerPanelStroke = Color(0x30B7A7FF)
 private val PlayerTrackInactive = Color(0xFF3A3449)
 private val VideoFolderPlaybackSpeeds = mutableMapOf<String, Float>()
 private const val VIDEO_SEEK_END_GUARD_MS = 500L
 private const val PLAYER_SIDE_PANEL_HEIGHT_FRACTION = 0.96f
+private const val VIDEO_EQUALIZER_PRIORITY = 0
+private const val VIDEO_AUDIO_EFFECT_MAX_STRENGTH = 1000
+private val VIDEO_EQUALIZER_TARGET_FREQ_HZ = listOf(60f, 230f, 910f, 4_000f, 14_000f)
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -339,6 +352,17 @@ private fun LocalVideoPlayer(
     var isSpeedPanelVisible by remember { mutableStateOf(false) }
     var isAbLoopBarVisible by remember { mutableStateOf(false) }
     var gestureSettings by remember { mutableStateOf(VideoGestureSettings()) }
+    var audioSessionId by remember(mediaFile.uri) { mutableIntStateOf(C.AUDIO_SESSION_ID_UNSET) }
+    var systemEqualizer by remember(mediaFile.uri) { mutableStateOf<Equalizer?>(null) }
+    var systemBassBoost by remember(mediaFile.uri) { mutableStateOf<BassBoost?>(null) }
+    var systemVirtualizer by remember(mediaFile.uri) { mutableStateOf<Virtualizer?>(null) }
+    var equalizerState by remember(mediaFile.uri) { mutableStateOf(VideoEqualizerUiState.waiting()) }
+    var equalizerWantedEnabled by remember(mediaFile.uri) { mutableStateOf(false) }
+    var equalizerSelectedPreset by remember(mediaFile.uri) { mutableStateOf<VideoEqualizerPreset?>(VideoEqualizerPreset.Normal) }
+    var bassBoostState by remember(mediaFile.uri) { mutableStateOf(VideoAudioEffectStrengthUiState.waiting()) }
+    var bassBoostPercent by remember(mediaFile.uri) { mutableIntStateOf(0) }
+    var virtualizerState by remember(mediaFile.uri) { mutableStateOf(VideoAudioEffectStrengthUiState.waiting()) }
+    var virtualizerPercent by remember(mediaFile.uri) { mutableIntStateOf(0) }
     var closeAbLoopBarRequest by remember { mutableIntStateOf(0) }
     var keepControlsVisible by remember { mutableStateOf(false) }
     var isScreenLocked by remember(mediaFile.uri) { mutableStateOf(false) }
@@ -590,6 +614,146 @@ private fun LocalVideoPlayer(
         showVideoPlayerToast(context, "已关闭 AB 循环")
     }
 
+    fun refreshEqualizerState() {
+        val equalizer = systemEqualizer
+        equalizerState = if (equalizer == null) {
+            if (audioSessionId.isValidVideoAudioSessionId()) {
+                equalizerState
+            } else {
+                VideoEqualizerUiState.waiting()
+            }
+        } else {
+            equalizer.toVideoEqualizerUiState(
+                wantedEnabled = equalizerWantedEnabled,
+                selectedPreset = equalizerSelectedPreset
+            )
+        }
+        bassBoostState = systemBassBoost?.toVideoAudioEffectStrengthUiState(
+            percent = bassBoostPercent,
+            unsupportedMessage = "当前设备不支持低音增强"
+        ) ?: if (audioSessionId.isValidVideoAudioSessionId()) {
+            bassBoostState
+        } else {
+            VideoAudioEffectStrengthUiState.waiting()
+        }
+        virtualizerState = systemVirtualizer?.toVideoAudioEffectStrengthUiState(
+            percent = virtualizerPercent,
+            unsupportedMessage = "当前设备不支持环境声"
+        ) ?: if (audioSessionId.isValidVideoAudioSessionId()) {
+            virtualizerState
+        } else {
+            VideoAudioEffectStrengthUiState.waiting()
+        }
+    }
+
+    fun setEqualizerEnabled(enabled: Boolean) {
+        val equalizer = systemEqualizer
+        if (equalizer == null) {
+            equalizerWantedEnabled = false
+            showVideoPlayerToast(context, equalizerState.message)
+            return
+        }
+        runCatching {
+            equalizer.enabled = enabled
+            equalizerWantedEnabled = enabled
+            refreshEqualizerState()
+        }.onFailure {
+            equalizerWantedEnabled = false
+            equalizerState = VideoEqualizerUiState.unsupported("均衡器开关失败")
+            showVideoPlayerToast(context, "当前设备不支持系统均衡器")
+        }
+    }
+
+    fun setEqualizerBandLevel(bandIndex: Short, level: Short) {
+        val equalizer = systemEqualizer ?: return
+        runCatching {
+            equalizer.enabled = true
+            equalizerWantedEnabled = true
+            equalizerSelectedPreset = null
+            equalizer.setBandLevel(bandIndex, level)
+            refreshEqualizerState()
+        }.onFailure {
+            equalizerState = VideoEqualizerUiState.unsupported("频段调节失败")
+            showVideoPlayerToast(context, "均衡器频段调节失败")
+        }
+    }
+
+    fun applyEqualizerPreset(preset: VideoEqualizerPreset) {
+        val equalizer = systemEqualizer ?: return
+        runCatching {
+            equalizer.applyVideoEqualizerPreset(preset)
+            equalizerSelectedPreset = preset
+            equalizerWantedEnabled = true
+            equalizer.enabled = true
+            refreshEqualizerState()
+        }.onFailure {
+            equalizerState = VideoEqualizerUiState.unsupported("预设应用失败")
+            showVideoPlayerToast(context, "均衡器预设应用失败")
+        }
+    }
+
+    fun setBassBoostStrength(percent: Int) {
+        val bassBoost = systemBassBoost
+        if (bassBoost == null || !bassBoostState.supported) {
+            showVideoPlayerToast(context, bassBoostState.message)
+            return
+        }
+        runCatching {
+            val safePercent = percent.coerceIn(0, 100)
+            bassBoostPercent = safePercent
+            bassBoost.setStrength(safePercent.toAudioEffectStrength())
+            bassBoost.enabled = safePercent > 0
+            refreshEqualizerState()
+        }.onFailure {
+            bassBoostState = VideoAudioEffectStrengthUiState.unsupported("低音增强不可用")
+            showVideoPlayerToast(context, "低音增强不可用")
+        }
+    }
+
+    fun setVirtualizerStrength(percent: Int) {
+        val virtualizer = systemVirtualizer
+        if (virtualizer == null || !virtualizerState.supported) {
+            showVideoPlayerToast(context, virtualizerState.message)
+            return
+        }
+        runCatching {
+            val safePercent = percent.coerceIn(0, 100)
+            virtualizerPercent = safePercent
+            virtualizer.setStrength(safePercent.toAudioEffectStrength())
+            virtualizer.enabled = safePercent > 0
+            refreshEqualizerState()
+        }.onFailure {
+            virtualizerState = VideoAudioEffectStrengthUiState.unsupported("环境声不可用")
+            showVideoPlayerToast(context, "环境声不可用")
+        }
+    }
+
+    fun resetEqualizer() {
+        runCatching {
+            systemEqualizer?.let { equalizer ->
+                repeat(equalizer.numberOfBands.toInt()) { index ->
+                    equalizer.setBandLevel(index.toShort(), 0)
+                }
+                equalizerWantedEnabled = true
+                equalizer.enabled = true
+                equalizerSelectedPreset = VideoEqualizerPreset.Normal
+            }
+            systemBassBoost?.let { bassBoost ->
+                bassBoost.setStrength(0)
+                bassBoost.enabled = false
+                bassBoostPercent = 0
+            }
+            systemVirtualizer?.let { virtualizer ->
+                virtualizer.setStrength(0)
+                virtualizer.enabled = false
+                virtualizerPercent = 0
+            }
+            refreshEqualizerState()
+        }.onFailure {
+            showVideoPlayerToast(context, "均衡器恢复默认失败")
+        }
+    }
+
     LaunchedEffect(gestureOverlay) {
         if (gestureOverlay != null) {
             delay(GESTURE_HINT_MS)
@@ -718,13 +882,116 @@ private fun LocalVideoPlayer(
                     ERROR_HINT_MS
                 )
             }
+
+            override fun onAudioSessionIdChanged(newAudioSessionId: Int) {
+                audioSessionId = newAudioSessionId
+            }
         }
         player.addListener(listener)
+        audioSessionId = player.audioSessionId
         onDispose {
             player.removeListener(listener)
             saveCurrentProgress()
             Handler(Looper.getMainLooper()).post {
                 player.release()
+            }
+        }
+    }
+
+    DisposableEffect(audioSessionId) {
+        val sessionId = audioSessionId
+        if (!sessionId.isValidVideoAudioSessionId()) {
+            systemEqualizer = null
+            systemBassBoost = null
+            systemVirtualizer = null
+            equalizerState = VideoEqualizerUiState.waiting()
+            bassBoostState = VideoAudioEffectStrengthUiState.waiting()
+            virtualizerState = VideoAudioEffectStrengthUiState.waiting()
+            onDispose { }
+        } else {
+            val createdEqualizer = runCatching {
+                Equalizer(VIDEO_EQUALIZER_PRIORITY, sessionId).apply {
+                    enabled = equalizerWantedEnabled
+                }
+            }.getOrElse { error ->
+                systemEqualizer = null
+                equalizerWantedEnabled = false
+                equalizerState = VideoEqualizerUiState.unsupported(
+                    error.message ?: "当前设备不支持系统均衡器"
+                )
+                null
+            }
+            val createdBassBoost = runCatching {
+                BassBoost(VIDEO_EQUALIZER_PRIORITY, sessionId).apply {
+                    enabled = bassBoostPercent > 0
+                    setStrength(bassBoostPercent.toAudioEffectStrength())
+                }
+            }.getOrElse { error ->
+                systemBassBoost = null
+                bassBoostPercent = 0
+                bassBoostState = VideoAudioEffectStrengthUiState.unsupported(
+                    error.message ?: "当前设备不支持低音增强"
+                )
+                null
+            }
+            val createdVirtualizer = runCatching {
+                Virtualizer(VIDEO_EQUALIZER_PRIORITY, sessionId).apply {
+                    enabled = virtualizerPercent > 0
+                    setStrength(virtualizerPercent.toAudioEffectStrength())
+                }
+            }.getOrElse { error ->
+                systemVirtualizer = null
+                virtualizerPercent = 0
+                virtualizerState = VideoAudioEffectStrengthUiState.unsupported(
+                    error.message ?: "当前设备不支持环境声"
+                )
+                null
+            }
+
+            if (createdEqualizer != null) {
+                systemEqualizer = createdEqualizer
+                equalizerState = createdEqualizer.toVideoEqualizerUiState(
+                    wantedEnabled = equalizerWantedEnabled,
+                    selectedPreset = equalizerSelectedPreset
+                )
+            }
+            if (createdBassBoost != null) {
+                systemBassBoost = createdBassBoost
+                bassBoostState = createdBassBoost.toVideoAudioEffectStrengthUiState(
+                    percent = bassBoostPercent,
+                    unsupportedMessage = "当前设备不支持低音增强"
+                )
+            }
+            if (createdVirtualizer != null) {
+                systemVirtualizer = createdVirtualizer
+                virtualizerState = createdVirtualizer.toVideoAudioEffectStrengthUiState(
+                    percent = virtualizerPercent,
+                    unsupportedMessage = "当前设备不支持环境声"
+                )
+            }
+
+            onDispose {
+                runCatching {
+                    createdEqualizer?.enabled = false
+                    createdEqualizer?.release()
+                }
+                runCatching {
+                    createdBassBoost?.enabled = false
+                    createdBassBoost?.release()
+                }
+                runCatching {
+                    createdVirtualizer?.enabled = false
+                    createdVirtualizer?.release()
+                }
+                if (systemEqualizer === createdEqualizer) {
+                    systemEqualizer = null
+                }
+                if (systemBassBoost === createdBassBoost) {
+                    systemBassBoost = null
+                }
+                if (systemVirtualizer === createdVirtualizer) {
+                    systemVirtualizer = null
+                }
             }
         }
     }
@@ -1096,6 +1363,14 @@ private fun LocalVideoPlayer(
                 onQuickToolsExpandedChange = { isQuickToolsExpanded = it },
                 gestureSettings = gestureSettings,
                 onGestureSettingsChange = { gestureSettings = it },
+                equalizerState = equalizerState,
+                onEqualizerBandLevelChange = ::setEqualizerBandLevel,
+                onEqualizerPresetSelected = ::applyEqualizerPreset,
+                bassBoostState = bassBoostState,
+                onBassBoostChange = ::setBassBoostStrength,
+                virtualizerState = virtualizerState,
+                onVirtualizerChange = ::setVirtualizerStrength,
+                onEqualizerReset = ::resetEqualizer,
                 keepControlsVisible = keepControlsVisible,
                 onKeepControlsVisibleChange = { keepControlsVisible = it }
             )
@@ -1309,6 +1584,14 @@ private fun VideoControlOverlay(
     onQuickToolsExpandedChange: (Boolean) -> Unit,
     gestureSettings: VideoGestureSettings,
     onGestureSettingsChange: (VideoGestureSettings) -> Unit,
+    equalizerState: VideoEqualizerUiState,
+    onEqualizerBandLevelChange: (Short, Short) -> Unit,
+    onEqualizerPresetSelected: (VideoEqualizerPreset) -> Unit,
+    bassBoostState: VideoAudioEffectStrengthUiState,
+    onBassBoostChange: (Int) -> Unit,
+    virtualizerState: VideoAudioEffectStrengthUiState,
+    onVirtualizerChange: (Int) -> Unit,
+    onEqualizerReset: () -> Unit,
     keepControlsVisible: Boolean,
     onKeepControlsVisibleChange: (Boolean) -> Unit
 ) {
@@ -1325,6 +1608,7 @@ private fun VideoControlOverlay(
     var showDecodeFormatPanel by remember { mutableStateOf(false) }
     var showControlSettingsPanel by remember { mutableStateOf(false) }
     var showGestureSettingsPanel by remember { mutableStateOf(false) }
+    var showEqualizerPanel by remember { mutableStateOf(false) }
     var showAdvancedFuturePanel by remember { mutableStateOf(false) }
     var showTopToolbarSetting by remember { mutableStateOf(true) }
     var showBottomControlsSetting by remember { mutableStateOf(true) }
@@ -1490,6 +1774,23 @@ private fun VideoControlOverlay(
         showGestureSettingsPanel = true
     }
 
+    fun openEqualizerPanel() {
+        showSpeedPanel = false
+        showResizePanel = false
+        showInfoPanel = false
+        showQueuePanel = false
+        showAudioTrackPanel = false
+        showSleepTimerPanel = false
+        showAbLoopPanel = false
+        showSubtitleStylePanel = false
+        showControlSettingsPanel = false
+        showGestureSettingsPanel = false
+        showAdvancedFuturePanel = false
+        showDecodeFormatPanel = false
+        onQuickToolsExpandedChange(false)
+        showEqualizerPanel = true
+    }
+
     fun openAdvancedFuturePanel() {
         showSpeedPanel = false
         showResizePanel = false
@@ -1532,7 +1833,7 @@ private fun VideoControlOverlay(
         abLoopEditText = formatDuration(currentValueMs ?: currentPositionMs)
     }
 
-    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showAdvancedFuturePanel) {
+    BackHandler(enabled = showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showAbLoopPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showEqualizerPanel || showAdvancedFuturePanel) {
         if (showSubtitleStylePanel) {
             showSubtitleStylePanel = false
         } else if (showDecodeFormatPanel) {
@@ -1541,6 +1842,8 @@ private fun VideoControlOverlay(
             showControlSettingsPanel = false
         } else if (showGestureSettingsPanel) {
             showGestureSettingsPanel = false
+        } else if (showEqualizerPanel) {
+            showEqualizerPanel = false
         } else if (showAdvancedFuturePanel) {
             showAdvancedFuturePanel = false
         } else if (showAudioTrackPanel) {
@@ -1558,8 +1861,8 @@ private fun VideoControlOverlay(
         }
     }
 
-    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showGestureSettingsPanel, showAdvancedFuturePanel) {
-        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showAdvancedFuturePanel)
+    LaunchedEffect(showSpeedPanel, showInfoPanel, showQueuePanel, showAudioTrackPanel, showSleepTimerPanel, showSubtitleStylePanel, showDecodeFormatPanel, showControlSettingsPanel, showGestureSettingsPanel, showEqualizerPanel, showAdvancedFuturePanel) {
+        onSpeedPanelVisibilityChange(showSpeedPanel || showInfoPanel || showQueuePanel || showAudioTrackPanel || showSleepTimerPanel || showSubtitleStylePanel || showDecodeFormatPanel || showControlSettingsPanel || showGestureSettingsPanel || showEqualizerPanel || showAdvancedFuturePanel)
     }
 
     DisposableEffect(Unit) {
@@ -1575,6 +1878,7 @@ private fun VideoControlOverlay(
             showDecodeFormatPanel -> showDecodeFormatPanel = false
             showControlSettingsPanel -> showControlSettingsPanel = false
             showGestureSettingsPanel -> showGestureSettingsPanel = false
+            showEqualizerPanel -> showEqualizerPanel = false
             showAdvancedFuturePanel -> showAdvancedFuturePanel = false
             showAudioTrackPanel -> showAudioTrackPanel = false
             showSleepTimerPanel -> closeSleepTimerPanel()
@@ -1599,6 +1903,7 @@ private fun VideoControlOverlay(
         showResizePanel ||
         showControlSettingsPanel ||
         showGestureSettingsPanel ||
+        showEqualizerPanel ||
         showAdvancedFuturePanel ||
         isQuickToolsExpanded
 
@@ -1620,7 +1925,7 @@ private fun VideoControlOverlay(
                 }
             )
     ) {
-        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showGestureSettingsPanel && !showAdvancedFuturePanel
+        val ordinaryControlsVisible = !showSpeedPanel && !showSubtitleStylePanel && !showDecodeFormatPanel && !showAudioTrackPanel && !showSleepTimerPanel && !showInfoPanel && !showQueuePanel && !showControlSettingsPanel && !showGestureSettingsPanel && !showEqualizerPanel && !showAdvancedFuturePanel
 
         if (ordinaryControlsVisible && showTopToolbarSetting) {
             Box(
@@ -1958,6 +2263,28 @@ private fun VideoControlOverlay(
             )
         }
 
+        if (showEqualizerPanel) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { showEqualizerPanel = false }
+            )
+            VideoEqualizerPanel(
+                state = equalizerState,
+                onBandLevelChange = onEqualizerBandLevelChange,
+                onPresetSelected = onEqualizerPresetSelected,
+                bassBoostState = bassBoostState,
+                onBassBoostChange = onBassBoostChange,
+                virtualizerState = virtualizerState,
+                onVirtualizerChange = onVirtualizerChange,
+                onReset = onEqualizerReset,
+                onDismiss = { showEqualizerPanel = false },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 12.dp, bottom = 8.dp)
+            )
+        }
+
         if (showAdvancedFuturePanel) {
             Box(
                 modifier = Modifier
@@ -2029,7 +2356,7 @@ private fun VideoControlOverlay(
                         onClick = { openSleepTimerPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Tune,
+                        icon = Icons.Filled.Settings,
                         label = "控制栏",
                         onClick = { openControlSettingsPanel() }
                     )
@@ -2037,6 +2364,11 @@ private fun VideoControlOverlay(
                         icon = Icons.Filled.TouchApp,
                         label = "手势",
                         onClick = { openGestureSettingsPanel() }
+                    )
+                    VideoQuickToolButton(
+                        icon = Icons.Filled.Tune,
+                        label = "均衡器",
+                        onClick = { openEqualizerPanel() }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Memory,
@@ -4020,6 +4352,460 @@ private data class VideoGestureSettings(
     val showHints: Boolean = true
 )
 
+private enum class VideoEqualizerStatus {
+    WAITING_SESSION,
+    AVAILABLE,
+    UNSUPPORTED
+}
+
+private enum class VideoEqualizerPreset(val label: String) {
+    Normal("默认"),
+    Bass("重低音"),
+    Classical("古典"),
+    Pop("流行"),
+    Rock("摇滚")
+}
+
+private data class VideoEqualizerBandUi(
+    val index: Short,
+    val centerFrequencyHz: Float,
+    val frequencyText: String,
+    val level: Short
+)
+
+private data class VideoEqualizerUiState(
+    val status: VideoEqualizerStatus,
+    val message: String,
+    val enabled: Boolean = false,
+    val minBandLevel: Short = 0,
+    val maxBandLevel: Short = 0,
+    val bands: List<VideoEqualizerBandUi> = emptyList(),
+    val selectedPreset: VideoEqualizerPreset? = VideoEqualizerPreset.Normal
+) {
+    val isAvailable: Boolean
+        get() = status == VideoEqualizerStatus.AVAILABLE
+
+    companion object {
+        fun waiting(): VideoEqualizerUiState = VideoEqualizerUiState(
+            status = VideoEqualizerStatus.WAITING_SESSION,
+            message = "等待播放器音频会话"
+        )
+
+        fun unsupported(reason: String = "当前设备不支持系统均衡器"): VideoEqualizerUiState =
+            VideoEqualizerUiState(
+                status = VideoEqualizerStatus.UNSUPPORTED,
+                message = reason.ifBlank { "当前设备不支持系统均衡器" }
+            )
+    }
+}
+
+private data class VideoAudioEffectStrengthUiState(
+    val supported: Boolean,
+    val message: String,
+    val percent: Int = 0
+) {
+    companion object {
+        fun waiting(): VideoAudioEffectStrengthUiState = VideoAudioEffectStrengthUiState(
+            supported = false,
+            message = "等待音频会话"
+        )
+
+        fun unsupported(reason: String): VideoAudioEffectStrengthUiState = VideoAudioEffectStrengthUiState(
+            supported = false,
+            message = reason.ifBlank { "当前设备不支持" }
+        )
+
+        fun supported(percent: Int): VideoAudioEffectStrengthUiState = VideoAudioEffectStrengthUiState(
+            supported = true,
+            message = "可用",
+            percent = percent.coerceIn(0, 100)
+        )
+    }
+}
+
+@Composable
+private fun VideoEqualizerPanel(
+    state: VideoEqualizerUiState,
+    onBandLevelChange: (Short, Short) -> Unit,
+    onPresetSelected: (VideoEqualizerPreset) -> Unit,
+    bassBoostState: VideoAudioEffectStrengthUiState,
+    onBassBoostChange: (Int) -> Unit,
+    virtualizerState: VideoAudioEffectStrengthUiState,
+    onVirtualizerChange: (Int) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .width(352.dp)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(18.dp))
+            .background(PlayerPanelDark)
+            .clickable(onClick = {})
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Tune,
+                    contentDescription = null,
+                    tint = VideoLibrarySelectionPurple,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "视频均衡器",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "关闭",
+                    tint = Color.White.copy(alpha = 0.76f)
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    text = "预设模式",
+                    color = Color.White.copy(alpha = 0.48f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    VideoEqualizerPreset.values().forEach { preset ->
+                        VideoEqualizerPresetChip(
+                            preset = preset,
+                            selected = state.selectedPreset == preset,
+                            enabled = state.isAvailable,
+                            onClick = { onPresetSelected(preset) }
+                        )
+                    }
+                }
+            }
+
+            if (state.isAvailable) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    state.bands.forEach { band ->
+                        VideoEqualizerBandHorizontalSlider(
+                            band = band,
+                            minLevel = state.minBandLevel,
+                            maxLevel = state.maxBandLevel,
+                            onLevelChange = { nextLevel ->
+                                onBandLevelChange(band.index, nextLevel)
+                            }
+                        )
+                    }
+                }
+            } else {
+                VideoEqualizerUnavailableCard(state.message)
+            }
+
+            VideoAudioEffectStrengthControl(
+                title = "低音增强",
+                state = bassBoostState,
+                onPercentChange = onBassBoostChange
+            )
+            VideoAudioEffectStrengthControl(
+                title = "环境声",
+                state = virtualizerState,
+                onPercentChange = onVirtualizerChange
+            )
+        }
+
+        TextButton(
+            onClick = onDismiss,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.textButtonColors(
+                containerColor = VideoLibrarySelectionPurple.copy(alpha = VideoLibrarySelectionContainerAlpha),
+                contentColor = Color.White
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+        ) {
+            Text("完成", fontWeight = FontWeight.SemiBold)
+        }
+        TextButton(
+            onClick = onReset,
+            enabled = state.isAvailable || bassBoostState.supported || virtualizerState.supported,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(30.dp)
+        ) {
+            Text("恢复默认设置", color = Color.White.copy(alpha = 0.58f))
+        }
+    }
+}
+
+@Composable
+private fun VideoEqualizerPresetChip(
+    preset: VideoEqualizerPreset,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .height(26.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                when {
+                    !enabled -> Color.White.copy(alpha = 0.035f)
+                    selected -> VideoLibrarySelectionPurple.copy(alpha = VideoLibrarySelectionContainerAlpha)
+                    else -> Color.White.copy(alpha = 0.055f)
+                }
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = preset.label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = when {
+                !enabled -> Color.White.copy(alpha = 0.32f)
+                selected -> Color.White
+                else -> Color.White.copy(alpha = 0.76f)
+            },
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun VideoEqualizerBandHorizontalSlider(
+    band: VideoEqualizerBandUi,
+    minLevel: Short,
+    maxLevel: Short,
+    onLevelChange: (Short) -> Unit
+) {
+    val safeMin = minLevel.toFloat()
+    val safeMax = if (maxLevel > minLevel) maxLevel.toFloat() else (minLevel + 1).toFloat()
+    var sliderValue by remember(band.index) {
+        mutableFloatStateOf(band.level.toFloat().coerceIn(safeMin, safeMax))
+    }
+
+    LaunchedEffect(band.level, minLevel, maxLevel) {
+        sliderValue = band.level.toFloat().coerceIn(safeMin, safeMax)
+    }
+
+    fun updateBandLevel(nextValue: Float) {
+        val clampedValue = nextValue.coerceIn(safeMin, safeMax)
+        sliderValue = clampedValue
+        onLevelChange(clampedValue.toEqualizerBandLevel(minLevel, maxLevel))
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(32.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = band.frequencyText,
+            color = Color.White.copy(alpha = 0.74f),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.width(50.dp)
+        )
+        ThinEqualizerSlider(
+            value = sliderValue,
+            onValueChange = { nextValue ->
+                updateBandLevel(nextValue)
+            },
+            valueRange = safeMin..safeMax,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = formatEqualizerLevel(sliderValue.toEqualizerBandLevel(minLevel, maxLevel)),
+            color = Color.White.copy(alpha = 0.62f),
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.width(54.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoAudioEffectStrengthControl(
+    title: String,
+    state: VideoAudioEffectStrengthUiState,
+    onPercentChange: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = if (title == "低音增强") Icons.Filled.VolumeUp else Icons.Filled.Tune,
+                    contentDescription = null,
+                    tint = if (state.supported) VideoLibrarySelectionPurple else Color.White.copy(alpha = 0.42f),
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    text = title,
+                    color = Color.White.copy(alpha = if (state.supported) 0.76f else 0.42f),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Text(
+                text = if (state.supported) "${state.percent}%" else "不支持",
+                color = if (state.supported) Color.White.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.36f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        if (state.supported) {
+            ThinEqualizerSlider(
+                value = state.percent.toFloat(),
+                onValueChange = { onPercentChange(round(it).toInt()) },
+                valueRange = 0f..100f
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(999.dp))
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThinEqualizerSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    val safeStart = valueRange.start
+    val safeEnd = if (valueRange.endInclusive > valueRange.start) {
+        valueRange.endInclusive
+    } else {
+        valueRange.start + 1f
+    }
+    val clampedValue = value.coerceIn(safeStart, safeEnd)
+    val fraction = ((clampedValue - safeStart) / (safeEnd - safeStart)).coerceIn(0f, 1f)
+    val trackHeight = 4.dp
+    val thumbSize = 16.dp
+    val touchHeight = 32.dp
+    val inactiveColor = Color.White.copy(alpha = 0.16f)
+    val activeColor = if (enabled) VideoLibrarySelectionPurple else Color.White.copy(alpha = 0.28f)
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(touchHeight)
+            .pointerInput(enabled, safeStart, safeEnd) {
+                if (!enabled) return@pointerInput
+
+                fun updateFromX(x: Float) {
+                    val widthPx = size.width.toFloat().coerceAtLeast(1f)
+                    val nextFraction = (x / widthPx).coerceIn(0f, 1f)
+                    onValueChange(safeStart + (safeEnd - safeStart) * nextFraction)
+                }
+
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    updateFromX(down.position.x)
+                    down.consume()
+                    drag(down.id) { change ->
+                        updateFromX(change.position.x)
+                        change.consume()
+                    }
+                }
+            },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .clip(RoundedCornerShape(999.dp))
+                .background(inactiveColor)
+        )
+        Box(
+            modifier = Modifier
+                .width(maxWidth * fraction)
+                .height(trackHeight)
+                .clip(RoundedCornerShape(999.dp))
+                .background(activeColor)
+        )
+        Box(
+            modifier = Modifier
+                .offset(x = (maxWidth - thumbSize) * fraction)
+                .size(thumbSize)
+                .clip(CircleShape)
+                .background(activeColor)
+        )
+    }
+}
+
+@Composable
+private fun VideoEqualizerUnavailableCard(message: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.045f))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = message,
+            color = Color.White.copy(alpha = 0.78f),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = "开始播放后如果设备提供音频会话，会重新尝试绑定系统均衡器。",
+            color = Color.White.copy(alpha = 0.48f),
+            style = MaterialTheme.typography.labelSmall,
+            lineHeight = 16.sp
+        )
+    }
+}
+
 @Composable
 private fun VideoGestureSettingsPanel(
     settings: VideoGestureSettings,
@@ -4201,7 +4987,6 @@ private fun VideoAdvancedFuturePanel(
     modifier: Modifier = Modifier
 ) {
     SidePanelShell(title = "后续专项", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
-        VideoFutureItem("均衡器", "需要真实音频处理链路，不能只调整 UI 滑杆。")
         VideoFutureItem("画面调节", "对比度、饱和度、锐化等需要可靠渲染链路；当前不做假成功。")
         VideoFutureItem("字幕时间同步", "Media3 原生字幕链路未接入真实时间轴偏移，继续后置。")
     }
@@ -5245,6 +6030,158 @@ private fun String.containsAny(vararg needles: String): Boolean {
 private fun String.compactPanelText(maxLength: Int = 180): String {
     val compact = replace(Regex("\\s+"), " ").trim()
     return if (compact.length <= maxLength) compact else compact.take(maxLength - 1) + "…"
+}
+
+private fun Int.isValidVideoAudioSessionId(): Boolean {
+    return this != C.AUDIO_SESSION_ID_UNSET && this > 0
+}
+
+private fun Equalizer.toVideoEqualizerUiState(
+    wantedEnabled: Boolean,
+    selectedPreset: VideoEqualizerPreset?
+): VideoEqualizerUiState {
+    val levelRange = bandLevelRange
+    val minLevel = levelRange.getOrNull(0) ?: 0
+    val maxLevel = levelRange.getOrNull(1) ?: 0
+    val allBands = (0 until numberOfBands.toInt()).map { index ->
+        val band = index.toShort()
+        val centerFrequencyHz = getCenterFreq(band) / 1000f
+        VideoEqualizerBandUi(
+            index = band,
+            centerFrequencyHz = centerFrequencyHz,
+            frequencyText = formatEqualizerFrequencyHz(centerFrequencyHz),
+            level = getBandLevel(band)
+        )
+    }
+    return VideoEqualizerUiState(
+        status = VideoEqualizerStatus.AVAILABLE,
+        message = "系统均衡器可用",
+        enabled = enabled && wantedEnabled,
+        minBandLevel = minLevel,
+        maxBandLevel = maxLevel,
+        bands = allBands.pickDisplayEqualizerBands(),
+        selectedPreset = selectedPreset
+    )
+}
+
+private fun Equalizer.applyVideoEqualizerPreset(preset: VideoEqualizerPreset) {
+    val levelRange = bandLevelRange
+    val minLevel = levelRange.getOrNull(0) ?: 0
+    val maxLevel = levelRange.getOrNull(1) ?: 0
+    repeat(numberOfBands.toInt()) { index ->
+        val band = index.toShort()
+        val frequencyHz = getCenterFreq(band) / 1000f
+        val ratio = preset.equalizerGainRatio(frequencyHz)
+        setBandLevel(band, ratio.toBandLevel(minLevel, maxLevel))
+    }
+}
+
+private fun VideoEqualizerPreset.equalizerGainRatio(frequencyHz: Float): Float {
+    return when (this) {
+        VideoEqualizerPreset.Normal -> 0f
+        VideoEqualizerPreset.Bass -> when {
+            frequencyHz < 180f -> 0.72f
+            frequencyHz < 500f -> 0.42f
+            frequencyHz < 2_000f -> -0.10f
+            else -> -0.22f
+        }
+        VideoEqualizerPreset.Classical -> when {
+            frequencyHz < 180f -> 0.28f
+            frequencyHz < 1_500f -> 0.04f
+            frequencyHz < 6_000f -> 0.18f
+            else -> 0.36f
+        }
+        VideoEqualizerPreset.Pop -> when {
+            frequencyHz < 180f -> 0.18f
+            frequencyHz < 700f -> -0.05f
+            frequencyHz < 4_500f -> 0.36f
+            else -> 0.24f
+        }
+        VideoEqualizerPreset.Rock -> when {
+            frequencyHz < 200f -> 0.55f
+            frequencyHz < 700f -> 0.18f
+            frequencyHz < 3_000f -> -0.10f
+            else -> 0.52f
+        }
+    }
+}
+
+private fun Float.toBandLevel(minLevel: Short, maxLevel: Short): Short {
+    val clampedRatio = coerceIn(-1f, 1f)
+    val target = if (clampedRatio >= 0f) {
+        clampedRatio * maxLevel
+    } else {
+        -clampedRatio.absoluteValue * minLevel.toInt().absoluteValue
+    }
+    return round(target)
+        .toInt()
+        .coerceIn(minLevel.toInt(), maxLevel.toInt())
+        .toShort()
+}
+
+private fun List<VideoEqualizerBandUi>.pickDisplayEqualizerBands(): List<VideoEqualizerBandUi> {
+    if (size <= VIDEO_EQUALIZER_TARGET_FREQ_HZ.size) return sortedBy { it.centerFrequencyHz }
+    val picked = mutableListOf<VideoEqualizerBandUi>()
+    VIDEO_EQUALIZER_TARGET_FREQ_HZ.forEach { target ->
+        val nearest = filterNot { candidate -> picked.any { it.index == candidate.index } }
+            .minByOrNull { candidate -> (candidate.centerFrequencyHz - target).absoluteValue }
+        if (nearest != null) picked += nearest
+    }
+    return picked.sortedBy { it.centerFrequencyHz }
+}
+
+private fun BassBoost.toVideoAudioEffectStrengthUiState(
+    percent: Int,
+    unsupportedMessage: String
+): VideoAudioEffectStrengthUiState {
+    return if (strengthSupported) {
+        VideoAudioEffectStrengthUiState.supported(percent)
+    } else {
+        VideoAudioEffectStrengthUiState.unsupported(unsupportedMessage)
+    }
+}
+
+private fun Virtualizer.toVideoAudioEffectStrengthUiState(
+    percent: Int,
+    unsupportedMessage: String
+): VideoAudioEffectStrengthUiState {
+    return if (strengthSupported) {
+        VideoAudioEffectStrengthUiState.supported(percent)
+    } else {
+        VideoAudioEffectStrengthUiState.unsupported(unsupportedMessage)
+    }
+}
+
+private fun Int.toAudioEffectStrength(): Short {
+    return (coerceIn(0, 100) * 10)
+        .coerceIn(0, VIDEO_AUDIO_EFFECT_MAX_STRENGTH)
+        .toShort()
+}
+
+private fun Float.toEqualizerBandLevel(minLevel: Short, maxLevel: Short): Short {
+    return round(this)
+        .toInt()
+        .coerceIn(minLevel.toInt(), maxLevel.toInt())
+        .toShort()
+}
+
+private fun formatEqualizerFrequencyHz(hz: Float): String {
+    return if (hz >= 1000f) {
+        val khz = hz / 1000f
+        val text = if (khz >= 10f) {
+            round(khz).toInt().toString()
+        } else {
+            String.format(Locale.US, "%.1f", khz).trimEnd('0').trimEnd('.')
+        }
+        "$text kHz"
+    } else {
+        "${round(hz).toInt()} Hz"
+    }
+}
+
+private fun formatEqualizerLevel(level: Short): String {
+    return String.format(Locale.US, "%+.1f dB", level / 100f)
+        .replace(".0 dB", " dB")
 }
 
 private fun Float.formatSpeed(): String {
