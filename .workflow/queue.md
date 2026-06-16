@@ -193,7 +193,7 @@ Needs real-device confirmation: no
 
 ### TODO-008 Video subtitle time sync feasibility review
 
-Status: doing
+Status: done
 
 Goal:
 Review the real feasibility of subtitle time synchronization before implementation.
@@ -232,5 +232,41 @@ Forbidden files:
 * build.gradle
 * settings.gradle
 * AndroidManifest.xml
+
+Needs real-device confirmation: no
+
+---
+
+### TODO-009 Subtitle sync panel mockup request
+
+Status: doing
+
+Goal:
+Ask the user to create a Stitch / Product Design mockup for the subtitle time sync panel before implementation.
+
+Confirmed feasibility boundary:
+
+* First real version should only support manually selected external .srt subtitles.
+* Embedded subtitles are not supported in the first version.
+* ASS / SSA advanced subtitle sync is not supported in the first version.
+* Do not fake success.
+* Do not implement UI or app code in this task.
+
+Required mockup content:
+
+* Subtitle sync panel / dialog
+* Current offset value
+* Increase / decrease offset controls
+* Quick buttons such as -1s, -0.5s, reset, +0.5s, +1s
+* Apply / Done
+* Clear offset / Restore default
+* Clear warning that only external SRT is supported in the first version
+
+Rules:
+
+* Do not enter music or novel modules.
+* Do not implement the panel yet.
+* Wait for the user to provide and confirm the Stitch / Product Design mockup.
+* Use Chinese for future Codex task descriptions by default.
 
 Needs real-device confirmation: no
