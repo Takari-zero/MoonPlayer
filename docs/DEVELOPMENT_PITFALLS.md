@@ -413,8 +413,18 @@ adb shell monkey -p com.shenghui.localvibe 1
 - 手动文件夹扫描已补充常见视频扩展名识别：`mp4 / mkv / webm / avi / mov / m4v / 3gp / 3gpp / ts / m2ts / mts / flv / wmv / asf`。
 - 解码边界：扩展名识别只是“识别并尝试播放”，实际能否播放取决于当前设备系统解码器和 Media3 支持状态；不要写成“已支持所有格式”或“万能解码”。
 - 播放失败提示已优化为提示当前设备或系统解码器可能不支持该视频编码；不要改成“设置成功”“已支持”等假成功文案。
-- 后置高风险：真正万能解码、FFmpeg / mpv / native decoder、硬解/软解切换、真实均衡器音效、复杂画面调节、手势系统、字幕真实时间轴偏移。
+- 后置高风险：真正万能解码、FFmpeg / mpv / native decoder、硬解/软解切换、复杂画面调节、手势系统、字幕真实时间轴偏移。
 - 禁止回退：不要把解码信息面板改回纯“后续”；不要未经确认新增解码库、依赖或权限。
+
+### 视频均衡器
+
+- 已完成：播放页“视频均衡器”入口为真实系统音效面板，不再是“后续”占位。
+- 音效链路：基于 Android `Equalizer`、`BassBoost`、`Virtualizer`，绑定当前播放器 `audioSessionId`；`audioSessionId` 变化时 release/recreate，播放页销毁时 release。
+- UI：右侧深色半透明无边框面板；预设、5 个频段、低音增强、环境声、完成、恢复默认设置采用紧凑一页优先布局。
+- 滑杆：顶部 5 个频段使用横向细滑杆；轨道 4dp、圆形 thumb 16dp；低音增强 / 环境声也使用同一细滑杆风格。
+- 行为：频段拖动实时 `setBandLevel`；预设真实写入频段曲线；BassBoost / Virtualizer 真实 `setStrength`；“完成”只关闭面板；“恢复默认设置”真实恢复频段、低音增强、环境声。
+- 不支持状态：设备不支持 Equalizer / BassBoost / Virtualizer 时显示“不支持”或说明，不假成功。
+- 禁止回退：不要恢复竖向滑杆、`rotationZ`、粗 Material Slider、假滑杆或只改 UI 不改声音；不要新增音效依赖 / 权限；不要写 DataStore 持久化，除非单独任务明确允许。
 
 ### 测试结论
 
