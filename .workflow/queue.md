@@ -43,7 +43,7 @@ Needs real-device confirmation: no
 
 ### TODO-002 Equalizer documentation sync
 
-Status: doing
+Status: done
 
 Goal:
 Document the completed system equalizer panel:
@@ -76,7 +76,7 @@ Needs real-device confirmation: no
 
 ### TODO-003 New UI mockup reminder
 
-Status: todo
+Status: doing
 
 Goal:
 Before any new dialog, panel, or complex UI work, remind the user to create a Stitch or Product Design mockup first.
