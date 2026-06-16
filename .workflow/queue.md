@@ -96,24 +96,28 @@ Needs real-device confirmation: no
 
 ### TODO-004 Video picture adjustment first real version
 
-Status: doing
+Status: done
 
 Goal:
-Before implementation, ask the user to create a Stitch or Product Design mockup for the dialog or panel.
+Implement the first real video picture adjustment panel from the confirmed Stitch or Product Design mockup.
 
-Initial feature direction:
+Completed scope:
 
 * brightness
 * contrast
 * saturation
 * color temperature
-* reset defaults
+* effect toggle
+* presets: Default, Bright, Cinema, Eye Care, Vivid
+* Done
 
 Rules:
 
-* Research low-risk implementation first.
 * Do not modify system brightness.
 * Do not fake success.
+* Android 12+ uses RenderEffect / ColorMatrixColorFilter.
+* Android 12 and below must show unsupported state and disabled controls.
+* The bottom duplicate reset entry is removed; the Default preset remains the reset path.
 
 Needs real-device confirmation: yes
 
@@ -133,3 +137,35 @@ experiment/ffmpeg-audio-decoder
 
 Local experiment commit:
 d1b2022
+
+---
+
+### TODO-006 Video playback regression review
+
+Status: doing
+
+Goal:
+Review video playback after equalizer and picture adjustment changes.
+
+Scope:
+
+* playback
+* subtitles
+* screenshots
+* gestures
+* AB repeat
+* sleep timer
+* speed control
+* audio tracks
+* playlist
+* equalizer
+* picture adjustment
+* background pause behavior
+
+Rules:
+
+* Do not start music or novel modules yet.
+* Do not add new features in this task.
+* Only verify and document remaining video playback issues.
+
+Needs real-device confirmation: yes

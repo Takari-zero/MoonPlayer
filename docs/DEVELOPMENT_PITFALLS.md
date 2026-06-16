@@ -489,3 +489,17 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Resolution / frame rate remains deferred.
 - Delete authorization flow redesign remains deferred.
 - Scan strategy changes remain deferred.
+## Video Picture Adjustment Pitfalls
+
+- The video player `画面调节` panel is a real first-version feature and is no longer a placeholder.
+- Completed controls: brightness, contrast, saturation, color temperature, effect toggle, presets (`默认 / 明亮 / 影院 / 护眼 / 鲜艳`), and Done.
+- The bottom duplicate `恢复默认设置` entry has been removed from picture adjustment. Keep the `默认` preset as the reset path for neutral picture parameters.
+- Do not remove the internal reset/default logic because the `默认` preset still depends on it.
+- Do not remove the equalizer panel's separate `恢复默认设置`; that belongs to audio effects.
+- Android 12+ applies picture adjustment with `RenderEffect` and `ColorMatrixColorFilter` on the player `texture_view` surface.
+- Effects apply only to the current playback view and never modify the original video file.
+- Android 12 and below must show unsupported state, disable picture controls, and avoid fake success.
+- Brightness, contrast, saturation, and color temperature must stay independent unless a preset is tapped.
+- The effect toggle must bypass effects without clearing user parameters.
+- Video player `ON_STOP` must pause playback so returning to the desktop does not leave video audio playing.
+- Do not add sharpening, dark enhancement, advanced filters, or native decode changes as fake or partial features.
