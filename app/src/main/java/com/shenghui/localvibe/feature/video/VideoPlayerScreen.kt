@@ -4714,20 +4714,6 @@ private fun VideoPictureAdjustmentPanel(
         ) {
             Text("完成", fontWeight = FontWeight.SemiBold)
         }
-        TextButton(
-            onClick = { onSettingsChange(settings.reset()) },
-            enabled = renderSupported,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(36.dp)
-                .padding(bottom = 4.dp)
-        ) {
-            Text(
-                "恢复默认设置",
-                color = Color.White.copy(alpha = 0.58f),
-                lineHeight = 16.sp
-            )
-        }
     }
 }
 
