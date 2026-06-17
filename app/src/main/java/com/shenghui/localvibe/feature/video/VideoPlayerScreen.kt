@@ -2251,7 +2251,7 @@ private fun VideoControlOverlay(
                 settings = subtitleStyleSettings,
                 onSubtitleSelect = onSubtitleSelect,
                 onSubtitleClear = onSubtitleClear,
-                onOpenSubtitleSync = { openSubtitleSyncPanel() },
+                onSubtitleOffsetChange = onSubtitleOffsetChange,
                 onSettingsChange = onSubtitleStyleChanged,
                 onDismiss = { showSubtitleStylePanel = false },
                 modifier = Modifier
@@ -2823,7 +2823,7 @@ private fun SubtitleStylePanel(
     settings: VideoSubtitleStyleSettings,
     onSubtitleSelect: () -> Unit,
     onSubtitleClear: () -> Unit,
-    onOpenSubtitleSync: () -> Unit,
+    onSubtitleOffsetChange: (Long) -> Unit,
     onSettingsChange: (VideoSubtitleStyleSettings) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -2841,15 +2841,17 @@ private fun SubtitleStylePanel(
         onDismiss = onDismiss,
         modifier = modifier
             .width(300.dp)
-            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
+            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION),
+        contentPadding = 12.dp,
+        contentSpacing = 8.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
         ) {
             SubtitleFilePickerSection(
                 subtitleName = subtitleName,
@@ -2879,7 +2881,7 @@ private fun SubtitleStylePanel(
                 subtitleOffsetMs = subtitleOffsetMs,
                 subtitleSyncAvailable = subtitleSyncAvailable,
                 subtitleSyncError = subtitleSyncError,
-                onOpenSubtitleSync = onOpenSubtitleSync
+                onOffsetChange = onSubtitleOffsetChange
             )
             SubtitleStyleChoiceGroup(
                 title = "字幕背景",
@@ -2920,10 +2922,9 @@ private fun SubtitleFilePickerSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(58.dp)
+                .height(52.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF1B263A).copy(alpha = 0.78f))
-                .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(10.dp))
+                .background(Color(0xFF1B263A).copy(alpha = 0.66f))
                 .clickable(onClick = onPickSubtitle)
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2931,7 +2932,7 @@ private fun SubtitleFilePickerSection(
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(30.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(PlayerMoonPurple.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center
@@ -2940,7 +2941,7 @@ private fun SubtitleFilePickerSection(
                     Icons.Filled.Subtitles,
                     contentDescription = null,
                     tint = PlayerMoonPurpleSoft,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
             Column(
@@ -2994,9 +2995,63 @@ private fun SubtitleTimingSection(
     subtitleOffsetMs: Long,
     subtitleSyncAvailable: Boolean,
     subtitleSyncError: String?,
-    onOpenSubtitleSync: () -> Unit
+    onOffsetChange: (Long) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    val latestSubtitleOffsetMs by rememberUpdatedState(subtitleOffsetMs)
+    val latestOnOffsetChange by rememberUpdatedState(onOffsetChange)
+    var accumulatedDragPx by remember { mutableFloatStateOf(0f) }
+    var dragStartOffsetMs by remember { mutableLongStateOf(subtitleOffsetMs) }
+    var draftOffsetMs by remember { mutableLongStateOf(subtitleOffsetMs) }
+    var isEditingOffset by remember { mutableStateOf(false) }
+    val offsetStepPx = 22.dp
+
+    LaunchedEffect(subtitleOffsetMs, isEditingOffset) {
+        if (!isEditingOffset) {
+            draftOffsetMs = subtitleOffsetMs
+        }
+    }
+
+    fun clampSubtitleOffset(nextOffsetMs: Long): Long {
+        return nextOffsetMs.coerceIn(
+            -VIDEO_SUBTITLE_SYNC_OFFSET_LIMIT_MS,
+            VIDEO_SUBTITLE_SYNC_OFFSET_LIMIT_MS
+        )
+    }
+
+    fun applyOffsetImmediately(nextOffsetMs: Long) {
+        if (!subtitleSyncAvailable) return
+        val clamped = clampSubtitleOffset(nextOffsetMs)
+        draftOffsetMs = clamped
+        latestOnOffsetChange(clamped)
+    }
+
+    fun startOffsetPreview(startOffsetMs: Long = latestSubtitleOffsetMs) {
+        if (!subtitleSyncAvailable) return
+        isEditingOffset = true
+        draftOffsetMs = clampSubtitleOffset(startOffsetMs)
+    }
+
+    fun updateOffsetPreview(nextOffsetMs: Long) {
+        if (!subtitleSyncAvailable) return
+        draftOffsetMs = clampSubtitleOffset(nextOffsetMs)
+    }
+
+    fun commitOffsetPreview() {
+        if (!subtitleSyncAvailable) return
+        val finalOffsetMs = clampSubtitleOffset(draftOffsetMs)
+        isEditingOffset = false
+        draftOffsetMs = finalOffsetMs
+        if (finalOffsetMs != latestSubtitleOffsetMs) {
+            latestOnOffsetChange(finalOffsetMs)
+        }
+    }
+
+    fun cancelOffsetPreview() {
+        isEditingOffset = false
+        draftOffsetMs = latestSubtitleOffsetMs
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -3020,45 +3075,230 @@ private fun SubtitleTimingSection(
                 maxLines = 1
             )
         }
+        if (subtitleSyncAvailable && !subtitleName.isNullOrBlank()) {
+            Text(
+                text = "当前字幕：$subtitleName",
+                color = Color.White.copy(alpha = 0.48f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(44.dp)
+                .height(42.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(Color(0xFF1B263A).copy(alpha = 0.42f))
-                .border(1.dp, Color.White.copy(alpha = 0.045f), RoundedCornerShape(10.dp))
-                .clickable(onClick = onOpenSubtitleSync),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SubtitleTimingCell(
-                text = "提前 (-)",
+            SubtitleTimingStepButton(
+                text = "-",
                 enabled = subtitleSyncAvailable,
-                onClick = onOpenSubtitleSync,
-                modifier = Modifier.weight(1f)
+                direction = -1,
+                currentOffsetMs = subtitleOffsetMs,
+                onPreviewStart = { startOffsetPreview(it) },
+                onPreviewChange = { updateOffsetPreview(it) },
+                onCommit = { finalOffsetMs ->
+                    if (subtitleSyncAvailable) {
+                        draftOffsetMs = clampSubtitleOffset(finalOffsetMs)
+                        commitOffsetPreview()
+                    }
+                }
             )
-            SubtitleTimingCell(
-                text = formatSubtitleOffsetSeconds(subtitleOffsetMs),
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (subtitleSyncAvailable) {
+                            PlayerMoonPurple.copy(alpha = 0.13f)
+                        } else {
+                            Color.White.copy(alpha = 0.035f)
+                        }
+                    )
+                    .pointerInput(subtitleSyncAvailable) {
+                        if (!subtitleSyncAvailable) return@pointerInput
+                        val stepPx = offsetStepPx.toPx()
+                        detectDragGestures(
+                            onDragStart = {
+                                accumulatedDragPx = 0f
+                                dragStartOffsetMs = latestSubtitleOffsetMs
+                                startOffsetPreview(dragStartOffsetMs)
+                            },
+                            onDragEnd = {
+                                accumulatedDragPx = 0f
+                                commitOffsetPreview()
+                            },
+                            onDragCancel = {
+                                accumulatedDragPx = 0f
+                                cancelOffsetPreview()
+                            },
+                            onDrag = { change, dragAmount ->
+                                accumulatedDragPx += dragAmount.y
+                                val stepCount = (-accumulatedDragPx / stepPx).roundToInt()
+                                val nextOffset = clampSubtitleOffset(
+                                    dragStartOffsetMs + stepCount * 100L
+                                )
+                                if (nextOffset != draftOffsetMs) {
+                                    updateOffsetPreview(nextOffset)
+                                }
+                                change.consume()
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = formatSubtitleOffsetSeconds(draftOffsetMs),
+                    color = if (subtitleSyncAvailable) Color.White else Color.White.copy(alpha = 0.42f),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+            SubtitleTimingStepButton(
+                text = "+",
                 enabled = subtitleSyncAvailable,
-                onClick = onOpenSubtitleSync,
-                modifier = Modifier.weight(0.82f)
-            )
-            SubtitleTimingCell(
-                text = "延后 (+)",
-                enabled = subtitleSyncAvailable,
-                onClick = onOpenSubtitleSync,
-                modifier = Modifier.weight(1f)
+                direction = 1,
+                currentOffsetMs = subtitleOffsetMs,
+                onPreviewStart = { startOffsetPreview(it) },
+                onPreviewChange = { updateOffsetPreview(it) },
+                onCommit = { finalOffsetMs ->
+                    if (subtitleSyncAvailable) {
+                        draftOffsetMs = clampSubtitleOffset(finalOffsetMs)
+                        commitOffsetPreview()
+                    }
+                }
             )
         }
-        Text(
-            text = subtitleSyncError ?: if (!subtitleSyncAvailable) {
-                "请先选择外挂 .srt 字幕，再进行时间同步。"
-            } else {
-                "第一版仅支持外挂 SRT 字幕时间同步。"
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = subtitleSyncError ?: if (!subtitleSyncAvailable) {
+                    "请先选择外挂 .srt 字幕，再进行时间同步。"
+                } else {
+                    "上滑延后，下滑提前；第一版仅支持外挂 SRT。"
+                },
+                color = if (subtitleSyncError == null) Color.White.copy(alpha = 0.42f) else Color(0xFFFFC1C1),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (subtitleSyncAvailable) {
+                Text(
+                    text = "重置",
+                    color = if (subtitleOffsetMs == 0L) {
+                        Color.White.copy(alpha = 0.42f)
+                    } else {
+                        PlayerMoonPurpleSoft
+                    },
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = subtitleOffsetMs != 0L) { applyOffsetImmediately(0L) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleTimingStepButton(
+    text: String,
+    enabled: Boolean,
+    direction: Int,
+    currentOffsetMs: Long,
+    onPreviewStart: (Long) -> Unit,
+    onPreviewChange: (Long) -> Unit,
+    onCommit: (Long) -> Unit
+) {
+    val latestCurrentOffsetMs by rememberUpdatedState(currentOffsetMs)
+    val latestOnPreviewStart by rememberUpdatedState(onPreviewStart)
+    val latestOnPreviewChange by rememberUpdatedState(onPreviewChange)
+    val latestOnCommit by rememberUpdatedState(onCommit)
+
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(36.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (enabled) {
+                    PlayerMoonPurple.copy(alpha = 0.26f)
+                } else {
+                    Color.White.copy(alpha = 0.035f)
+                }
+            )
+            .pointerInput(enabled, direction) {
+                if (!enabled) return@pointerInput
+                kotlinx.coroutines.coroutineScope {
+                    while (true) {
+                        var localDraft = latestCurrentOffsetMs
+                        var longPressStarted = false
+                        var pointerIsDown = true
+
+                        awaitPointerEventScope {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                        }
+
+                        val repeatJob = launch {
+                            delay(420L)
+                            if (!pointerIsDown) return@launch
+                            longPressStarted = true
+                            latestOnPreviewStart(localDraft)
+                            while (isActive && pointerIsDown) {
+                                localDraft = (localDraft + direction * 100L).coerceIn(
+                                    -VIDEO_SUBTITLE_SYNC_OFFSET_LIMIT_MS,
+                                    VIDEO_SUBTITLE_SYNC_OFFSET_LIMIT_MS
+                                )
+                                latestOnPreviewChange(localDraft)
+                                delay(90L)
+                            }
+                        }
+
+                        awaitPointerEventScope {
+                            do {
+                                val event = awaitPointerEvent()
+                                pointerIsDown = event.changes.any { it.pressed }
+                                event.changes.forEach { it.consume() }
+                            } while (pointerIsDown)
+                        }
+
+                        repeatJob.cancel()
+
+                        val finalOffsetMs = if (longPressStarted) {
+                            localDraft
+                        } else {
+                            (latestCurrentOffsetMs + direction * 100L).coerceIn(
+                                -VIDEO_SUBTITLE_SYNC_OFFSET_LIMIT_MS,
+                                VIDEO_SUBTITLE_SYNC_OFFSET_LIMIT_MS
+                            )
+                        }
+                        latestOnPreviewChange(finalOffsetMs)
+                        latestOnCommit(finalOffsetMs)
+                    }
+                }
             },
-            color = if (subtitleSyncError == null) Color.White.copy(alpha = 0.42f) else Color(0xFFFFC1C1),
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.36f),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
         )
     }
 }
@@ -3365,16 +3605,11 @@ private fun SubtitleStyleChoiceChip(
 ) {
     Box(
         modifier = modifier
-            .height(38.dp)
+            .height(34.dp)
             .clip(RoundedCornerShape(11.dp))
             .background(
                 if (selected) PlayerMoonPurple.copy(alpha = 0.95f)
                 else Color(0xFF1D2233).copy(alpha = 0.72f)
-            )
-            .border(
-                width = 1.dp,
-                color = if (selected) PlayerMoonPurpleSoft.copy(alpha = 0.72f) else Color.White.copy(alpha = 0.055f),
-                shape = RoundedCornerShape(11.dp)
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp),
@@ -3397,7 +3632,7 @@ private fun SubtitlePresetColorGrid(
     selectedColor: VideoSubtitleColor,
     onSelect: (VideoSubtitleColor) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         SubtitlePanelSectionLabel("字幕颜色")
         VideoSubtitlePresetColors.chunked(5).forEach { rowColors ->
             Row(
@@ -3430,7 +3665,7 @@ private fun SubtitlePresetColorDot(
 ) {
     Box(
         modifier = modifier
-            .height(36.dp)
+            .height(32.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 3.dp),
@@ -3438,7 +3673,7 @@ private fun SubtitlePresetColorDot(
     ) {
         Box(
             modifier = Modifier
-                .size(30.dp)
+                .size(26.dp)
                 .clip(CircleShape)
                 .background(color.previewColor)
                 .border(
@@ -3488,7 +3723,7 @@ private fun SubtitleCustomColorSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onToggleExpanded)
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -7721,7 +7956,8 @@ private fun formatSignedDelay(delayMs: Long): String {
 
 private fun formatSubtitleOffsetSeconds(offsetMs: Long): String {
     val seconds = offsetMs / 1000f
-    return String.format(Locale.US, "%.1fs", seconds)
+    val sign = if (seconds > 0f) "+" else ""
+    return String.format(Locale.US, "%s%.1fs", sign, seconds)
 }
 
 private fun formatSubtitleOffsetSecondsForPanel(offsetMs: Long): String {
