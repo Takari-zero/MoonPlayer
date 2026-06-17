@@ -562,5 +562,12 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Old invalid cached thumbnails should be deleted and regenerated when encountered; if all candidates fail, show a placeholder instead of a fake success thumbnail.
 - Background thumbnail prewarming is complete. It starts after app startup/restored scans, video scan completion, rescan, and manual video folder add.
 - Prewarming must only process already scanned videos, skip valid cached thumbnails, skip unreadable/unavailable videos, run serially in the background, limit each run to about 100 videos, and pause briefly between items.
+- Thumbnail cache size limiting is complete for app cache `video_thumbnails`.
+- The cache limit is `300MB`; when exceeded, cleanup trims the directory to about `260MB`.
+- Cleanup must only scan and delete files inside `video_thumbnails`; never clear the whole app cache and never delete real video files.
+- Cache cleanup deletes by `lastModified` from oldest to newest. Successful cache reads should update `lastModified` so recently used thumbnails are kept longer.
+- Thumbnail delete failures during cleanup must not crash the app.
+- Background prewarming still goes through `VideoThumbnailStore`; generated thumbnails must pass black/white/low-information frame validation and then obey the same cache-size limit.
 - Do not introduce full-disk thumbnail scans, startup-wide parallel thumbnail generation, new permissions, or new dependencies for prewarming.
-- Regression boundaries: do not restore `remove` as the main destructive/non-destructive wording, do not make hide delete files, do not fake delete success, do not let unavailable files show restore, do not let unrelated videos share thumbnail cache, do not cache black/white frames, and do not start unlimited thumbnail work on app startup.
+- Regression boundaries: do not restore `remove` as the main destructive/non-destructive wording, do not make hide delete files, do not fake delete success, do not let unavailable files show restore, do not let unrelated videos share thumbnail cache, do not cache black/white frames, do not let thumbnail cache grow without limit, do not clear real videos or the whole app cache, and do not start unlimited thumbnail work on app startup.
+- Deferred enhancements: show thumbnail cache usage in settings, add a manual clear-thumbnail-cache action, and adjust the cache limit based on available device storage.
