@@ -290,3 +290,52 @@ Technical regression boundaries:
 - Do not bypass the existing delete permission chain.
 - Do not make UI-only controls that claim real playback, subtitle, gesture, or filter behavior without touching the real underlying path.
 - Do not modify music or novel modules as part of video closure work.
+
+## Video Recent UI And Subtitle Control Technical Boundary
+
+Recent completed commits covered video-home cache management, player entry refinement, advanced panel wording, and inline subtitle sync controls.
+
+Video home `More` panel:
+
+- The panel is a fixed-height dark translucent Compose surface with a fixed header and internally scrollable content.
+- `Cache management`, `Fields`, `Advanced`, and `Hidden records` are folded sections that must not resize the outer panel when expanded.
+- `Hidden records` stays at the bottom of the folded section stack.
+- `Advanced` uses the same folded-row height, icon sizing, title sizing, subtitle area, padding, background, and arrow alignment as the other folded sections.
+
+Thumbnail cache management:
+
+- Cache usage must be calculated from the real `cache/video_thumbnails/` directory.
+- The cache-size display must not use hard-coded values.
+- Manual cache clearing must only delete thumbnail-cache files under `video_thumbnails`.
+- Manual cache clearing must not delete source videos, hidden records, playback progress, subtitle files, or unrelated app cache.
+- The cache limit remains about `300MB`, trimmed to about `260MB`, and writes still pass through `VideoThumbnailStore`.
+
+Player function entries:
+
+- Default player controls expose speed, portrait/landscape, equalizer, picture adjustment, and expand.
+- Expanded controls expose screenshot, info, queue/list, AB loop, sleep timer, control bar, gestures, decode, advanced, and collapse.
+- Audio track selection remains in the top bar only; do not duplicate it in the player function grid.
+- This entry cleanup must not remove or weaken the underlying feature implementations.
+
+Advanced player panel:
+
+- The `Advanced` panel should list genuinely deferred high-risk work only.
+- External SRT subtitle time sync is already implemented and must not be shown as a generic future placeholder.
+- Deferred items include embedded subtitle time offset, full ASS/SSA advanced subtitle sync, FFmpeg/mpv/native decoder work, decoder enhancement, and complex picture filters.
+
+Subtitle style and inline subtitle sync:
+
+- Subtitle time sync is embedded in the subtitle style panel and should not navigate to a separate subtitle-time panel from the subtitle style flow.
+- No external SRT: show `需外挂 SRT`, disable plus/minus and drag controls, and do not call the real offset path.
+- External SRT loaded: plus/minus changes offset through the existing external SRT offset implementation.
+- Short press on `+/-` changes exactly `0.1s`.
+- Long press on `+/-` continuously repeats offset changes.
+- Vertical drag on the center value accumulates drag distance, can cross multiple `0.1s` steps in one gesture, previews the draft offset while dragging, and applies the final offset on release.
+- Offset remains clamped to about `-5.0s` through `+5.0s`.
+- Do not add a second SRT parser path for these controls; reuse the existing adjusted-SRT reload path.
+
+Video-module technical boundaries:
+
+- External `.srt` sync is the current supported subtitle-sync scope.
+- Embedded subtitle offset and ASS/SSA advanced subtitle sync remain deferred.
+- No FFmpeg/mpv/native decoder, new permissions, new dependencies, Gradle changes, Manifest changes, music changes, or novel changes are part of this completion.

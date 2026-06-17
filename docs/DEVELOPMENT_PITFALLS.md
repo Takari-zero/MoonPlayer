@@ -633,3 +633,49 @@ Hard regression bans:
 - Do not let unavailable files enter the player.
 - Do not add permanent delete to the player queue panel.
 - Do not add permissions/dependencies or enter music/novel modules while video regressions remain unresolved.
+
+## Recent Video Completion Regression Notes
+
+Video home `More` panel:
+
+- Do not let expanded `Cache management`, `Fields`, `Advanced`, or `Hidden records` stretch the outer `More` panel. The shell height should stay fixed and the content should scroll internally.
+- Keep `Hidden records` at the bottom of the folded section stack.
+- Keep the `Advanced` folded row visually aligned with `Cache management`, `Fields`, and `Hidden records`.
+- Do not turn cache management into a new page. It belongs inside the video home `More` panel.
+
+Thumbnail cache management:
+
+- Cache size must come from the real `cache/video_thumbnails/` directory, not a design placeholder such as `128 MB`.
+- Clearing thumbnail cache must only clear thumbnail cache files. It must not delete local video files, hidden records, playback progress, subtitle data, or the entire app cache.
+- Keep the cache-size boundary: about `300MB` maximum and about `260MB` trim target.
+- Do not bypass `VideoThumbnailStore`; it owns invalid-frame rejection and cache-size enforcement.
+
+Player function area:
+
+- The default player function grid should stay scoped to speed, portrait/landscape, equalizer, picture adjustment, and expand.
+- Expanded controls should contain screenshot, info, queue/list, AB loop, sleep timer, control bar, gestures, decode, advanced, and collapse.
+- Audio track should not be duplicated in the function grid; it remains a top-bar entry.
+- Do not mistake entry cleanup for feature removal.
+
+Advanced panel:
+
+- Do not show external SRT subtitle time sync as an unfinished generic `future` item.
+- External SRT subtitle time sync is complete.
+- Embedded subtitle time offset, ASS/SSA advanced subtitle sync, FFmpeg/mpv/native decoder work, decoder enhancement, and complex picture filters remain deferred.
+- Do not claim deferred subtitle or decoder work is complete without a real rendering/playback path and real-device verification.
+
+Subtitle style and inline subtitle timing:
+
+- Subtitle time sync now lives inside the subtitle style panel. Do not reintroduce a jump from subtitle style to a separate subtitle-time page.
+- Without an external `.srt`, show `需外挂 SRT`, disable plus/minus and drag controls, and do not fake success.
+- With an external `.srt`, plus/minus and drag controls must call the existing real offset path.
+- Short press on plus/minus should change only `0.1s`; long press is the fast-repeat path.
+- Vertical drag on the center value should accumulate distance, preview multiple `0.1s` steps during one drag, and apply the final offset on release.
+- Keep the clamp around `-5.0s` to `+5.0s`.
+- Do not rewrite SRT parsing for this UI; reuse the existing external SRT offset implementation.
+
+Current video-module boundary:
+
+- Supported subtitle sync remains external `.srt` only.
+- Embedded subtitle offset and ASS/SSA advanced sync are not complete.
+- Do not add FFmpeg/mpv/native decoder, permissions, dependencies, Gradle changes, Manifest changes, music-module changes, or novel-module changes while documenting this status.

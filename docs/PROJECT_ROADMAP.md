@@ -433,3 +433,57 @@ Do not regress:
 - Do not add dangerous delete actions to the player queue panel.
 - Do not add permissions, dependencies, or scanner-wide changes without a separate approved task.
 - Do not move into music or novel modules by regressing video-module behavior.
+
+## Video Module Recent Completion Sync
+
+Recent shipped video work includes `9d82c47 feat(video): add cache management and refine controls`, `002d11e fix(video): clarify advanced panel roadmap`, and `9bdbd5d feat(video): improve subtitle sync controls`.
+
+Video home `More` panel completion:
+
+- The video home `More` panel is unified as a dark translucent panel.
+- The panel shell has a fixed height: the header remains fixed and the content area scrolls internally.
+- Expanded sections such as cache management, fields, advanced, and hidden records must not stretch the outer panel.
+- Hidden records are placed at the bottom of the panel.
+- The advanced entry height is aligned with other folded entries.
+
+Cache management completion:
+
+- Thumbnail cache management uses the real cache directory: `cache/video_thumbnails/`.
+- The UI displays the real current thumbnail cache size.
+- Clearing cache only clears thumbnail cache files and never deletes local video files.
+- Thumbnail cache size remains bounded: about `300MB` maximum, trimmed to about `260MB`.
+
+Player function entry completion:
+
+- The default player function entries are now scoped to: speed, portrait/landscape, equalizer, picture adjustment, and expand.
+- Expanded player functions show screenshot, info, queue/list, AB loop, sleep timer, control bar, gestures, decode, advanced, and collapse.
+- Audio track remains only in the top bar and is no longer duplicated in the function area.
+- Player features were not removed; only the entry hierarchy was cleaned up.
+
+Advanced panel completion and boundary:
+
+- The old misleading "future specialty" panel has been replaced by the `Advanced` panel.
+- The stale `subtitle time sync / future` placeholder has been removed or rewritten.
+- External SRT subtitle time sync is complete.
+- Embedded subtitle time offset remains deferred.
+- Full ASS/SSA advanced subtitle sync remains deferred.
+- Decoder enhancement, FFmpeg/mpv/native decoder work, and complex picture filters remain deferred high-risk work.
+
+Subtitle style and subtitle time sync completion:
+
+- The subtitle style panel has been tightened while keeping the right-side player panel style.
+- Subtitle time sync is embedded inside the subtitle style panel.
+- Tapping subtitle time no longer opens a separate subtitle-time page.
+- Without an external SRT, the panel shows `需外挂 SRT`; plus/minus and drag adjustment are disabled and must not fake success.
+- With an external SRT, plus/minus adjusts subtitle offset. Short press changes exactly `0.1s`; long press continuously adjusts.
+- Vertical drag on the central value can continuously cross multiple `0.1s` steps, shows the draft value during drag, and applies the final offset on release.
+- The supported offset range remains about `-5.0s` to `+5.0s`.
+- The implementation continues to reuse the existing external SRT offset path and must not rewrite a separate SRT parser.
+
+Current video-module boundaries:
+
+- Current subtitle sync support is external `.srt` only.
+- Do not document embedded subtitle offset as complete.
+- Do not document ASS/SSA advanced subtitle sync as complete.
+- Do not add FFmpeg, mpv, native decoder, permissions, dependencies, or cross-module changes as part of these completed items.
+- Music and novel modules are not changed by this video-module completion work.

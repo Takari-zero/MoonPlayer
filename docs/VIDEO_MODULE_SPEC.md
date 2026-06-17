@@ -338,3 +338,49 @@
 - 再次播放同一视频时从上次位置继续。
 - 文件夹详情页显示“上次播放到 xx:xx”。
 
+## 17. Recent Video Module Completion Status
+
+Video home `More` panel:
+
+- The video home `More` panel uses a dark translucent style with fixed shell height, fixed header, and internally scrollable content.
+- Expanded entries such as cache management, fields, advanced, and hidden records must not stretch the outer panel.
+- Hidden records are placed at the bottom.
+- The advanced entry height matches the other folded entries.
+
+Cache management:
+
+- The video thumbnail cache directory is `cache/video_thumbnails/`.
+- The cache management entry shows real cache usage, not mock data.
+- Clearing cache only clears thumbnail cache files and does not delete local videos.
+- Thumbnail cache remains bounded at about `300MB` and trims to about `260MB`.
+
+Player function area:
+
+- Default player function entries are speed, portrait/landscape, equalizer, picture adjustment, and expand.
+- Expanded entries are screenshot, info, queue/list, AB loop, sleep timer, control bar, gestures, decode, advanced, and collapse.
+- Audio track selection is kept in the top bar only.
+- The feature set is not reduced; the entry hierarchy is only organized.
+
+Advanced panel and subtitle boundary:
+
+- The advanced panel no longer shows the misleading generic `subtitle time sync / future` placeholder.
+- External `.srt` subtitle time sync is complete.
+- Embedded subtitle time offset remains deferred.
+- ASS/SSA advanced subtitle sync remains deferred.
+- FFmpeg/mpv/native decoder, decoder enhancement, and complex picture filters remain deferred high-risk items.
+
+Subtitle style and inline subtitle timing:
+
+- Subtitle time sync is embedded inside the subtitle style panel.
+- Tapping subtitle time no longer opens an independent subtitle-time page.
+- Without external SRT, the panel shows `需外挂 SRT`, disables plus/minus and drag controls, and must not fake success.
+- With external SRT, plus/minus adjusts offset; short press changes `0.1s`, long press repeats quickly.
+- Vertical drag on the center value can adjust multiple `0.1s` steps, previews the draft value during drag, and applies the final offset on release.
+- Offset remains limited to about `-5.0s` through `+5.0s`.
+- The implementation reuses the existing external SRT offset path and does not introduce a separate parser.
+
+Boundaries:
+
+- Current subtitle sync support is external `.srt` only.
+- Do not mark embedded subtitle offset or ASS/SSA advanced sync as complete.
+- Do not add FFmpeg/mpv/native decoder, permissions, dependencies, Gradle changes, Manifest changes, music changes, or novel changes as part of this video status.
