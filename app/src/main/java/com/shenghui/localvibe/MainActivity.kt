@@ -83,6 +83,7 @@ import com.shenghui.localvibe.core.datastore.PersistedBookFile
 import com.shenghui.localvibe.core.datastore.PersistedBookProgress
 import com.shenghui.localvibe.core.datastore.PersistedFolder
 import com.shenghui.localvibe.core.datastore.PersistedPlaybackProgress
+import com.shenghui.localvibe.core.datastore.PersistedVideoVisibilityRecord
 import com.shenghui.localvibe.core.media.deleteUri
 import com.shenghui.localvibe.core.media.resolveDocumentTreeName
 import com.shenghui.localvibe.core.media.VideoMetadata
@@ -104,6 +105,8 @@ import com.shenghui.localvibe.feature.settings.SettingsScreen
 import com.shenghui.localvibe.feature.video.VideoLibraryScreen
 import com.shenghui.localvibe.feature.video.VideoPlayerScreen
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
+import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordType
+import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordUiModel
 import com.shenghui.localvibe.feature.library.MediaFolderGroupUiModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -142,6 +145,9 @@ private fun LocalVibeApp() {
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoUris by remember { mutableStateOf(emptySet<String>()) }
     var hiddenVideoFolderIds by remember { mutableStateOf(emptySet<String>()) }
+    val hiddenVideoRecords = remember { mutableStateListOf<PersistedVideoVisibilityRecord>() }
+    val hiddenVideoFolderRecords = remember { mutableStateListOf<PersistedVideoVisibilityRecord>() }
+    val unavailableVideoRecords = remember { mutableStateListOf<PersistedVideoVisibilityRecord>() }
     val videoFolderPlaybackSpeeds = remember { mutableStateMapOf<String, Float>() }
     var isVideoVisibilityReady by remember { mutableStateOf(false) }
     var isVideoInitialScanComplete by remember { mutableStateOf(false) }
@@ -248,7 +254,9 @@ private fun LocalVibeApp() {
             .toSet()
         if (uris.isEmpty()) return
         hiddenVideoUris = hiddenVideoUris + uris
-        appStateStore.hideVideoUris(uris)
+        appStateStore.hideVideoFiles(files)
+        hiddenVideoRecords.clear()
+        hiddenVideoRecords.addAll(appStateStore.loadHiddenVideoRecords())
     }
 
     fun playAudioQueue(queue: List<LocalMediaFile>, file: LocalMediaFile, shuffle: Boolean = false) {
@@ -539,6 +547,9 @@ private fun LocalVibeApp() {
     fun openVideoIfReadable(file: LocalMediaFile, queue: List<LocalMediaFile>) {
         coroutineScope.launch {
             if (!isLocalMediaFileReadable(file)) {
+                appStateStore.upsertUnavailableVideoRecord(file)
+                unavailableVideoRecords.clear()
+                unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
                 showUnavailableVideoHint()
                 return@launch
             }
@@ -859,7 +870,21 @@ private fun LocalVibeApp() {
         val manualFolderIds = folderIds - autoFolderIds
         if (autoFolderIds.isNotEmpty()) {
             hiddenVideoFolderIds = hiddenVideoFolderIds + autoFolderIds
-            appStateStore.hideVideoFolderIds(autoFolderIds)
+            appStateStore.hideVideoFolderRecords(
+                folders
+                    .filter { it.id.trim() in autoFolderIds }
+                    .map { folder ->
+                        PersistedVideoVisibilityRecord(
+                            id = folder.id.trim(),
+                            name = folder.name.ifBlank { folder.id.trim() },
+                            uri = folder.uri,
+                            path = folder.uri,
+                            recordedAt = System.currentTimeMillis()
+                        )
+                    }
+            )
+            hiddenVideoFolderRecords.clear()
+            hiddenVideoFolderRecords.addAll(appStateStore.loadHiddenVideoFolderRecords())
         }
         if (manualFolderIds.isNotEmpty()) {
             appStateStore.removeFolders(LocalMediaType.VIDEO.name, manualFolderIds)
@@ -1225,6 +1250,12 @@ private fun LocalVibeApp() {
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
         hiddenVideoUris = appStateStore.loadHiddenVideoUris()
         hiddenVideoFolderIds = appStateStore.loadHiddenVideoFolderIds()
+        hiddenVideoRecords.clear()
+        hiddenVideoRecords.addAll(appStateStore.loadHiddenVideoRecords())
+        hiddenVideoFolderRecords.clear()
+        hiddenVideoFolderRecords.addAll(appStateStore.loadHiddenVideoFolderRecords())
+        unavailableVideoRecords.clear()
+        unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
         videoFolderPlaybackSpeeds.clear()
         videoFolderPlaybackSpeeds.putAll(appStateStore.loadVideoFolderPlaybackSpeeds())
         isVideoVisibilityReady = true
@@ -1424,6 +1455,119 @@ private fun LocalVibeApp() {
         applyAudioPlayMode(musicController, audioPlayMode)
     }
 
+    fun refreshVideoVisibilityRecordState() {
+        coroutineScope.launch {
+            hiddenVideoRecords.clear()
+            hiddenVideoRecords.addAll(appStateStore.loadHiddenVideoRecords())
+            hiddenVideoFolderRecords.clear()
+            hiddenVideoFolderRecords.addAll(appStateStore.loadHiddenVideoFolderRecords())
+            unavailableVideoRecords.clear()
+            unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
+        }
+    }
+
+    fun restoreVideoVisibilityRecords(records: List<VideoVisibilityRecordUiModel>) {
+        val restorableRecords = records.filter { it.type != VideoVisibilityRecordType.UNAVAILABLE_FILE }
+        if (restorableRecords.isEmpty()) {
+            Toast.makeText(context, "失效文件无法恢复，只能清除记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        coroutineScope.launch {
+            val folderIds = restorableRecords
+                .filter { it.type == VideoVisibilityRecordType.HIDDEN_FOLDER }
+                .map { it.id.trim() }
+                .filter { it.isNotBlank() }
+                .toSet()
+            val removedVideoRecords = restorableRecords
+                .filter { it.type == VideoVisibilityRecordType.REMOVED_VIDEO }
+            if (folderIds.isNotEmpty()) {
+                hiddenVideoFolderIds = hiddenVideoFolderIds - folderIds
+                appStateStore.removeHiddenVideoFolderIds(folderIds)
+            }
+
+            val removedUris = removedVideoRecords.map { it.id.trim() }.filter { it.isNotBlank() }.toSet()
+            if (removedUris.isNotEmpty()) {
+                hiddenVideoUris = hiddenVideoUris - removedUris
+                appStateStore.removeHiddenVideoUris(removedUris)
+            }
+
+            var unavailableCount = 0
+            removedVideoRecords.forEach { record ->
+                val file = record.toLocalVideoFile()
+                if (!isLocalMediaFileReadable(file)) {
+                    unavailableCount += 1
+                    appStateStore.upsertUnavailableVideoRecord(file)
+                }
+            }
+
+            hiddenVideoRecords.clear()
+            hiddenVideoRecords.addAll(appStateStore.loadHiddenVideoRecords())
+            hiddenVideoFolderRecords.clear()
+            hiddenVideoFolderRecords.addAll(appStateStore.loadHiddenVideoFolderRecords())
+            unavailableVideoRecords.clear()
+            unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
+
+            Toast.makeText(
+                context,
+                if (unavailableCount > 0) {
+                    "部分视频已失效，已转入失效文件记录"
+                } else {
+                    "已恢复显示"
+                },
+                Toast.LENGTH_SHORT
+            ).show()
+            autoScanVideoAndAudio(force = true, showCompletionToast = false)
+        }
+    }
+
+    fun clearVideoVisibilityRecords(records: List<VideoVisibilityRecordUiModel>) {
+        if (records.isEmpty()) {
+            Toast.makeText(context, "请先选择记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        coroutineScope.launch {
+            val folderIds = records
+                .filter { it.type == VideoVisibilityRecordType.HIDDEN_FOLDER }
+                .map { it.id.trim() }
+                .filter { it.isNotBlank() }
+                .toSet()
+            val removedUris = records
+                .filter { it.type == VideoVisibilityRecordType.REMOVED_VIDEO }
+                .map { it.id.trim() }
+                .filter { it.isNotBlank() }
+                .toSet()
+            val unavailableUris = records
+                .filter { it.type == VideoVisibilityRecordType.UNAVAILABLE_FILE }
+                .map { it.id.trim() }
+                .filter { it.isNotBlank() }
+                .toSet()
+
+            if (folderIds.isNotEmpty()) {
+                hiddenVideoFolderIds = hiddenVideoFolderIds - folderIds
+                appStateStore.removeHiddenVideoFolderIds(folderIds)
+            }
+            if (removedUris.isNotEmpty()) {
+                hiddenVideoUris = hiddenVideoUris - removedUris
+                appStateStore.removeHiddenVideoUris(removedUris)
+            }
+            if (unavailableUris.isNotEmpty()) {
+                appStateStore.removeUnavailableVideoUris(unavailableUris)
+            }
+
+            hiddenVideoRecords.clear()
+            hiddenVideoRecords.addAll(appStateStore.loadHiddenVideoRecords())
+            hiddenVideoFolderRecords.clear()
+            hiddenVideoFolderRecords.addAll(appStateStore.loadHiddenVideoFolderRecords())
+            unavailableVideoRecords.clear()
+            unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
+
+            Toast.makeText(context, "已清除记录，不会删除真实文件", Toast.LENGTH_SHORT).show()
+            if (folderIds.isNotEmpty() || removedUris.isNotEmpty()) {
+                autoScanVideoAndAudio(force = true, showCompletionToast = false)
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1466,6 +1610,11 @@ private fun LocalVibeApp() {
                             source = folder.sourceLabel()
                         )
                     }
+                    val videoVisibilityRecords = buildVideoVisibilityRecords(
+                        hiddenFolderRecords = hiddenVideoFolderRecords,
+                        removedVideoRecords = hiddenVideoRecords,
+                        unavailableRecords = unavailableVideoRecords
+                    )
                     VideoLibraryScreen(
                         videoFolders = videoFolderGroups,
                         isLoading = !isVideoVisibilityReady ||
@@ -1498,6 +1647,13 @@ private fun LocalVibeApp() {
                         },
                         onRescanVideo = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                        },
+                        visibilityRecords = videoVisibilityRecords,
+                        onRestoreVisibilityRecords = { records ->
+                            restoreVideoVisibilityRecords(records)
+                        },
+                        onClearVisibilityRecords = { records ->
+                            clearVideoVisibilityRecords(records)
                         },
                         onMore = {
                             Toast.makeText(context, "请进入文件夹后多选删除", Toast.LENGTH_SHORT).show()
@@ -1729,6 +1885,13 @@ private fun LocalVibeApp() {
                             permanentlyDeleteMedia(files)
                         }
                     },
+                    onUnavailableVideoDetected = { file ->
+                        coroutineScope.launch {
+                            appStateStore.upsertUnavailableVideoRecord(file)
+                            unavailableVideoRecords.clear()
+                            unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
+                        }
+                    },
                     deleteSuccessSignal = folderVideoDeleteSuccessSignal,
                     onRescanFolder = { rescanCurrentVideoFolder() },
                     onBack = { navController.popBackStack() }
@@ -1925,6 +2088,8 @@ private fun LocalVibeApp() {
                             appStateStore.clearHiddenVideoFolderIds()
                             hiddenVideoUris = emptySet()
                             hiddenVideoFolderIds = emptySet()
+                            hiddenVideoRecords.clear()
+                            hiddenVideoFolderRecords.clear()
                             Toast.makeText(context, "已恢复隐藏视频", Toast.LENGTH_SHORT).show()
                             autoScanVideoAndAudio(force = true)
                         }
@@ -2137,6 +2302,50 @@ private fun typedFolderKey(
 private fun LocalMediaFile.normalizedBookKey(): String {
     val normalizedUri = uri.trim()
     return normalizedUri.ifBlank { "${name.trim().lowercase()}:$size" }
+}
+
+private fun buildVideoVisibilityRecords(
+    hiddenFolderRecords: List<PersistedVideoVisibilityRecord>,
+    removedVideoRecords: List<PersistedVideoVisibilityRecord>,
+    unavailableRecords: List<PersistedVideoVisibilityRecord>
+): List<VideoVisibilityRecordUiModel> {
+    return buildList {
+        hiddenFolderRecords.forEach { record ->
+            add(record.toVideoVisibilityRecordUiModel(VideoVisibilityRecordType.HIDDEN_FOLDER))
+        }
+        removedVideoRecords.forEach { record ->
+            add(record.toVideoVisibilityRecordUiModel(VideoVisibilityRecordType.REMOVED_VIDEO))
+        }
+        unavailableRecords.forEach { record ->
+            add(record.toVideoVisibilityRecordUiModel(VideoVisibilityRecordType.UNAVAILABLE_FILE))
+        }
+    }.sortedByDescending { it.recordedAt }
+}
+
+private fun PersistedVideoVisibilityRecord.toVideoVisibilityRecordUiModel(
+    type: VideoVisibilityRecordType
+): VideoVisibilityRecordUiModel {
+    return VideoVisibilityRecordUiModel(
+        id = id.ifBlank { uri },
+        type = type,
+        name = name.ifBlank { id.ifBlank { uri } },
+        path = path?.takeIf { it.isNotBlank() } ?: uri.takeIf { it.isNotBlank() },
+        recordedAt = recordedAt
+    )
+}
+
+private fun VideoVisibilityRecordUiModel.toLocalVideoFile(): LocalMediaFile {
+    val uriValue = id.ifBlank { path.orEmpty() }
+    val safeName = name.ifBlank { uriValue }
+    return LocalMediaFile(
+        id = uriValue,
+        name = safeName,
+        uri = uriValue,
+        type = LocalMediaType.VIDEO,
+        extension = safeName.substringAfterLast('.', "").lowercase(),
+        size = 0L,
+        parentFolderName = path
+    )
 }
 
 private fun LocalMediaFile.normalizedUri(): String = uri.trim()

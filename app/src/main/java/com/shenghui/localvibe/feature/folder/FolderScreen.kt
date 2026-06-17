@@ -113,6 +113,7 @@ fun FolderScreen(
     onDeleteFile: (LocalMediaFile) -> Unit,
     onRemoveFiles: (List<LocalMediaFile>) -> Unit,
     onDeleteFiles: (List<LocalMediaFile>) -> Unit,
+    onUnavailableVideoDetected: (LocalMediaFile) -> Unit = {},
     deleteSuccessSignal: Long = 0L,
     onRescanFolder: () -> Unit = {},
     onBack: () -> Unit,
@@ -191,6 +192,7 @@ fun FolderScreen(
             if (isAvailable) {
                 onOpenVideo(file)
             } else {
+                onUnavailableVideoDetected(file)
                 Toast.makeText(context, "文件已失效，可从列表移除", Toast.LENGTH_SHORT).show()
             }
         }
@@ -408,6 +410,7 @@ fun FolderScreen(
                                         onMetadataLoaded = onVideoMetadataLoaded,
                                         onAvailabilityChanged = { isUnavailable ->
                                             unavailableVideoUris[file.uri] = isUnavailable
+                                            if (isUnavailable) onUnavailableVideoDetected(file)
                                         },
                                         onRemove = { onRemoveFile(file) },
                                         onDelete = { onDeleteFile(file) },
@@ -448,6 +451,7 @@ fun FolderScreen(
                                         onMetadataLoaded = onVideoMetadataLoaded,
                                         onAvailabilityChanged = { isUnavailable ->
                                             unavailableVideoUris[file.uri] = isUnavailable
+                                            if (isUnavailable) onUnavailableVideoDetected(file)
                                         },
                                         onRemove = { onRemoveFile(file) },
                                         onDelete = { onDeleteFile(file) },

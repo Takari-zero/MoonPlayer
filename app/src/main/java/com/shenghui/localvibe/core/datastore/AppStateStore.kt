@@ -173,6 +173,11 @@ class AppStateStore(private val context: Context) {
         return decodeHiddenVideoUris(json)
     }
 
+    suspend fun loadHiddenVideoRecords(): List<PersistedVideoVisibilityRecord> {
+        val json = context.appStateDataStore.data.first()[HiddenVideoUrisKey].orEmpty()
+        return decodeVideoVisibilityRecords(json, idKey = "uri")
+    }
+
     suspend fun hideVideoUris(uris: Collection<String>) {
         val normalizedUris = uris.map { it.trim() }.filter { it.isNotBlank() }
         if (normalizedUris.isEmpty()) return
@@ -181,6 +186,38 @@ class AppStateStore(private val context: Context) {
                 .plus(normalizedUris)
                 .toSet()
             prefs[HiddenVideoUrisKey] = encodeHiddenVideoUris(next)
+        }
+    }
+
+    suspend fun hideVideoFiles(files: Collection<com.shenghui.localvibe.core.scanner.LocalMediaFile>) {
+        val records = files
+            .filter { it.type == com.shenghui.localvibe.core.scanner.LocalMediaType.VIDEO }
+            .map { file ->
+                PersistedVideoVisibilityRecord(
+                    id = file.uri.trim(),
+                    name = file.name.ifBlank { file.uri.trim() },
+                    uri = file.uri.trim(),
+                    path = file.parentFolderName,
+                    recordedAt = System.currentTimeMillis()
+                )
+            }
+            .filter { it.uri.isNotBlank() }
+        if (records.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoVisibilityRecords(prefs[HiddenVideoUrisKey].orEmpty(), idKey = "uri")
+                .filterNot { existing -> records.any { it.uri == existing.uri } }
+                .plus(records)
+            prefs[HiddenVideoUrisKey] = encodeVideoVisibilityRecords(next, idKey = "uri")
+        }
+    }
+
+    suspend fun removeHiddenVideoUris(uris: Collection<String>) {
+        val normalizedUris = uris.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (normalizedUris.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoVisibilityRecords(prefs[HiddenVideoUrisKey].orEmpty(), idKey = "uri")
+                .filterNot { it.uri.trim() in normalizedUris }
+            prefs[HiddenVideoUrisKey] = encodeVideoVisibilityRecords(next, idKey = "uri")
         }
     }
 
@@ -208,6 +245,11 @@ class AppStateStore(private val context: Context) {
         }.getOrDefault(emptySet())
     }
 
+    suspend fun loadHiddenVideoFolderRecords(): List<PersistedVideoVisibilityRecord> {
+        val json = context.appStateDataStore.data.first()[HiddenVideoFolderIdsKey].orEmpty()
+        return decodeVideoVisibilityRecords(json, idKey = "folderId")
+    }
+
     suspend fun hideVideoFolderIds(folderIds: Collection<String>) {
         val normalizedIds = folderIds.map { it.trim() }.filter { it.isNotBlank() }
         if (normalizedIds.isEmpty()) return
@@ -219,9 +261,64 @@ class AppStateStore(private val context: Context) {
         }
     }
 
+    suspend fun hideVideoFolderRecords(folders: Collection<PersistedVideoVisibilityRecord>) {
+        val records = folders.filter { it.id.isNotBlank() }
+        if (records.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoVisibilityRecords(prefs[HiddenVideoFolderIdsKey].orEmpty(), idKey = "folderId")
+                .filterNot { existing -> records.any { it.id == existing.id } }
+                .plus(records)
+            prefs[HiddenVideoFolderIdsKey] = encodeVideoVisibilityRecords(next, idKey = "folderId")
+        }
+    }
+
+    suspend fun removeHiddenVideoFolderIds(folderIds: Collection<String>) {
+        val normalizedIds = folderIds.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (normalizedIds.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoVisibilityRecords(prefs[HiddenVideoFolderIdsKey].orEmpty(), idKey = "folderId")
+                .filterNot { it.id.trim() in normalizedIds || it.uri.trim() in normalizedIds }
+            prefs[HiddenVideoFolderIdsKey] = encodeVideoVisibilityRecords(next, idKey = "folderId")
+        }
+    }
+
     suspend fun clearHiddenVideoFolderIds() {
         context.appStateDataStore.edit { prefs ->
             prefs.remove(HiddenVideoFolderIdsKey)
+        }
+    }
+
+    suspend fun loadUnavailableVideoRecords(): List<PersistedVideoVisibilityRecord> {
+        val json = context.appStateDataStore.data.first()[UnavailableVideoRecordsKey].orEmpty()
+        return decodeVideoVisibilityRecords(json, idKey = "uri")
+    }
+
+    suspend fun upsertUnavailableVideoRecord(file: com.shenghui.localvibe.core.scanner.LocalMediaFile) {
+        if (file.type != com.shenghui.localvibe.core.scanner.LocalMediaType.VIDEO) return
+        val uri = file.uri.trim()
+        if (uri.isBlank()) return
+        val record = PersistedVideoVisibilityRecord(
+            id = uri,
+            name = file.name.ifBlank { uri },
+            uri = uri,
+            path = file.parentFolderName,
+            recordedAt = System.currentTimeMillis()
+        )
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoVisibilityRecords(prefs[UnavailableVideoRecordsKey].orEmpty(), idKey = "uri")
+                .filterNot { it.uri == uri }
+                .plus(record)
+            prefs[UnavailableVideoRecordsKey] = encodeVideoVisibilityRecords(next, idKey = "uri")
+        }
+    }
+
+    suspend fun removeUnavailableVideoUris(uris: Collection<String>) {
+        val normalizedUris = uris.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (normalizedUris.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeVideoVisibilityRecords(prefs[UnavailableVideoRecordsKey].orEmpty(), idKey = "uri")
+                .filterNot { it.uri.trim() in normalizedUris }
+            prefs[UnavailableVideoRecordsKey] = encodeVideoVisibilityRecords(next, idKey = "uri")
         }
     }
 
@@ -545,6 +642,69 @@ class AppStateStore(private val context: Context) {
         return array.toString()
     }
 
+    private fun decodeVideoVisibilityRecords(
+        json: String,
+        idKey: String
+    ): List<PersistedVideoVisibilityRecord> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val array = JSONArray(json)
+            List(array.length()) { index ->
+                val value = array.opt(index)
+                if (value is JSONObject) {
+                    val id = value.optString(idKey).ifBlank {
+                        value.optString("uri").ifBlank { value.optString("folderId") }
+                    }.trim()
+                    PersistedVideoVisibilityRecord(
+                        id = id,
+                        name = value.optString("name").ifBlank { id },
+                        uri = value.optString("uri").ifBlank { id },
+                        path = value.optString("path").takeIf { it.isNotBlank() },
+                        recordedAt = value.optLong(
+                            when (idKey) {
+                                "folderId" -> "hiddenAt"
+                                else -> "recordedAt"
+                            },
+                            value.optLong("hiddenAt", System.currentTimeMillis())
+                        )
+                    )
+                } else {
+                    val id = value?.toString().orEmpty().trim()
+                    PersistedVideoVisibilityRecord(
+                        id = id,
+                        name = id,
+                        uri = id,
+                        path = null,
+                        recordedAt = 0L
+                    )
+                }
+            }.filter { it.id.isNotBlank() }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeVideoVisibilityRecords(
+        records: List<PersistedVideoVisibilityRecord>,
+        idKey: String
+    ): String {
+        val array = JSONArray()
+        records.distinctBy { it.id.trim() }.forEach { record ->
+            val normalizedId = record.id.trim()
+            if (normalizedId.isBlank()) return@forEach
+            array.put(
+                JSONObject()
+                    .put(idKey, normalizedId)
+                    .put("name", record.name.ifBlank { normalizedId })
+                    .put("uri", record.uri.ifBlank { normalizedId })
+                    .put("path", record.path.orEmpty())
+                    .put(
+                        if (idKey == "folderId") "hiddenAt" else "recordedAt",
+                        record.recordedAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+                    )
+            )
+        }
+        return array.toString()
+    }
+
     private companion object {
         val FoldersKey = stringPreferencesKey("manual_folders_json")
         val BookFilesKey = stringPreferencesKey("book_files_json")
@@ -552,6 +712,7 @@ class AppStateStore(private val context: Context) {
         val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
         val HiddenVideoUrisKey = stringPreferencesKey("hidden_video_uris_json")
         val HiddenVideoFolderIdsKey = stringPreferencesKey("hidden_video_folder_ids_json")
+        val UnavailableVideoRecordsKey = stringPreferencesKey("unavailable_video_records_json")
         val ProgressKey = stringPreferencesKey("playback_progress_json")
         val VideoFolderPlaybackSpeedKey = stringPreferencesKey("video_folder_playback_speed_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")

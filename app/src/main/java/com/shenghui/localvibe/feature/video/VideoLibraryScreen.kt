@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Card
@@ -94,6 +96,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
+import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordType
+import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordUiModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -130,6 +134,9 @@ fun VideoLibraryScreen(
     onContinueVideo: (LocalMediaFile) -> Unit,
     onRemoveFolders: (List<VideoFolderUiModel>) -> Unit,
     onRescanVideo: () -> Unit,
+    visibilityRecords: List<VideoVisibilityRecordUiModel> = emptyList(),
+    onRestoreVisibilityRecords: (List<VideoVisibilityRecordUiModel>) -> Unit = {},
+    onClearVisibilityRecords: (List<VideoVisibilityRecordUiModel>) -> Unit = {},
     onMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -244,7 +251,7 @@ fun VideoLibraryScreen(
                                 Toast.makeText(context, "请先选择文件夹", Toast.LENGTH_SHORT).show()
                             } else {
                                 onRemoveFolders(selectedFolders)
-                                Toast.makeText(context, "已移除 ${selectedFolders.size} 个文件夹", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "已隐藏 ${selectedFolders.size} 个文件夹", Toast.LENGTH_SHORT).show()
                                 selectedFolderIds = emptySet()
                                 isMultiSelectMode = false
                             }
@@ -391,6 +398,7 @@ fun VideoLibraryScreen(
                     showSize = showFolderSize,
                     showDate = showFolderDate,
                     showFormat = showFolderFormat,
+                    visibilityRecords = visibilityRecords,
                     onShowThumbnailChange = { showFolderThumbnail = it },
                     onShowThumbnailDurationChange = { showThumbnailDuration = it },
                     onShowSizeChange = { showFolderSize = it },
@@ -434,7 +442,9 @@ fun VideoLibraryScreen(
                         showMorePanel = false
                         isMultiSelectMode = true
                         selectedFolderIds = emptySet()
-                    }
+                    },
+                    onRestore = onRestoreVisibilityRecords,
+                    onClear = onClearVisibilityRecords
                 )
             }
         }
@@ -584,6 +594,390 @@ private fun PanelDivider() {
     )
 }
 
+private enum class VideoVisibilityRecordFilter {
+    ALL,
+    HIDDEN_FOLDER,
+    REMOVED_VIDEO,
+    UNAVAILABLE_FILE
+}
+
+@Composable
+private fun VideoVisibilityRecordsExpandable(
+    records: List<VideoVisibilityRecordUiModel>,
+    expanded: Boolean,
+    onExpandedChange: () -> Unit,
+    onRestore: (List<VideoVisibilityRecordUiModel>) -> Unit,
+    onClear: (List<VideoVisibilityRecordUiModel>) -> Unit
+) {
+    var selectedFilter by rememberSaveable { mutableStateOf(VideoVisibilityRecordFilter.ALL) }
+    var selectedRecordKeys by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    val filteredRecords = remember(records, selectedFilter) {
+        records.filter { record ->
+            when (selectedFilter) {
+                VideoVisibilityRecordFilter.ALL -> true
+                VideoVisibilityRecordFilter.HIDDEN_FOLDER -> record.type == VideoVisibilityRecordType.HIDDEN_FOLDER
+                VideoVisibilityRecordFilter.REMOVED_VIDEO -> record.type == VideoVisibilityRecordType.REMOVED_VIDEO
+                VideoVisibilityRecordFilter.UNAVAILABLE_FILE -> record.type == VideoVisibilityRecordType.UNAVAILABLE_FILE
+            }
+        }
+    }
+    val selectedRecords = remember(records, selectedRecordKeys) {
+        records.filter { it.visibilityRecordKey() in selectedRecordKeys }
+    }
+    val selectedRestorableRecords = selectedRecords.filter { it.type != VideoVisibilityRecordType.UNAVAILABLE_FILE }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(13.dp))
+            .background(Color.White.copy(alpha = 0.055f))
+            .clickable(onClick = onExpandedChange)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Filled.VisibilityOff,
+                contentDescription = null,
+                tint = VideoTextSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "隐藏记录",
+                    color = VideoTextPrimary,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1
+                )
+                Text(
+                    text = "管理隐藏文件夹、已隐藏视频和失效文件",
+                    color = VideoTextSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = VideoTextSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = {}),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    VideoVisibilityFilterChip(
+                        label = "全部",
+                        count = records.size,
+                        selected = selectedFilter == VideoVisibilityRecordFilter.ALL,
+                        onClick = {
+                            selectedFilter = VideoVisibilityRecordFilter.ALL
+                            selectedRecordKeys = emptySet()
+                        },
+                        modifier = Modifier.weight(0.9f)
+                    )
+                    VideoVisibilityFilterChip(
+                        label = "隐藏文件夹",
+                        count = records.count { it.type == VideoVisibilityRecordType.HIDDEN_FOLDER },
+                        selected = selectedFilter == VideoVisibilityRecordFilter.HIDDEN_FOLDER,
+                        onClick = {
+                            selectedFilter = VideoVisibilityRecordFilter.HIDDEN_FOLDER
+                            selectedRecordKeys = emptySet()
+                        },
+                        modifier = Modifier.weight(1.34f)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    VideoVisibilityFilterChip(
+                        label = "已隐藏视频",
+                        count = records.count { it.type == VideoVisibilityRecordType.REMOVED_VIDEO },
+                        selected = selectedFilter == VideoVisibilityRecordFilter.REMOVED_VIDEO,
+                        onClick = {
+                            selectedFilter = VideoVisibilityRecordFilter.REMOVED_VIDEO
+                            selectedRecordKeys = emptySet()
+                        },
+                        modifier = Modifier.weight(1.15f)
+                    )
+                    VideoVisibilityFilterChip(
+                        label = "失效文件",
+                        count = records.count { it.type == VideoVisibilityRecordType.UNAVAILABLE_FILE },
+                        selected = selectedFilter == VideoVisibilityRecordFilter.UNAVAILABLE_FILE,
+                        onClick = {
+                            selectedFilter = VideoVisibilityRecordFilter.UNAVAILABLE_FILE
+                            selectedRecordKeys = emptySet()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = if (filteredRecords.isEmpty()) 78.dp else 0.dp, max = 250.dp),
+                    contentPadding = PaddingValues(top = 2.dp, bottom = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    if (filteredRecords.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(78.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White.copy(alpha = 0.045f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "暂无相关记录",
+                                    color = VideoTextSecondary,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    } else {
+                        lazyItems(
+                            items = filteredRecords,
+                            key = { it.visibilityRecordKey() }
+                        ) { record ->
+                            val key = record.visibilityRecordKey()
+                            VideoVisibilityRecordCard(
+                                record = record,
+                                selected = key in selectedRecordKeys,
+                                onToggleSelected = {
+                                    selectedRecordKeys = selectedRecordKeys.toggle(key)
+                                },
+                                onRestore = {
+                                    onRestore(listOf(record))
+                                    selectedRecordKeys = selectedRecordKeys - key
+                                },
+                                onClear = {
+                                    onClear(listOf(record))
+                                    selectedRecordKeys = selectedRecordKeys - key
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    VideoVisibilityActionButton(
+                        text = "批量恢复",
+                        enabled = selectedRestorableRecords.isNotEmpty(),
+                        primary = false,
+                        onClick = {
+                            onRestore(selectedRestorableRecords)
+                            selectedRecordKeys = emptySet()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    VideoVisibilityActionButton(
+                        text = "批量清除",
+                        enabled = selectedRecords.isNotEmpty(),
+                        primary = false,
+                        onClick = {
+                            onClear(selectedRecords)
+                            selectedRecordKeys = emptySet()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoVisibilityFilterChip(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(17.dp))
+            .background(if (selected) VideoPrimary else Color.White.copy(alpha = 0.07f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "$label（$count）",
+            color = if (selected) Color.White else VideoTextSecondary,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun VideoVisibilityRecordCard(
+    record: VideoVisibilityRecordUiModel,
+    selected: Boolean,
+    onToggleSelected: () -> Unit,
+    onRestore: () -> Unit,
+    onClear: () -> Unit
+) {
+    val canRestore = record.type != VideoVisibilityRecordType.UNAVAILABLE_FILE
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) VideoPrimary.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.055f))
+            .then(
+                if (selected) {
+                    Modifier.background(VideoPrimary.copy(alpha = 0.04f))
+                } else {
+                    Modifier
+                }
+            )
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = selected,
+            onCheckedChange = { onToggleSelected() },
+            modifier = Modifier.size(32.dp),
+            colors = CheckboxDefaults.colors(
+                checkedColor = VideoPrimary,
+                checkmarkColor = Color.White,
+                uncheckedColor = VideoTextMuted
+            )
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = record.name,
+                color = if (record.type == VideoVisibilityRecordType.UNAVAILABLE_FILE) {
+                    VideoTextPrimary.copy(alpha = 0.7f)
+                } else {
+                    VideoTextPrimary
+                },
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = record.path.orEmpty().ifBlank { record.id },
+                color = VideoTextSecondary,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = record.type.recordLabel(),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(record.type.recordColor().copy(alpha = 0.18f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    color = record.type.recordColor(),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = formatVisibilityRecordTime(record),
+                    color = VideoTextMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (canRestore) {
+            VideoVisibilitySmallButton("恢复", primary = true, onClick = onRestore)
+        }
+        VideoVisibilitySmallButton("清除", primary = false, onClick = onClear)
+    }
+}
+
+@Composable
+private fun VideoVisibilitySmallButton(
+    text: String,
+    primary: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (primary) VideoPrimary.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.08f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (primary) VideoPrimarySoft else VideoTextSecondary,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold)
+        )
+    }
+}
+
+@Composable
+private fun VideoVisibilityActionButton(
+    text: String,
+    enabled: Boolean,
+    primary: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                when {
+                    !enabled -> Color.White.copy(alpha = 0.05f)
+                    primary -> VideoPrimarySoft
+                    else -> Color.White.copy(alpha = 0.08f)
+                }
+            )
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = when {
+                !enabled -> VideoTextMuted
+                primary -> Color(0xFF2C1668)
+                else -> VideoTextSecondary
+            },
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+        )
+    }
+}
+
 @Composable
 private fun VideoLibraryMorePanelV2(
     isGridMode: Boolean,
@@ -593,6 +987,7 @@ private fun VideoLibraryMorePanelV2(
     showSize: Boolean,
     showDate: Boolean,
     showFormat: Boolean,
+    visibilityRecords: List<VideoVisibilityRecordUiModel>,
     onShowThumbnailChange: (Boolean) -> Unit,
     onShowThumbnailDurationChange: (Boolean) -> Unit,
     onShowSizeChange: (Boolean) -> Unit,
@@ -607,11 +1002,14 @@ private fun VideoLibraryMorePanelV2(
     onSortByName: () -> Unit,
     onSortByCount: () -> Unit,
     onSortByDate: () -> Unit,
-    onMultiDelete: () -> Unit
+    onMultiDelete: () -> Unit,
+    onRestore: (List<VideoVisibilityRecordUiModel>) -> Unit,
+    onClear: (List<VideoVisibilityRecordUiModel>) -> Unit
 ) {
     val context = LocalContext.current
     var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
+    var visibilityRecordsExpanded by rememberSaveable { mutableStateOf(false) }
     fun showFuture(feature: String) {
         Toast.makeText(context, "$feature 后续实现", Toast.LENGTH_SHORT).show()
     }
@@ -697,6 +1095,13 @@ private fun VideoLibraryMorePanelV2(
                         MorePanelOptionV2(Icons.Filled.Schedule, "\u591a\u9009", false, onMultiDelete, Modifier.weight(1f))
                         MorePanelOptionV2(Icons.Filled.Refresh, "\u91cd\u626b", false, onRescan, Modifier.weight(1f))
                     }
+                    VideoVisibilityRecordsExpandable(
+                        records = visibilityRecords,
+                        expanded = visibilityRecordsExpanded,
+                        onExpandedChange = { visibilityRecordsExpanded = !visibilityRecordsExpanded },
+                        onRestore = onRestore,
+                        onClear = onClear
+                    )
 
                     PanelDivider()
                     VideoPanelExpandableHeaderV2(
@@ -1033,7 +1438,7 @@ private fun VideoFolderMultiSelectBar(
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             )
             Text(
-                text = "移除",
+                text = "隐藏",
                 color = Color(0xFFF97066),
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
@@ -1697,6 +2102,47 @@ private fun formatThumbnailDuration(durationMs: Long): String? {
         "%02d:%02d:%02d".format(hours, minutes, seconds)
     } else {
         "%02d:%02d".format(minutes, seconds)
+    }
+}
+
+private fun VideoVisibilityRecordUiModel.visibilityRecordKey(): String {
+    return "${type.name}:$id"
+}
+
+private fun VideoVisibilityRecordType.recordLabel(): String {
+    return when (this) {
+        VideoVisibilityRecordType.HIDDEN_FOLDER -> "隐藏文件夹"
+        VideoVisibilityRecordType.REMOVED_VIDEO -> "已隐藏视频"
+        VideoVisibilityRecordType.UNAVAILABLE_FILE -> "文件已失效"
+    }
+}
+
+private fun VideoVisibilityRecordType.recordColor(): Color {
+    return when (this) {
+        VideoVisibilityRecordType.HIDDEN_FOLDER -> VideoPrimarySoft
+        VideoVisibilityRecordType.REMOVED_VIDEO -> Color(0xFFA8B6FF)
+        VideoVisibilityRecordType.UNAVAILABLE_FILE -> Color(0xFFFF8F8F)
+    }
+}
+
+private fun formatVisibilityRecordTime(record: VideoVisibilityRecordUiModel): String {
+    val action = when (record.type) {
+        VideoVisibilityRecordType.HIDDEN_FOLDER -> "隐藏"
+        VideoVisibilityRecordType.REMOVED_VIDEO -> "隐藏"
+        VideoVisibilityRecordType.UNAVAILABLE_FILE -> "标记"
+    }
+    val timestamp = record.recordedAt
+    if (timestamp <= 0L) return "记录时间未知"
+    val diffMs = (System.currentTimeMillis() - timestamp).coerceAtLeast(0L)
+    val minutes = diffMs / 60_000L
+    val hours = diffMs / 3_600_000L
+    val days = diffMs / 86_400_000L
+    return when {
+        minutes < 1L -> "刚刚$action"
+        minutes < 60L -> "${minutes}分钟前$action"
+        hours < 24L -> "${hours}小时前$action"
+        days <= 3L -> "${days}天前$action"
+        else -> SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
     }
 }
 
