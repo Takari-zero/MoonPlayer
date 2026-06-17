@@ -15,11 +15,14 @@ import kotlin.math.sqrt
 object VideoThumbnailStore {
     private const val CACHE_DIR = "video_thumbnails"
     private const val JPEG_QUALITY = 86
+    private const val MAX_THUMBNAIL_CACHE_BYTES = 300L * 1024L * 1024L
+    private const val TRIM_THUMBNAIL_CACHE_TO_BYTES = 260L * 1024L * 1024L
     private const val DARK_LUMA = 18.0
     private const val BRIGHT_LUMA = 238.0
     private const val LOW_DETAIL_STD_DEV = 8.0
     private const val BLANK_PIXEL_RATIO = 0.92
     private const val PURE_COLOR_STD_DEV = 4.0
+    private val cacheTrimLock = Any()
 
     fun cacheKey(file: LocalMediaFile): String {
         val uriHash = sha256(file.uri.trim())
@@ -45,6 +48,7 @@ object VideoThumbnailStore {
         if (cacheFile.isFile) {
             BitmapFactory.decodeFile(cacheFile.absolutePath)?.let { cached ->
                 if (!isInvalidThumbnail(cached)) {
+                    touch(cacheFile)
                     return cached
                 }
             }
@@ -57,6 +61,8 @@ object VideoThumbnailStore {
             cacheFile.outputStream().use { output ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
             }
+            touch(cacheFile)
+            enforceCacheLimit(appContext, protectedFile = cacheFile)
         }.onFailure {
             cacheFile.delete()
         }
@@ -69,6 +75,7 @@ object VideoThumbnailStore {
         if (!cacheFile.isFile) return false
         val cached = BitmapFactory.decodeFile(cacheFile.absolutePath)
         if (cached != null && !isInvalidThumbnail(cached)) {
+            touch(cacheFile)
             return true
         }
         cacheFile.delete()
@@ -97,6 +104,37 @@ object VideoThumbnailStore {
             .listFiles { file -> file.isFile && file.name.startsWith(prefix) }
             .orEmpty()
             .forEach { it.delete() }
+    }
+
+    private fun enforceCacheLimit(context: Context, protectedFile: File? = null) {
+        synchronized(cacheTrimLock) {
+            val cacheDir = thumbnailDir(context.applicationContext)
+            val files = cacheDir
+                .listFiles { file -> file.isFile }
+                .orEmpty()
+                .toList()
+            var totalBytes = files.sumOf { it.length().coerceAtLeast(0L) }
+            if (totalBytes <= MAX_THUMBNAIL_CACHE_BYTES) return
+
+            val protectedPath = protectedFile?.absolutePath
+            files
+                .sortedWith(compareBy<File> { it.lastModified() }.thenBy { it.name })
+                .forEach { candidate ->
+                    if (totalBytes <= TRIM_THUMBNAIL_CACHE_TO_BYTES) return
+                    if (candidate.absolutePath == protectedPath) return@forEach
+                    val size = candidate.length().coerceAtLeast(0L)
+                    val deleted = runCatching { candidate.delete() }.getOrDefault(false)
+                    if (deleted) {
+                        totalBytes -= size
+                    }
+                }
+        }
+    }
+
+    private fun touch(file: File) {
+        runCatching {
+            file.setLastModified(System.currentTimeMillis())
+        }
     }
 
     private fun createValidThumbnail(
