@@ -537,3 +537,30 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Unavailable videos may reuse remove-from-list. Do not show `永久删除文件` for an unavailable item, and do not report a fake permanent delete success for a file that no longer exists.
 - Regression boundaries: do not let unavailable videos behave like normal playable videos, do not add heavy checks that make list scrolling or folder entry slow, and do not change music or novel modules.
 - Deferred enhancements: batch unavailable-file cleanup, a unified unavailable-file management view, and automatic cleanup after rescan.
+
+## Video Hidden Records, Delete, And Thumbnail Cache Notes
+
+- Hidden record management is complete in the video home `More` panel under the action entry `Hidden records`.
+- Hidden records expand inside the existing `More` panel and must not navigate to a new page.
+- The manager uses real persisted records only: hidden folders, hidden videos, and unavailable-file records. Do not show mock or hard-coded sample records.
+- Category filters must stay accurate: `All`, `Hidden folders`, `Hidden videos`, and `Unavailable files` can show counts, but each non-all filter must show only its own record type.
+- Hidden folders and hidden videos can be restored or cleared from the app record. Unavailable files can only be cleared from app records; do not show restore or permanent-delete actions for unavailable files.
+- Multi-select hide/delete is complete on both video home and video folder detail pages. The selection bar contains selected count, cancel, select all, hide, and delete.
+- Hide means app-level hiding only and must never delete real files.
+- Delete means real local video deletion and must always go through the existing confirmation and MediaStore/permission delete flow.
+- If delete permission is denied or deletion fails, do not show success.
+- Video home delete only deletes app-recognized video files in the selected folders; it must not delete non-video files.
+- Video folder detail delete only deletes selected video files.
+- Floating play buttons should stay hidden during selection mode on both home and folder detail pages.
+- Video thumbnail disk cache is complete under app cache `video_thumbnails`.
+- Thumbnail cache keys must remain bound to video identity with `uri + modifiedAt + size`; do not fall back to file name, title, or folder name as the cache key.
+- Folder thumbnails must be derived from a real accessible representative video in the folder. If that representative disappears, switch to the next accessible video. If no accessible videos remain, show the default placeholder and do not display a stale thumbnail.
+- Folder detail thumbnails are one-video-one-thumbnail and must not reuse another video's cached image.
+- Deleting a real video must clear only that video's thumbnail cache. Hiding a video must not delete its thumbnail cache.
+- Invalid thumbnail fallback is complete: black frames, white/overexposed blank frames, and low-information solid frames are rejected.
+- Thumbnail generation should try multiple frame times and should not cache invalid frames as normal thumbnails.
+- Old invalid cached thumbnails should be deleted and regenerated when encountered; if all candidates fail, show a placeholder instead of a fake success thumbnail.
+- Background thumbnail prewarming is complete. It starts after app startup/restored scans, video scan completion, rescan, and manual video folder add.
+- Prewarming must only process already scanned videos, skip valid cached thumbnails, skip unreadable/unavailable videos, run serially in the background, limit each run to about 100 videos, and pause briefly between items.
+- Do not introduce full-disk thumbnail scans, startup-wide parallel thumbnail generation, new permissions, or new dependencies for prewarming.
+- Regression boundaries: do not restore `remove` as the main destructive/non-destructive wording, do not make hide delete files, do not fake delete success, do not let unavailable files show restore, do not let unrelated videos share thumbnail cache, do not cache black/white frames, and do not start unlimited thumbnail work on app startup.
