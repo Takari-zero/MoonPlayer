@@ -2554,17 +2554,26 @@ private fun VideoControlOverlay(
                     }
                 )
                 VideoQuickToolButton(
-                    icon = Icons.Filled.PhotoCamera,
-                    label = "截图",
+                    icon = Icons.Filled.Tune,
+                    label = "均衡器",
                     onClick = {
-                        onScreenshot()
+                        openEqualizerPanel()
+                    }
+                )
+                VideoQuickToolButton(
+                    icon = Icons.Filled.Brightness6,
+                    label = "画调",
+                    onClick = {
+                        openPictureAdjustmentPanel()
                     }
                 )
                 if (isQuickToolsExpanded) {
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Audiotrack,
-                        label = "音轨",
-                        onClick = { openAudioTrackPanel() }
+                        icon = Icons.Filled.PhotoCamera,
+                        label = "截图",
+                        onClick = {
+                            onScreenshot()
+                        }
                     )
                     VideoQuickToolButton(
                         icon = Icons.Filled.Info,
@@ -2597,16 +2606,6 @@ private fun VideoControlOverlay(
                         onClick = { openGestureSettingsPanel() }
                     )
                     VideoQuickToolButton(
-                        icon = Icons.Filled.Tune,
-                        label = "均衡器",
-                        onClick = { openEqualizerPanel() }
-                    )
-                    VideoQuickToolButton(
-                        icon = Icons.Filled.Brightness6,
-                        label = "画调",
-                        onClick = { openPictureAdjustmentPanel() }
-                    )
-                    VideoQuickToolButton(
                         icon = Icons.Filled.Memory,
                         label = "解码",
                         onClick = { openDecodeFormatPanel() }
@@ -2624,7 +2623,7 @@ private fun VideoControlOverlay(
                 } else {
                     VideoQuickToolButton(
                         icon = Icons.Filled.KeyboardArrowRight,
-                        label = "展开更多工具",
+                        label = "展开",
                         onClick = { onQuickToolsExpandedChange(true) }
                     )
                 }

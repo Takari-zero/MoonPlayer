@@ -15,8 +15,8 @@ import kotlin.math.sqrt
 object VideoThumbnailStore {
     private const val CACHE_DIR = "video_thumbnails"
     private const val JPEG_QUALITY = 86
-    private const val MAX_THUMBNAIL_CACHE_BYTES = 300L * 1024L * 1024L
-    private const val TRIM_THUMBNAIL_CACHE_TO_BYTES = 260L * 1024L * 1024L
+    const val MAX_THUMBNAIL_CACHE_BYTES = 300L * 1024L * 1024L
+    const val TRIM_THUMBNAIL_CACHE_TO_BYTES = 260L * 1024L * 1024L
     private const val DARK_LUMA = 18.0
     private const val BRIGHT_LUMA = 238.0
     private const val LOW_DETAIL_STD_DEV = 8.0
@@ -104,6 +104,33 @@ object VideoThumbnailStore {
             .listFiles { file -> file.isFile && file.name.startsWith(prefix) }
             .orEmpty()
             .forEach { it.delete() }
+    }
+
+    fun getThumbnailCacheSizeBytes(context: Context): Long {
+        return thumbnailDir(context.applicationContext)
+            .listFiles { file -> file.isFile }
+            .orEmpty()
+            .sumOf { it.length().coerceAtLeast(0L) }
+    }
+
+    fun clearThumbnailCache(context: Context): Boolean {
+        return runCatching {
+            val dir = thumbnailDir(context.applicationContext)
+            var allDeleted = true
+            dir.listFiles()
+                .orEmpty()
+                .forEach { file ->
+                    val deleted = if (file.isDirectory) {
+                        file.deleteRecursively()
+                    } else {
+                        file.delete()
+                    }
+                    if (!deleted && file.exists()) {
+                        allDeleted = false
+                    }
+                }
+            allDeleted
+        }.getOrDefault(false)
     }
 
     private fun enforceCacheLimit(context: Context, protectedFile: File? = null) {

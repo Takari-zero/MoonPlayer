@@ -15,6 +15,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -72,10 +74,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -104,6 +108,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val VideoBackground = Color(0xFF000204)
@@ -870,7 +875,7 @@ private fun VideoVisibilityFilterChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .height(34.dp)
             .clip(RoundedCornerShape(17.dp))
@@ -1060,9 +1065,26 @@ private fun VideoLibraryMorePanelV2(
     onClear: (List<VideoVisibilityRecordUiModel>) -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var fieldsExpanded by rememberSaveable { mutableStateOf(false) }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     var visibilityRecordsExpanded by rememberSaveable { mutableStateOf(false) }
+    var cacheExpanded by rememberSaveable { mutableStateOf(false) }
+    var thumbnailCacheSizeBytes by remember { mutableStateOf(0L) }
+    var showClearCacheConfirm by remember { mutableStateOf(false) }
+    var isClearingThumbnailCache by remember { mutableStateOf(false) }
+    fun refreshThumbnailCacheSize() {
+        coroutineScope.launch {
+            thumbnailCacheSizeBytes = withContext(Dispatchers.IO) {
+                VideoThumbnailStore.getThumbnailCacheSizeBytes(context.applicationContext)
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        thumbnailCacheSizeBytes = withContext(Dispatchers.IO) {
+            VideoThumbnailStore.getThumbnailCacheSizeBytes(context.applicationContext)
+        }
+    }
     fun showFuture(feature: String) {
         Toast.makeText(context, "$feature 后续实现", Toast.LENGTH_SHORT).show()
     }
@@ -1072,94 +1094,121 @@ private fun VideoLibraryMorePanelV2(
         Handler(Looper.getMainLooper()).postDelayed({ toast.cancel() }, 1_000L)
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.72f))
             .clickable(onClick = onDismiss),
         contentAlignment = Alignment.Center
     ) {
+        val panelHeight = maxHeight * 0.78f
         Card(
             modifier = Modifier
-                .width(304.dp)
-                .heightIn(max = 620.dp)
+                .fillMaxWidth(0.82f)
+                .widthIn(max = 360.dp)
+                .height(panelHeight)
                 .clickable(onClick = {}),
             shape = RoundedCornerShape(22.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xF214141C)),
-            border = BorderStroke(1.dp, Color(0xFF5B526F).copy(alpha = 0.72f))
+            colors = CardDefaults.cardColors(containerColor = Color(0xE615151E))
         ) {
-            Column {
-                Column(
-                    modifier = Modifier
-                        .padding(start = 16.dp, top = 18.dp, end = 16.dp, bottom = 10.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(9.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Text(
-                            text = "\u66f4\u591a",
-                            color = VideoTextPrimary,
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Text(
-                            text = "\u89c6\u9891\u4e3b\u9875\u8bbe\u7f6e",
-                            color = VideoTextSecondary,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-
-                    MorePanelSectionTitle("\u89c6\u56fe")
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 16.dp)
+            ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
                     ) {
-                        MorePanelOptionV2(Icons.Filled.ViewList, "\u5217\u8868", !isGridMode, onListMode, Modifier.weight(1f))
-                        MorePanelOptionV2(Icons.Filled.GridView, "\u7f51\u683c", isGridMode, onGridMode, Modifier.weight(1f))
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "更多",
+                                color = VideoTextPrimary,
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Text(
+                                text = "视频主页设置",
+                                color = VideoTextSecondary,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                imageVector = Icons.Filled.Clear,
+                                contentDescription = "关闭",
+                                tint = VideoTextSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
 
-                    PanelDivider()
-                    MorePanelSectionTitle("\u6392\u5e8f")
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(top = 10.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MorePanelSectionTitle("视图")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color.White.copy(alpha = 0.075f))
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        MorePanelSegmentOption(Icons.Filled.ViewList, "列表", !isGridMode, onListMode, Modifier.weight(1f))
+                        MorePanelSegmentOption(Icons.Filled.GridView, "网格", isGridMode, onGridMode, Modifier.weight(1f))
+                    }
+
+                    MorePanelSectionTitle("排序")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color.White.copy(alpha = 0.075f))
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        MorePanelSegmentOption(Icons.Filled.SortByAlpha, "名称", sortMode == VideoLibrarySortMode.NAME, onSortByName, Modifier.weight(1f))
+                        MorePanelSegmentOption(Icons.Filled.Movie, "数量", sortMode == VideoLibrarySortMode.COUNT, onSortByCount, Modifier.weight(1f))
+                        MorePanelSegmentOption(Icons.Filled.DateRange, "日期", sortMode == VideoLibrarySortMode.DATE, onSortByDate, Modifier.weight(1f))
+                    }
+
+                    MorePanelSectionTitle("操作")
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        MorePanelOptionV2(Icons.Filled.SortByAlpha, "\u540d\u79f0", sortMode == VideoLibrarySortMode.NAME, onSortByName, Modifier.weight(1f))
-                        MorePanelOptionV2(Icons.Filled.Movie, "\u6570\u91cf", sortMode == VideoLibrarySortMode.COUNT, onSortByCount, Modifier.weight(1f))
-                        MorePanelOptionV2(Icons.Filled.DateRange, "\u65e5\u671f", sortMode == VideoLibrarySortMode.DATE, onSortByDate, Modifier.weight(1f))
+                        MorePanelActionOption(Icons.Filled.Search, "搜索", onSearch, Modifier.weight(1f))
+                        MorePanelActionOption(Icons.Filled.CreateNewFolder, "添加", onAddFolder, Modifier.weight(1f))
+                        MorePanelActionOption(Icons.Filled.Schedule, "多选", onMultiDelete, Modifier.weight(1f))
+                        MorePanelActionOption(Icons.Filled.Refresh, "重扫", onRescan, Modifier.weight(1f))
                     }
-
-                    PanelDivider()
-                    MorePanelSectionTitle("\u64cd\u4f5c")
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        MorePanelOptionV2(Icons.Filled.Search, "\u641c\u7d22", false, onSearch, Modifier.weight(1f))
-                        MorePanelOptionV2(Icons.Filled.CreateNewFolder, "\u6dfb\u52a0", false, onAddFolder, Modifier.weight(1f))
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        MorePanelOptionV2(Icons.Filled.Schedule, "\u591a\u9009", false, onMultiDelete, Modifier.weight(1f))
-                        MorePanelOptionV2(Icons.Filled.Refresh, "\u91cd\u626b", false, onRescan, Modifier.weight(1f))
-                    }
-                    VideoVisibilityRecordsExpandable(
-                        records = visibilityRecords,
-                        expanded = visibilityRecordsExpanded,
-                        onExpandedChange = { visibilityRecordsExpanded = !visibilityRecordsExpanded },
-                        onRestore = onRestore,
-                        onClear = onClear
+                    ThumbnailCacheManagementExpandable(
+                        expanded = cacheExpanded,
+                        cacheSizeBytes = thumbnailCacheSizeBytes,
+                        maxCacheBytes = VideoThumbnailStore.MAX_THUMBNAIL_CACHE_BYTES,
+                        trimToBytes = VideoThumbnailStore.TRIM_THUMBNAIL_CACHE_TO_BYTES,
+                        isClearing = isClearingThumbnailCache,
+                        onExpandedChange = {
+                            val willExpand = !cacheExpanded
+                            cacheExpanded = willExpand
+                            if (willExpand) {
+                                refreshThumbnailCacheSize()
+                            }
+                        },
+                        onClearClick = { showClearCacheConfirm = true }
                     )
 
-                    PanelDivider()
                     VideoPanelExpandableHeaderV2(
                         title = "字段",
                         icon = Icons.Filled.Description,
+                        subtitle = "管理列表显示字段",
                         expanded = fieldsExpanded,
                         onClick = { fieldsExpanded = !fieldsExpanded }
                     )
@@ -1196,10 +1245,10 @@ private fun VideoLibraryMorePanelV2(
                         }
                     }
 
-                    PanelDivider()
                     VideoPanelExpandableHeaderV2(
                         title = "高级",
                         icon = Icons.Filled.MoreHoriz,
+                        subtitle = "更多视频高级设置",
                         expanded = advancedExpanded,
                         onClick = { advancedExpanded = !advancedExpanded }
                     )
@@ -1221,38 +1270,217 @@ private fun VideoLibraryMorePanelV2(
                             ) { showBriefFuture("识别 .nomedia") }
                         }
                     }
-                }
-
-                PanelDivider()
-                Row(modifier = Modifier.height(50.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
-                            .clickable(onClick = onDismiss),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("\u53d6\u6d88", color = VideoTextPrimary, style = MaterialTheme.typography.bodyLarge)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .height(50.dp)
-                            .background(VideoDivider.copy(alpha = 0.95f))
+                    VideoVisibilityRecordsExpandable(
+                        records = visibilityRecords,
+                        expanded = visibilityRecordsExpanded,
+                        onExpandedChange = { visibilityRecordsExpanded = !visibilityRecordsExpanded },
+                        onRestore = onRestore,
+                        onClear = onClear
                     )
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
-                            .clickable(onClick = onDismiss),
-                        contentAlignment = Alignment.Center
+                }
+            }
+        }
+        if (showClearCacheConfirm) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!isClearingThumbnailCache) {
+                        showClearCacheConfirm = false
+                    }
+                },
+                containerColor = Color(0xF214141C),
+                shape = RoundedCornerShape(18.dp),
+                title = {
+                    Text(
+                        text = "清理缩略图缓存？",
+                        color = VideoTextPrimary,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                },
+                text = {
+                    Text(
+                        text = "只会清理视频缩略图缓存，不会删除本地视频文件。清理后缩略图会在浏览时重新生成。",
+                        color = VideoTextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 18.sp
+                    )
+                },
+                dismissButton = {
+                    TextButton(
+                        enabled = !isClearingThumbnailCache,
+                        onClick = { showClearCacheConfirm = false }
+                    ) {
+                        Text("取消", color = VideoTextSecondary)
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = !isClearingThumbnailCache,
+                        onClick = {
+                            isClearingThumbnailCache = true
+                            coroutineScope.launch {
+                                val cleared = withContext(Dispatchers.IO) {
+                                    VideoThumbnailStore.clearThumbnailCache(context.applicationContext)
+                                }
+                                thumbnailCacheSizeBytes = withContext(Dispatchers.IO) {
+                                    VideoThumbnailStore.getThumbnailCacheSizeBytes(context.applicationContext)
+                                }
+                                isClearingThumbnailCache = false
+                                showClearCacheConfirm = false
+                                Toast.makeText(
+                                    context,
+                                    if (cleared) "已清理缩略图缓存" else "清理失败，请重试",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
                     ) {
                         Text(
-                            "\u5b8c\u6210",
-                            color = VideoPrimary,
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
+                            text = if (isClearingThumbnailCache) "清理中..." else "清理",
+                            color = VideoPrimarySoft,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThumbnailCacheManagementExpandable(
+    expanded: Boolean,
+    cacheSizeBytes: Long,
+    maxCacheBytes: Long,
+    trimToBytes: Long,
+    isClearing: Boolean,
+    onExpandedChange: () -> Unit,
+    onClearClick: () -> Unit
+) {
+    val progress = if (maxCacheBytes > 0L) {
+        (cacheSizeBytes.toFloat() / maxCacheBytes.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(13.dp))
+            .background(Color.White.copy(alpha = 0.055f))
+            .clickable(onClick = onExpandedChange)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = null,
+                tint = VideoTextSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                Text(
+                    text = "缓存管理",
+                    color = VideoTextPrimary,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1
+                )
+                Text(
+                    text = "管理视频缩略图缓存",
+                    color = VideoTextSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = VideoTextSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = {}),
+                verticalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "缩略图缓存",
+                        color = VideoTextPrimary,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "${formatThumbnailCacheByteCount(cacheSizeBytes)} / ${formatThumbnailCacheByteCount(maxCacheBytes)}",
+                        color = VideoPrimarySoft,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.White.copy(alpha = 0.10f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress)
+                            .height(6.dp)
+                            .background(VideoPrimary)
+                    )
+                }
+                Text(
+                    text = "超过 ${formatThumbnailCacheByteCount(maxCacheBytes)} 后将自动清理到 ${formatThumbnailCacheByteCount(trimToBytes)}",
+                    color = VideoTextMuted.copy(alpha = 0.92f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "清理不会删除本地视频文件，缩略图会在浏览时重新生成。",
+                    color = VideoTextSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isClearing) {
+                                VideoPrimary.copy(alpha = 0.38f)
+                            } else {
+                                VideoPrimary.copy(alpha = 0.90f)
+                            }
+                        )
+                        .clickable(enabled = !isClearing, onClick = onClearClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (isClearing) "清理中..." else "清理缓存",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1
+                    )
                 }
             }
         }
@@ -1261,26 +1489,39 @@ private fun VideoLibraryMorePanelV2(
 
 @Composable
 private fun MorePanelSectionTitle(text: String) {
-    Text(
-        text = text,
-        color = VideoTextSecondary,
-        style = MaterialTheme.typography.labelMedium,
-        modifier = Modifier.padding(start = 2.dp, top = 1.dp)
-    )
+    Row(
+        modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(16.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(VideoPrimary)
+        )
+        Text(
+            text = text,
+            color = VideoTextPrimary.copy(alpha = 0.88f),
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+        )
+    }
 }
 
 @Composable
 private fun VideoPanelExpandableHeaderV2(
     title: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    subtitle: String? = null,
     expanded: Boolean,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(40.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .height(if (subtitle == null) 42.dp else 62.dp)
+            .clip(RoundedCornerShape(13.dp))
             .clickable(onClick = onClick)
             .background(Color.White.copy(alpha = 0.055f))
             .padding(horizontal = 12.dp),
@@ -1292,7 +1533,23 @@ private fun VideoPanelExpandableHeaderV2(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(icon, contentDescription = null, tint = VideoPrimarySoft, modifier = Modifier.size(17.dp))
-            Text(title, color = VideoTextPrimary, style = MaterialTheme.typography.bodyMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    color = VideoTextPrimary,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        color = VideoTextSecondary,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
         Icon(
             imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -1400,6 +1657,74 @@ private fun VideoPanelFutureOptionV2(
                 maxLines = 1
             )
         }
+    }
+}
+
+@Composable
+private fun MorePanelSegmentOption(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(15.dp))
+            .background(if (selected) VideoPrimary.copy(alpha = 0.92f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (selected) Color.White else VideoTextSecondary,
+            modifier = Modifier.size(17.dp)
+        )
+        Text(
+            text = label,
+            color = if (selected) Color.White else VideoTextSecondary,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun MorePanelActionOption(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .height(64.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.065f))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterVertically)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = VideoTextSecondary.copy(alpha = 0.96f),
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = label,
+            color = VideoTextSecondary,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -2220,6 +2545,16 @@ private fun formatByteCount(bytes: Long): String {
         "${bytes} B"
     } else {
         "${"%.1f".format(value)} ${units[unitIndex]}"
+    }
+}
+
+private fun formatThumbnailCacheByteCount(bytes: Long): String {
+    if (bytes <= 0L) return "0 MB"
+    val mb = bytes.toDouble() / (1024.0 * 1024.0)
+    return if (mb >= 10.0) {
+        "${"%.0f".format(mb)} MB"
+    } else {
+        "${"%.1f".format(mb)} MB"
     }
 }
 
