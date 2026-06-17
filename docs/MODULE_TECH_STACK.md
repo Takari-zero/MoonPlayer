@@ -257,3 +257,36 @@ docs-only 杞涓嶉渶瑕佺紪璇戯紝浣嗗繀椤荤‘璁ゅ彧鏀规�
 - The gesture pointer input is keyed by the current `mediaFile.uri` and `player` so an in-player queue switch recreates the gesture handler for the new player instance.
 - The bottom system gesture safe area remains part of the player gesture boundary and should only block gestures that start in that bottom zone.
 - No new permissions, Gradle dependencies, Manifest changes, video home changes, folder detail changes, music changes, or novel changes are required for this player queue/gesture work.
+
+## Video Module Closure Technical Baseline
+
+- Video home remains Jetpack Compose UI backed by scanned local video records, DataStore app state, MediaStore/SAF boundaries, and the video thumbnail cache.
+- Video folder detail remains the scoped surface for per-video list/grid behavior, unavailable-file state, multi-select hide/delete, and one-video-one-thumbnail rendering.
+- Video player remains a page-local Media3 ExoPlayer surface. It should not be migrated to the music background service.
+- Player tools currently implemented in `VideoPlayerScreen.kt` include queue panel, speed, resize mode, screenshot, subtitle style, external SRT sync, AB loop, sleep timer, gesture settings, equalizer, picture adjustment, audio tracks, decode/format info, and playback diagnostics.
+- Thumbnail cache remains app cache `video_thumbnails`, keyed by `uri + modifiedAt + size`, with invalid-frame detection, prewarm, delete cleanup, and 300MB/260MB trimming.
+- Delete/hide semantics remain separate in app state and storage access: hide updates app visibility records; delete follows real MediaStore/permission deletion and must preserve records on failure.
+
+Deferred high-risk technical work:
+
+- FFmpeg/mpv/native decoder integration.
+- Hardware/software decoder switching.
+- Embedded subtitle offset in the Media3 render path.
+- Full ASS/SSA subtitle sync.
+- Delete authorization architecture changes.
+- Hidden-file and `.nomedia` scan strategy changes.
+- Batch resolution/frame-rate metadata statistics.
+- Complex two-finger gesture system.
+- Advanced picture filters beyond the first real brightness/contrast/saturation/color-temperature version.
+
+Required real-device verification areas:
+
+- Video home, folder detail, player basics, player queue, subtitles, gestures, equalizer, picture adjustment, AB loop, sleep timer, thumbnails, unavailable files, hide/delete, and permission denial behavior.
+
+Technical regression boundaries:
+
+- Do not add new permissions or dependencies for video closure polish.
+- Do not bypass `VideoThumbnailStore` for new thumbnail work.
+- Do not bypass the existing delete permission chain.
+- Do not make UI-only controls that claim real playback, subtitle, gesture, or filter behavior without touching the real underlying path.
+- Do not modify music or novel modules as part of video closure work.

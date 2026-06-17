@@ -388,3 +388,48 @@ Deferred player queue enhancements:
 - A small "locate current item" affordance.
 - Further queue information-density tuning.
 - Batch cleanup for unavailable queue items.
+
+## Video Module Final Closure Baseline
+
+The video module has entered the closure/polish stage. The following capabilities are treated as completed baseline behavior:
+
+- Video home: search, add, list/grid switch, sorting, multi-select, hide, delete, hidden records, field settings, folder thumbnail cache, and thumbnail prewarm.
+- Video folder detail: search, sorting, list/grid switch, multi-select, hide, delete, unavailable-file state, and one-video-one-thumbnail cache binding.
+- Video player: play/pause, progress, speed, resize mode, screenshot, screen lock, orientation toggle, player queue panel, subtitle style, external SRT subtitle sync, AB loop, sleep timer, gestures, equalizer, picture adjustment, decode/format info, and basic playback diagnostics.
+- Thumbnail system: disk cache under app cache, invalid black/white/low-information frame fallback, background prewarm, per-video cache key, delete cleanup, and 300MB/260MB cache trim.
+- Delete/hide safety: hide never deletes files; delete is real local video deletion with confirmation and the existing permission chain; permission denial or failure must not be reported as success.
+
+High-risk items remain deferred and must not be treated as completed:
+
+- FFmpeg/mpv/native decoder.
+- Hardware/software decoder switching.
+- Embedded subtitle time offset.
+- Full ASS/SSA advanced subtitle sync.
+- Delete authorization flow redesign.
+- Showing hidden files and `.nomedia` scan strategy.
+- Batch resolution/frame-rate statistics.
+- Complex two-finger gestures.
+- Advanced picture filters such as sharpening and dark enhancement.
+
+Real-device acceptance checklist before moving out of video closure:
+
+- Video home: search, add, view switch, sorting, field settings, multi-select hide/delete, hidden records, folder thumbnails.
+- Folder detail: search, sorting, list/grid, multi-select hide/delete, unavailable files, thumbnails, normal playback entry.
+- Player basics: play/pause, progress seek bar, speed, resize mode, screenshot, lock, orientation, Home pause behavior.
+- Player panels: queue panel, subtitles, subtitle sync, equalizer, picture adjustment, AB loop, sleep timer, decode/info panels.
+- Gestures: double-tap seek, horizontal seek, brightness, volume, bottom system gesture safe area.
+- Data safety: hide/delete boundaries, unavailable-file removal, thumbnail cleanup, no fake success after permission denial.
+
+Do not regress:
+
+- Do not turn hide into delete.
+- Do not fake delete success.
+- Do not restore `移除` as the main wording for non-destructive hide behavior.
+- Do not make queue search/filters fake UI.
+- Do not let gestures show hints without executing real actions.
+- Do not cache black/white invalid thumbnails.
+- Do not let thumbnails cross-bind between different videos.
+- Do not allow unavailable files to play.
+- Do not add dangerous delete actions to the player queue panel.
+- Do not add permissions, dependencies, or scanner-wide changes without a separate approved task.
+- Do not move into music or novel modules by regressing video-module behavior.

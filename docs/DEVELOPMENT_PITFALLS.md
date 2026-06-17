@@ -592,3 +592,44 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Keep the bottom system gesture safe area: drags starting from the bottom navigation zone must not trigger brightness, volume, or seek.
 - When adding full-screen overlays for player panels, ensure they are only present while the panel is open and do not keep intercepting gestures after dismissal.
 - Deferred queue ideas such as queue sorting, current-item locator, density tuning, and unavailable-item batch cleanup are not complete and must not be documented as shipped.
+
+## Video Module Closure Checklist And Regression Guardrails
+
+- The video module is now in final closure/polish mode. New video work should be small, scoped, and regression-oriented unless the user explicitly approves a new feature.
+- Completed video home behaviors include search, add, list/grid switch, sorting, multi-select, hide, real delete, hidden records, field settings, and thumbnail cache display.
+- Completed folder detail behaviors include search, sorting, list/grid, multi-select, hide, real delete, unavailable-file state, and one-video-one-thumbnail binding.
+- Completed player behaviors include basic playback, progress, speed, resize mode, screenshot, lock, orientation, queue panel, subtitle style, external SRT sync, AB loop, sleep timer, gestures, equalizer, picture adjustment, and decode/format info.
+- Completed thumbnail behaviors include disk cache, per-video key, black/white/low-information frame rejection, background prewarm, delete cleanup, and cache size limiting.
+- Completed safety behavior: hide is non-destructive; delete is real local video deletion with confirmation and the existing Android permission flow.
+
+High-risk items still deferred:
+
+- FFmpeg/mpv/native decoder work.
+- Hardware/software decoder switching.
+- Embedded subtitle offset.
+- ASS/SSA advanced subtitle sync.
+- Delete authorization flow redesign.
+- Hidden-file and `.nomedia` scan policy.
+- Batch resolution/frame-rate statistics.
+- Complex two-finger gestures.
+- Advanced picture filters such as sharpening and dark enhancement.
+
+Manual real-device regression must cover:
+
+- Video home search/add/sort/view switch/multi-select/hidden records/thumbnails.
+- Folder detail search/sort/list-grid/multi-select/unavailable state/thumbnails/play entry.
+- Player playback, queue panel, subtitle style/sync, gestures, equalizer, picture adjustment, AB, sleep timer, screenshot, lock, and Home pause.
+- Hide/delete safety, permission denial behavior, unavailable-file removal, and thumbnail cleanup.
+
+Hard regression bans:
+
+- Do not change hide into real delete.
+- Do not show delete success when the system permission flow is canceled or deletion fails.
+- Do not restore `移除` as the main action wording where the behavior is now `隐藏`.
+- Do not make player queue search/filters fake.
+- Do not let gesture hints appear without real seek/brightness/volume actions.
+- Do not cache black/white/blank thumbnails as valid cache.
+- Do not let one video display another video's thumbnail.
+- Do not let unavailable files enter the player.
+- Do not add permanent delete to the player queue panel.
+- Do not add permissions/dependencies or enter music/novel modules while video regressions remain unresolved.
