@@ -1645,6 +1645,9 @@ private fun LocalVibeApp() {
                                 hideVideoFolders(folders.map { it.folder })
                             }
                         },
+                        onDeleteFolderVideos = { files ->
+                            requestFolderVideoPermanentDelete(files)
+                        },
                         onRescanVideo = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
                         },

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,10 +22,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
@@ -61,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -206,7 +207,7 @@ fun FolderScreen(
             MaterialTheme.colorScheme.background
         },
         floatingActionButton = {
-            if (targetType == LocalMediaType.VIDEO) {
+            if (targetType == LocalMediaType.VIDEO && !isMultiSelectMode) {
                 FloatingActionButton(
                     onClick = {
                         if (recentVideoFile != null) {
@@ -251,12 +252,35 @@ fun FolderScreen(
                         top = if (targetType == LocalMediaType.VIDEO) 12.dp else 20.dp,
                         bottom = if (targetType == LocalMediaType.VIDEO) 96.dp else 20.dp
                     )
-                    .verticalScroll(rememberScrollState())
                     .fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(
                     if (targetType == LocalMediaType.VIDEO) 10.dp else 16.dp
                 )
             ) {
+                if (targetType == LocalMediaType.VIDEO && isMultiSelectMode) {
+                    VideoFolderTopBarV2(
+                        folderName = folderName.ifBlank { "未命名文件夹" },
+                        videoCount = visibleFiles.size,
+                        totalSize = visibleFiles.sumOf { it.size.coerceAtLeast(0L) },
+                        isSearching = isVideoSearching,
+                        searchKeyword = videoSearchKeyword,
+                        onSearchKeywordChange = { videoSearchKeyword = it },
+                        isGridMode = isVideoGridMode,
+                        sortMode = videoSortMode,
+                        onBack = onBack,
+                        onToggleSearch = {
+                            if (isVideoSearching) videoSearchKeyword = ""
+                            isVideoSearching = !isVideoSearching
+                        },
+                        onToggleViewMode = { isVideoGridMode = !isVideoGridMode },
+                        onSortChange = { videoSortMode = it },
+                        onStartMultiSelect = {
+                            selectedUris = emptySet()
+                        },
+                        onRescanFolder = onRescanFolder
+                    )
+                }
+
             if (isMultiSelectMode) {
                 MultiSelectHeader(
                     selectedCount = selectedUris.size,
@@ -275,8 +299,9 @@ fun FolderScreen(
                         }
                     },
                     onDeleteSelected = {
-                        if (selectedUris.isEmpty()) {
-                            Toast.makeText(context, "请先选择项目", Toast.LENGTH_SHORT).show()
+                        val selectedFiles = visibleFiles.filter { it.uri in selectedUris }
+                        if (selectedFiles.isEmpty()) {
+                            Toast.makeText(context, "请选择项目", Toast.LENGTH_SHORT).show()
                         } else {
                             showBatchDeleteConfirm = true
                         }
@@ -349,51 +374,79 @@ fun FolderScreen(
                     }
                 }
 
-            if (targetType == null && !isMultiSelectMode) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Categories.forEach { category ->
-                        AssistChip(
-                            onClick = { selectedCategory = category },
-                            label = { Text(category) },
-                            enabled = selectedCategory != category
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clipToBounds()
+                        .background(
+                            if (targetType == LocalMediaType.VIDEO) {
+                                Color(0xFF05070D)
+                            } else {
+                                MaterialTheme.colorScheme.background
+                            }
                         )
+                ) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(
+                            if (targetType == LocalMediaType.VIDEO) 8.dp else 12.dp
+                        ),
+                        contentPadding = PaddingValues(bottom = 4.dp)
+                    ) {
+                        item(key = "folder-content") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(
+                                    if (targetType == LocalMediaType.VIDEO) 8.dp else 12.dp
+                                )
+                            ) {
+                        if (targetType == null && !isMultiSelectMode) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Categories.forEach { category ->
+                                AssistChip(
+                                    onClick = { selectedCategory = category },
+                                    label = { Text(category) },
+                                    enabled = selectedCategory != category
+                                )
+                            }
+                        }
                     }
-                }
-            }
 
-            if (visibleFiles.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (targetType == LocalMediaType.VIDEO) {
-                            Color(0xFF101722)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainer
+                    if (visibleFiles.isEmpty()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (targetType == LocalMediaType.VIDEO) {
+                                    Color(0xFF101722)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainer
+                                }
+                            )
+                        ) {
+                            Text(
+                                text = "这个分类下还没有文件。",
+                                modifier = Modifier.padding(16.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (targetType == LocalMediaType.VIDEO) {
+                                    Color(0xFFA8B2C2)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
                         }
-                    )
-                ) {
-                    Text(
-                        text = "这个分类下还没有文件。",
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (targetType == LocalMediaType.VIDEO) {
-                            Color(0xFFA8B2C2)
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                }
-            } else {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(
-                        if (targetType == LocalMediaType.VIDEO) 8.dp else 12.dp
-                    )
-                ) {
-                    if (targetType == LocalMediaType.VIDEO && isVideoGridMode) {
-                        val gridColumnCount = 3
-                        visibleFiles.chunked(gridColumnCount).forEach { rowFiles ->
-                            Row(
+                    } else {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(
+                                if (targetType == LocalMediaType.VIDEO) 8.dp else 12.dp
+                            )
+                        ) {
+                            if (targetType == LocalMediaType.VIDEO && isVideoGridMode) {
+                                val gridColumnCount = 3
+                                visibleFiles.chunked(gridColumnCount).forEach { rowFiles ->
+                                    Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -510,9 +563,13 @@ fun FolderScreen(
                                 else -> Unit
                             }
                         }
+                            }
+                        }
                     }
                 }
-            }
+                            }
+                        }
+                }
             }
             if (targetType == LocalMediaType.VIDEO && isVideoSearching) {
                 Box(
@@ -533,7 +590,7 @@ fun FolderScreen(
         val selectedCountForDialog = visibleFiles.count { it.uri in selectedUris }
         AlertDialog(
             onDismissRequest = { showBatchRemoveConfirm = false },
-            title = { Text("从列表移除？") },
+            title = { Text("隐藏视频？") },
             text = {
                 Text(
                     if (selectedCountForDialog > 1) {
@@ -553,7 +610,7 @@ fun FolderScreen(
                         isMultiSelectMode = false
                     }
                 ) {
-                    Text("移除列表")
+                    Text("隐藏")
                 }
             },
             dismissButton = {
@@ -1054,40 +1111,56 @@ private fun MultiSelectHeader(
     onDeleteSelected: () -> Unit
 ) {
     if (isVideoMode) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF101722))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF101722))
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+            Text(
+                text = "已选择 $selectedCount 项",
+                color = Color(0xFFF5F7FA),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                modifier = Modifier.weight(1f)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "已选 $selectedCount 项",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color(0xFFF5F7FA)
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = onSelectAll) { Text("全选") }
-                        TextButton(onClick = onCancel) { Text("取消") }
-                    }
-                }
-                SelectionActionItem(
-                    title = "移除列表",
-                    description = "不删除本地文件，仅从列表隐藏",
-                    onClick = onRemoveSelected
+                Text(
+                    text = "取消",
+                    color = Color(0xFFA8B2C2),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onCancel)
+                        .padding(horizontal = 8.dp, vertical = 7.dp)
                 )
-                SelectionActionItem(
-                    title = "永久删除",
-                    description = "删除本地文件，此操作不可撤销",
-                    danger = true,
-                    onClick = onDeleteSelected
+                Text(
+                    text = "全选",
+                    color = Color(0xFFBBA7FF),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onSelectAll)
+                        .padding(horizontal = 8.dp, vertical = 7.dp)
+                )
+                Text(
+                    text = "隐藏",
+                    color = Color(0xFFBBA7FF),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onRemoveSelected)
+                        .padding(horizontal = 8.dp, vertical = 7.dp)
+                )
+                Text(
+                    text = "删除",
+                    color = Color(0xFFF97066),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onDeleteSelected)
+                        .padding(horizontal = 8.dp, vertical = 7.dp)
                 )
             }
         }
@@ -1114,53 +1187,6 @@ private fun MultiSelectHeader(
 }
 
 @Composable
-private fun SelectionActionItem(
-    title: String,
-    description: String,
-    danger: Boolean = false,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (danger) Color(0xFF2A1418) else Color(0xFF151E2B)
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (danger) Color(0xFFF97066) else Color(0xFFF5F7FA)
-                )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFA8B2C2)
-                )
-            }
-            Text(
-                text = if (danger) "删除" else "隐藏",
-                style = MaterialTheme.typography.labelLarge,
-                color = if (danger) Color(0xFFF97066) else Color(0xFF8AB6FF)
-            )
-        }
-    }
-}
-
-@Composable
 private fun TypedFileCard(
     file: LocalMediaFile,
     iconText: String,
@@ -1179,12 +1205,12 @@ private fun TypedFileCard(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                Color(0x33264D8D)
+                Color(0x338B5CFF)
             } else {
                 Color.Transparent
             }
         ),
-        border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
+        border = if (isSelected) BorderStroke(1.dp, Color(0xFF8B5CFF).copy(alpha = 0.72f)) else null
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
@@ -1297,12 +1323,12 @@ private fun VideoFileCard(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                Color(0x44264D8D)
+                Color(0x338B5CFF)
             } else {
                 Color.Transparent
             }
         ),
-        border = if (isSelected) BorderStroke(1.dp, Color(0xFF4D8DFF)) else null
+        border = if (isSelected) BorderStroke(1.dp, Color(0xFF8B5CFF).copy(alpha = 0.72f)) else null
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 0.dp, vertical = 8.dp),
@@ -1457,7 +1483,7 @@ private fun VideoGridFileCard(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .alpha(if (isFileUnavailable) 0.58f else 1f)
-            .background(if (isSelected) Color(0x44264D8D) else Color.Transparent)
+            .background(if (isSelected) Color(0x338B5CFF) else Color.Transparent)
             .combinedClickable(
                 onClick = onOpenVideo,
                 onLongClick = onLongPress

@@ -63,6 +63,7 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,6 +72,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -95,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
 import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordType
 import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordUiModel
@@ -133,6 +136,7 @@ fun VideoLibraryScreen(
     onOpenFolder: (VideoFolderUiModel) -> Unit,
     onContinueVideo: (LocalMediaFile) -> Unit,
     onRemoveFolders: (List<VideoFolderUiModel>) -> Unit,
+    onDeleteFolderVideos: (List<LocalMediaFile>) -> Unit,
     onRescanVideo: () -> Unit,
     visibilityRecords: List<VideoVisibilityRecordUiModel> = emptyList(),
     onRestoreVisibilityRecords: (List<VideoVisibilityRecordUiModel>) -> Unit = {},
@@ -153,6 +157,7 @@ fun VideoLibraryScreen(
     var showThumbnailDuration by rememberSaveable { mutableStateOf(false) }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedFolderIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var showDeleteSelectedFoldersConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val shownFolders = remember(videoFolders, searchKeyword, sortMode) {
@@ -187,26 +192,28 @@ fun VideoLibraryScreen(
             .background(VideoBackground),
         containerColor = VideoBackground,
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    if (recentVideoFile != null) {
-                        onContinueVideo(recentVideoFile)
-                    } else {
-                        Toast.makeText(context, "暂无可继续播放的视频", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier
-                    .padding(end = 10.dp)
-                    .size(44.dp),
-                containerColor = VideoAccent.copy(alpha = 0.78f),
-                contentColor = VideoTextPrimary,
-                shape = CircleShape
-            ) {
-                Icon(
-                    Icons.Filled.PlayArrow,
-                    contentDescription = "继续播放",
-                    modifier = Modifier.size(24.dp)
-                )
+            if (!isMultiSelectMode) {
+                FloatingActionButton(
+                    onClick = {
+                        if (recentVideoFile != null) {
+                            onContinueVideo(recentVideoFile)
+                        } else {
+                            Toast.makeText(context, "暂无可继续播放的视频", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(44.dp),
+                    containerColor = VideoAccent.copy(alpha = 0.78f),
+                    contentColor = VideoTextPrimary,
+                    shape = CircleShape
+                ) {
+                    Icon(
+                        Icons.Filled.PlayArrow,
+                        contentDescription = "继续播放",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -254,6 +261,19 @@ fun VideoLibraryScreen(
                                 Toast.makeText(context, "已隐藏 ${selectedFolders.size} 个文件夹", Toast.LENGTH_SHORT).show()
                                 selectedFolderIds = emptySet()
                                 isMultiSelectMode = false
+                            }
+                        },
+                        onDeleteSelected = {
+                            val selectedFolders = shownFolders.filter { it.folder.id in selectedFolderIds }
+                            val selectedVideos = selectedFolders.flatMap { it.videos }
+                                .filter { it.type == LocalMediaType.VIDEO }
+                                .distinctBy { it.uri }
+                            if (selectedFolders.isEmpty()) {
+                                Toast.makeText(context, "请选择文件夹", Toast.LENGTH_SHORT).show()
+                            } else if (selectedVideos.isEmpty()) {
+                                Toast.makeText(context, "所选文件夹中没有可删除的视频", Toast.LENGTH_SHORT).show()
+                            } else {
+                                showDeleteSelectedFoldersConfirm = true
                             }
                         }
                     )
@@ -448,6 +468,40 @@ fun VideoLibraryScreen(
                 )
             }
         }
+    }
+
+    if (showDeleteSelectedFoldersConfirm) {
+        val selectedFolders = shownFolders.filter { it.folder.id in selectedFolderIds }
+        val selectedVideos = selectedFolders.flatMap { it.videos }
+            .filter { it.type == LocalMediaType.VIDEO }
+            .distinctBy { it.uri }
+        AlertDialog(
+            onDismissRequest = { showDeleteSelectedFoldersConfirm = false },
+            title = { Text("删除所选文件夹内视频？") },
+            text = {
+                Text(
+                    "将删除所选文件夹中已识别的 ${selectedVideos.size} 个本地视频文件，" +
+                        "此操作无法撤销。不会删除文件夹本身或非视频文件。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteSelectedFoldersConfirm = false
+                        onDeleteFolderVideos(selectedVideos)
+                        selectedFolderIds = emptySet()
+                        isMultiSelectMode = false
+                    }
+                ) {
+                    Text("删除", color = Color(0xFFF97066))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteSelectedFoldersConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -1402,7 +1456,8 @@ private fun VideoFolderMultiSelectBar(
     selectedCount: Int,
     onCancel: () -> Unit,
     onSelectAll: () -> Unit,
-    onRemoveSelected: () -> Unit
+    onRemoveSelected: () -> Unit,
+    onDeleteSelected: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -1420,7 +1475,7 @@ private fun VideoFolderMultiSelectBar(
             color = VideoTextPrimary,
             style = MaterialTheme.typography.titleMedium
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = "取消",
                 color = VideoTextSecondary,
@@ -1439,11 +1494,19 @@ private fun VideoFolderMultiSelectBar(
             )
             Text(
                 text = "隐藏",
-                color = Color(0xFFF97066),
+                color = VideoPrimarySoft,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(onClick = onRemoveSelected)
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+            )
+            Text(
+                text = "删除",
+                color = Color(0xFFF97066),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onDeleteSelected)
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
             )
         }
     }
