@@ -2037,6 +2037,8 @@ private fun LocalVibeApp() {
                     initialPositionMs = resolvedVideoFile?.let { videoProgressMap[it.uri] } ?: 0L,
                     queue = resolvedVideoQueue,
                     currentIndex = resolvedVideoIndex,
+                    videoProgressByUri = videoProgressMap,
+                    onRemoveUnavailableVideo = ::removeMediaFromList,
                     onSelectVideo = { index ->
                         val nextFile = resolvedVideoQueue.getOrNull(index) ?: return@VideoPlayerScreen
                         currentVideoIndex = index

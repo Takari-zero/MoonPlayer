@@ -41,6 +41,7 @@ import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -55,14 +56,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -86,6 +90,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -123,7 +128,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -156,6 +163,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.shenghui.localvibe.core.media.formatFileSize
 import com.shenghui.localvibe.core.media.formatDuration
+import com.shenghui.localvibe.core.media.VideoThumbnailStore
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import java.io.File
 import java.io.FileOutputStream
@@ -175,8 +183,7 @@ private val PlayerMoonPurple = Color(0xFF7B55FF)
 private val PlayerMoonPurpleSoft = Color(0xFFB7A7FF)
 private val VideoLibrarySelectionPurple = Color(0xFF8B5CFF)
 private const val VideoLibrarySelectionContainerAlpha = 0.34f
-private val PlayerPanelDark = Color(0xE60B0A12)
-private val PlayerPanelStroke = Color(0x30B7A7FF)
+private val PlayerPanelDark = Color(0xB30B0A12)
 private val PlayerTrackInactive = Color(0xFF3A3449)
 private val VideoFolderPlaybackSpeeds = mutableMapOf<String, Float>()
 private const val VIDEO_SEEK_END_GUARD_MS = 500L
@@ -195,6 +202,8 @@ fun VideoPlayerScreen(
     initialPositionMs: Long,
     queue: List<LocalMediaFile>,
     currentIndex: Int,
+    videoProgressByUri: Map<String, Long> = emptyMap(),
+    onRemoveUnavailableVideo: (LocalMediaFile) -> Unit = {},
     onSelectVideo: (Int) -> Unit,
     onProgressChanged: (String, Long) -> Unit,
     folderPlaybackSpeeds: Map<String, Float>,
@@ -273,6 +282,8 @@ fun VideoPlayerScreen(
             initialPositionMs = initialPositionMs,
             queue = queue,
             currentIndex = currentIndex,
+            videoProgressByUri = videoProgressByUri,
+            onRemoveUnavailableVideo = onRemoveUnavailableVideo,
             onSelectVideo = onSelectVideo,
             onProgressChanged = onProgressChanged,
             folderPlaybackSpeeds = folderPlaybackSpeeds,
@@ -291,6 +302,8 @@ private fun LocalVideoPlayer(
     initialPositionMs: Long,
     queue: List<LocalMediaFile>,
     currentIndex: Int,
+    videoProgressByUri: Map<String, Long>,
+    onRemoveUnavailableVideo: (LocalMediaFile) -> Unit,
     onSelectVideo: (Int) -> Unit,
     onProgressChanged: (String, Long) -> Unit,
     folderPlaybackSpeeds: Map<String, Float>,
@@ -1100,7 +1113,7 @@ private fun LocalVideoPlayer(
     Box(
         modifier = modifier
             .background(Color.Black)
-            .pointerInput(Unit) {
+            .pointerInput(mediaFile.uri, player) {
                 detectTapGestures(
                     onDoubleTap = { offset ->
                         val settings = latestGestureSettings
@@ -1150,7 +1163,7 @@ private fun LocalVideoPlayer(
                     }
                 )
             }
-            .pointerInput(Unit) {
+            .pointerInput(mediaFile.uri, player) {
                 var isDragGestureBlocked = false
                     detectDragGestures(
                         onDragStart = { offset ->
@@ -1334,11 +1347,13 @@ private fun LocalVideoPlayer(
                 lastPlaybackError = lastPlaybackError,
                 navigationQueue = navigationQueue,
                 currentQueueUri = mediaFile.uri,
+                videoProgressByUri = videoProgressByUri,
                 isPlaying = isPlaying,
                 onBack = ::requestBack,
                 onQueueItemSelected = { file ->
                     selectNavigationVideo(file)
                 },
+                onRemoveUnavailableVideo = onRemoveUnavailableVideo,
                 onSeekStart = {
                     isSeekingByUser = true
                     draggingPositionMs = currentPositionMs
@@ -1648,9 +1663,11 @@ private fun VideoControlOverlay(
     lastPlaybackError: VideoPlaybackErrorInfo?,
     navigationQueue: List<LocalMediaFile>,
     currentQueueUri: String,
+    videoProgressByUri: Map<String, Long>,
     isPlaying: Boolean,
     onBack: () -> Unit,
     onQueueItemSelected: (LocalMediaFile) -> Unit,
+    onRemoveUnavailableVideo: (LocalMediaFile) -> Unit,
     onSeekStart: () -> Unit,
     onSeekPreview: (Long) -> Unit,
     onSeekFinished: () -> Unit,
@@ -2216,7 +2233,7 @@ private fun VideoControlOverlay(
                 },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 56.dp, end = 20.dp)
+                    .padding(top = 12.dp, end = 16.dp, bottom = 12.dp)
             )
         }
 
@@ -2389,22 +2406,32 @@ private fun VideoControlOverlay(
                     .matchParentSize()
                     .clickable { showQueuePanel = false }
             )
-            VideoQueuePanel(
-                queue = navigationQueue,
-                currentUri = currentQueueUri,
-                currentPositionMs = currentPositionMs,
-                durationMs = durationMs,
-                onSelect = { file ->
-                    showQueuePanel = false
-                    if (file.uri != currentQueueUri) {
-                        onQueueItemSelected(file)
-                    }
-                },
-                onDismiss = { showQueuePanel = false },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 56.dp, end = 20.dp)
-            )
+            BoxWithConstraints(
+                modifier = Modifier.matchParentSize()
+            ) {
+                val panelHeight = if (maxHeight > 24.dp) maxHeight - 24.dp else maxHeight
+                VideoQueuePanel(
+                    queue = navigationQueue,
+                    currentUri = currentQueueUri,
+                    currentPositionMs = currentPositionMs,
+                    durationMs = durationMs,
+                    progressByUri = videoProgressByUri,
+                    onSelect = { file ->
+                        showQueuePanel = false
+                        if (file.uri != currentQueueUri) {
+                            onQueueItemSelected(file)
+                        }
+                    },
+                    onRemoveUnavailable = onRemoveUnavailableVideo,
+                    onDismiss = { showQueuePanel = false },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp)
+                        .fillMaxWidth(0.42f)
+                        .widthIn(min = 360.dp, max = 520.dp)
+                        .requiredHeight(panelHeight)
+                )
+            }
         }
 
         if (showControlSettingsPanel) {
@@ -3757,7 +3784,7 @@ private fun AbLoopFloatingBar(
         modifier = modifier
             .widthIn(max = 620.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(PlayerPanelDark.copy(alpha = 0.64f))
+            .background(PlayerPanelDark)
             .clickable(onClick = {})
             .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -4013,7 +4040,7 @@ private fun SleepTimerPanel(
             .widthIn(min = 420.dp, max = 560.dp)
             .heightIn(max = 360.dp)
             .clip(RoundedCornerShape(34.dp))
-            .background(PlayerPanelDark.copy(alpha = 0.92f))
+            .background(PlayerPanelDark)
             .clickable(onClick = {})
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp, vertical = 18.dp),
@@ -4615,105 +4642,172 @@ private fun VideoQueuePanel(
     currentUri: String,
     currentPositionMs: Long,
     durationMs: Long,
+    progressByUri: Map<String, Long>,
     onSelect: (LocalMediaFile) -> Unit,
+    onRemoveUnavailable: (LocalMediaFile) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val listState = rememberLazyListState()
     val currentFile = queue.firstOrNull { it.uri == currentUri }
     val folderName = currentFile?.parentFolderName?.takeIf { it.isNotBlank() }
         ?: queue.firstOrNull()?.parentFolderName?.takeIf { it.isNotBlank() }
         ?: "未知文件夹"
     val currentIndex = queue.indexOfFirst { it.uri == currentUri }
+    var searchQuery by remember(queue) { mutableStateOf("") }
+    var selectedFilter by remember(queue) { mutableStateOf(VideoQueueFilter.All) }
+    var unavailableByUri by remember(queue) { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth(0.36f)
-            .widthIn(min = 292.dp, max = 400.dp)
-            .fillMaxHeight(PLAYER_SIDE_PANEL_HEIGHT_FRACTION)
-            .clip(RoundedCornerShape(13.dp))
-            .background(PlayerPanelDark.copy(alpha = 0.86f))
-            .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(13.dp))
-            .clickable(onClick = {})
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "播放列表",
-                color = Color.White,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1
-            )
-            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                Icon(
-                    Icons.Filled.Close,
-                    contentDescription = "关闭播放列表",
-                    tint = Color.White.copy(alpha = 0.64f),
-                    modifier = Modifier.size(18.dp)
-                )
+    LaunchedEffect(queue) {
+        unavailableByUri = withContext(Dispatchers.IO) {
+            queue.associate { file ->
+                file.uri to !VideoThumbnailStore.isSourceReadable(context, file)
             }
         }
+    }
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.White.copy(alpha = 0.020f))
-                .padding(horizontal = 9.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text(
-                text = folderName,
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = "共 ${queue.size} 个视频" + if (currentIndex >= 0) " · 当前第 ${currentIndex + 1} 个" else "",
-                color = Color.White.copy(alpha = 0.58f),
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+    val entries = remember(queue, currentUri, currentPositionMs, durationMs, progressByUri, unavailableByUri) {
+        queue.mapIndexed { index, file ->
+            val isCurrent = file.uri == currentUri
+            val progressMs = if (isCurrent) {
+                currentPositionMs.coerceAtLeast(0L)
+            } else {
+                progressByUri[file.uri]?.coerceAtLeast(0L) ?: 0L
+            }
+            val itemDurationMs = if (isCurrent && durationMs > 0L) {
+                durationMs
+            } else {
+                file.durationMs?.takeIf { it > 0L } ?: 0L
+            }
+            VideoQueueEntry(
+                index = index,
+                file = file,
+                isCurrent = isCurrent,
+                isUnavailable = unavailableByUri[file.uri] == true,
+                progressMs = progressMs,
+                durationMs = itemDurationMs
             )
         }
+    }
 
-        LazyColumn(
+    val filteredEntries = remember(entries, selectedFilter, searchQuery) {
+        val query = searchQuery.trim()
+        entries.filter { entry ->
+            entry.matchesFilter(selectedFilter) && entry.matchesSearch(query)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(PlayerPanelDark)
+            .clickable(onClick = {})
+    ) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding = PaddingValues(bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+                .fillMaxSize()
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            if (queue.isEmpty()) {
-                item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Tune,
+                        contentDescription = null,
+                        tint = VideoLibrarySelectionPurple,
+                        modifier = Modifier.size(19.dp)
+                    )
                     Text(
-                        text = "当前没有可展示的播放列表",
-                        color = Color.White.copy(alpha = 0.62f),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color.White.copy(alpha = 0.028f))
-                            .padding(horizontal = 9.dp, vertical = 9.dp)
+                        text = "视频列表",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
                     )
                 }
-            } else {
-                itemsIndexed(queue, key = { _, file -> file.uri }) { index, file ->
-                    VideoQueueItem(
-                        index = index,
-                        file = file,
-                        isCurrent = file.uri == currentUri,
-                        currentPositionMs = currentPositionMs,
-                        durationMs = durationMs,
-                        onClick = { onSelect(file) }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "关闭播放列表",
+                        tint = Color.White.copy(alpha = 0.70f),
+                        modifier = Modifier.size(19.dp)
                     )
+                }
+            }
+
+            VideoQueueSearchBar(
+                folderName = folderName,
+                queueSize = queue.size,
+                currentIndex = currentIndex,
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                VideoQueueFilter.values().forEach { filter ->
+                    VideoQueueFilterChip(
+                        label = filter.label,
+                        selected = selectedFilter == filter,
+                        onClick = { selectedFilter = filter }
+                    )
+                }
+            }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(bottom = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (filteredEntries.isEmpty()) {
+                    item {
+                        Text(
+                            text = if (queue.isEmpty()) "当前没有可展示的视频" else "暂无匹配视频",
+                            color = Color.White.copy(alpha = 0.66f),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.035f))
+                                .padding(horizontal = 12.dp, vertical = 16.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    itemsIndexed(filteredEntries, key = { _, entry -> entry.file.uri }) { _, entry ->
+                        VideoQueueItem(
+                            entry = entry,
+                            onClick = {
+                                if (entry.isUnavailable) {
+                                    Toast.makeText(context, "文件已失效，无法播放", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    onSelect(entry.file)
+                                }
+                            },
+                            onRemoveUnavailable = {
+                                onRemoveUnavailable(entry.file)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -4721,96 +4815,380 @@ private fun VideoQueuePanel(
 }
 
 @Composable
-private fun VideoQueueItem(
-    index: Int,
-    file: LocalMediaFile,
-    isCurrent: Boolean,
-    currentPositionMs: Long,
-    durationMs: Long,
+private fun VideoQueueSearchBar(
+    folderName: String,
+    queueSize: Int,
+    currentIndex: Int,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val indexText = if (currentIndex >= 0 && queueSize > 0) {
+        " · ${currentIndex + 1}/$queueSize"
+    } else {
+        ""
+    }
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.055f))
+            .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "$folderName · $queueSize 个视频",
+            color = Color.White.copy(alpha = 0.84f),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.weight(1f),
+            maxLines = 1
+        )
+        Text(
+            text = indexText.trim(),
+            color = VideoLibrarySelectionPurple,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+        Box(
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .widthIn(min = 116.dp, max = 160.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.labelMedium.copy(
+                    color = Color.White.copy(alpha = 0.90f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(end = 28.dp)
+            )
+            if (query.isBlank()) {
+                Text(
+                    text = "搜索当前列表",
+                    color = Color.White.copy(alpha = 0.38f),
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.68f),
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoQueueFilterChip(
+    label: String,
+    selected: Boolean,
     onClick: () -> Unit
 ) {
-    val progressText = if (isCurrent) {
-        val current = formatDuration(currentPositionMs)
-        val total = durationMs.takeIf { it > 0L }?.let { formatDuration(it) }
-        total?.let { "$current / $it" } ?: current
-    } else {
-        "时长未知"
+    Text(
+        text = label,
+        color = if (selected) Color.White else Color.White.copy(alpha = 0.74f),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) VideoLibrarySelectionPurple else Color.White.copy(alpha = 0.075f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 7.dp),
+        maxLines = 1
+    )
+}
+
+@Composable
+private fun VideoQueueItem(
+    entry: VideoQueueEntry,
+    onClick: () -> Unit,
+    onRemoveUnavailable: () -> Unit
+) {
+    val backgroundColor = when {
+        entry.isCurrent -> VideoLibrarySelectionPurple.copy(alpha = 0.20f)
+        entry.isUnavailable -> Color.White.copy(alpha = 0.030f)
+        else -> Color.Transparent
     }
-    val detailText = listOfNotNull(
-        formatFileSize(file.size.coerceAtLeast(0L)).takeIf { it.isNotBlank() },
-        progressText
-    ).joinToString(" · ")
-    val backgroundColor = if (isCurrent) {
-        PlayerMoonPurple.copy(alpha = 0.085f)
-    } else {
-        Color.White.copy(alpha = 0.024f)
+    val titleColor = when {
+        entry.isUnavailable -> Color.White.copy(alpha = 0.62f)
+        else -> Color.White.copy(alpha = 0.92f)
     }
-    val borderColor = if (isCurrent) {
-        PlayerMoonPurpleSoft.copy(alpha = 0.16f)
-    } else {
-        Color.Transparent
-    }
+    val metaText = entry.metaText()
+    val progressFraction = entry.progressFraction()
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(50.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .heightIn(min = 78.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(backgroundColor)
-            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Box(
+        VideoQueueThumbnail(
+            file = entry.file,
+            durationMs = entry.durationMs,
+            isCurrent = entry.isCurrent,
+            isUnavailable = entry.isUnavailable,
             modifier = Modifier
-                .width(2.dp)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(999.dp))
-                .background(if (isCurrent) PlayerMoonPurpleSoft else Color.Transparent)
+                .width(104.dp)
+                .height(62.dp)
         )
-        Text(
-            text = (index + 1).toString().padStart(2, '0'),
-            color = if (isCurrent) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.42f),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.width(22.dp),
-            textAlign = TextAlign.Center,
-            maxLines = 1
-        )
+
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(
-                text = file.name.ifBlank { "未知视频" },
-                color = Color.White.copy(alpha = if (isCurrent) 0.94f else 0.82f),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = entry.file.name.ifBlank { "未知视频" },
+                    color = titleColor,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (entry.isCurrent) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (entry.isCurrent) {
+                    Text(
+                        text = "正在播放",
+                        color = VideoLibrarySelectionPurple,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(VideoLibrarySelectionPurple.copy(alpha = 0.16f))
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                        maxLines = 1
+                    )
+                }
+            }
+
+            if (metaText.isNotBlank()) {
+                Text(
+                    text = metaText,
+                    color = Color.White.copy(alpha = if (entry.isUnavailable) 0.48f else 0.64f),
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (!entry.isUnavailable && progressFraction > 0f) {
+                VideoQueueProgressBar(
+                    fraction = progressFraction,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (entry.isUnavailable) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "无法播放",
+                        color = Color.White.copy(alpha = 0.54f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "从列表移除",
+                        color = Color.White.copy(alpha = 0.88f),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White.copy(alpha = 0.070f))
+                            .clickable(onClick = onRemoveUnavailable)
+                            .padding(horizontal = 9.dp, vertical = 4.dp),
+                        maxLines = 1
+                    )
+                }
+            } else if (entry.progressMs > 0L) {
+                Text(
+                    text = "上次 ${formatDuration(entry.progressMs)}",
+                    color = if (entry.isCurrent) VideoLibrarySelectionPurple else Color.White.copy(alpha = 0.58f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Icon(
+            imageVector = Icons.Filled.MoreVert,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.58f),
+            modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoQueueThumbnail(
+    file: LocalMediaFile,
+    durationMs: Long,
+    isCurrent: Boolean,
+    isUnavailable: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var thumbnail by remember(file.uri, file.modifiedAt, file.size, isUnavailable) {
+        mutableStateOf<Bitmap?>(null)
+    }
+
+    LaunchedEffect(file.uri, file.modifiedAt, file.size, isUnavailable) {
+        thumbnail = null
+        if (!isUnavailable) {
+            thumbnail = withContext(Dispatchers.IO) {
+                VideoThumbnailStore.loadOrCreate(context, file, durationMs.takeIf { it > 0L })
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(Color.White.copy(alpha = 0.070f)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isUnavailable) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Info,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.46f),
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = "文件已失效",
+                    color = Color.White.copy(alpha = 0.58f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
+            }
+        } else if (thumbnail != null) {
+            Image(
+                bitmap = thumbnail!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
-            Text(
-                text = detailText,
-                color = if (isCurrent) PlayerMoonPurpleSoft else Color.White.copy(alpha = 0.52f),
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+        } else {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.40f),
+                modifier = Modifier.size(26.dp)
             )
         }
-        if (isCurrent) {
+
+        if (!isUnavailable && durationMs > 0L) {
             Text(
-                text = "正在播放",
-                color = PlayerMoonPurpleSoft,
+                text = formatDuration(durationMs),
+                color = Color.White,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(PlayerMoonPurple.copy(alpha = 0.10f))
+                    .align(Alignment.BottomEnd)
+                    .padding(5.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.Black.copy(alpha = 0.58f))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
-                maxLines = 1
+                maxLines = 1,
             )
         }
     }
+}
+
+@Composable
+private fun VideoQueueProgressBar(
+    fraction: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(4.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.White.copy(alpha = 0.12f))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .background(VideoLibrarySelectionPurple)
+        )
+    }
+}
+
+private enum class VideoQueueFilter(val label: String) {
+    All("全部"),
+    Unwatched("未看"),
+    Watched("已看"),
+    Unavailable("失效")
+}
+
+private data class VideoQueueEntry(
+    val index: Int,
+    val file: LocalMediaFile,
+    val isCurrent: Boolean,
+    val isUnavailable: Boolean,
+    val progressMs: Long,
+    val durationMs: Long
+) {
+    fun progressFraction(): Float {
+        val duration = durationMs.takeIf { it > 0L } ?: return 0f
+        return (progressMs.coerceIn(0L, duration) / duration.toFloat()).coerceIn(0f, 1f)
+    }
+
+    fun matchesFilter(filter: VideoQueueFilter): Boolean = when (filter) {
+        VideoQueueFilter.All -> true
+        VideoQueueFilter.Unwatched -> !isUnavailable && progressMs <= 0L
+        VideoQueueFilter.Watched -> !isUnavailable && progressMs > 0L
+        VideoQueueFilter.Unavailable -> isUnavailable
+    }
+
+    fun matchesSearch(query: String): Boolean {
+        if (query.isBlank()) return true
+        return file.name.contains(query, ignoreCase = true) ||
+            file.parentFolderName.orEmpty().contains(query, ignoreCase = true) ||
+            file.extension.contains(query, ignoreCase = true)
+    }
+
+    fun metaText(): String {
+        if (isUnavailable) {
+            return listOfNotNull(
+                formatFileSize(file.size.coerceAtLeast(0L)).takeIf { it.isNotBlank() },
+                formatVideoQueueDate(file.modifiedAt)
+            ).joinToString(" · ")
+        }
+        return listOfNotNull(
+            durationMs.takeIf { it > 0L }?.let(::formatDuration),
+            formatFileSize(file.size.coerceAtLeast(0L)).takeIf { it.isNotBlank() },
+            formatVideoQueueDate(file.modifiedAt)
+        ).joinToString(" · ")
+    }
+}
+
+private fun formatVideoQueueDate(timestampMs: Long?): String? {
+    val value = timestampMs?.takeIf { it > 0L } ?: return null
+    return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(value))
 }
 
 private data class VideoGestureSettings(
@@ -5878,7 +6256,6 @@ private fun VideoSpeedPanel(
             .fillMaxWidth(0.82f)
             .clip(RoundedCornerShape(18.dp))
             .background(PlayerPanelDark)
-            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(18.dp))
             .clickable(onClick = {})
             .padding(horizontal = 20.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -6174,7 +6551,6 @@ private fun SidePanelShell(
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
             .background(PlayerPanelDark)
-            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(18.dp))
             .clickable(onClick = {})
             .padding(contentPadding),
         verticalArrangement = Arrangement.spacedBy(contentSpacing)
@@ -6218,7 +6594,6 @@ private fun VideoChoicePanel(
             .width(190.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(PlayerPanelDark)
-            .border(1.dp, PlayerPanelStroke, RoundedCornerShape(18.dp))
             .clickable(onClick = {})
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
