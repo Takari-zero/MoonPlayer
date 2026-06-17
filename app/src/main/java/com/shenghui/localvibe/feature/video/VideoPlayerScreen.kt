@@ -6184,8 +6184,37 @@ private fun VideoAdvancedFuturePanel(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    SidePanelShell(title = "后续专项", onDismiss = onDismiss, modifier = modifier.width(300.dp)) {
-        VideoFutureItem("字幕时间同步", "Media3 原生字幕链路未接入真实时间轴偏移，继续后置。")
+    SidePanelShell(title = "高级", onDismiss = onDismiss, modifier = modifier.width(320.dp)) {
+        Text(
+            text = "这里显示仍在后续规划中的高级能力。已完成的功能会出现在对应入口中。",
+            color = Color.White.copy(alpha = 0.62f),
+            style = MaterialTheme.typography.labelSmall,
+            lineHeight = 16.sp
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.045f))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "已完成",
+                color = PlayerMoonPurpleSoft,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Text(
+                text = "外挂 SRT 字幕时间同步、字幕样式、均衡器、画面调节、解码与格式信息已在对应入口提供。",
+                color = Color.White.copy(alpha = 0.62f),
+                style = MaterialTheme.typography.labelSmall,
+                lineHeight = 16.sp
+            )
+        }
+        VideoFutureItem("内嵌字幕时间偏移", "当前仅支持外挂 SRT 字幕时间同步；内嵌字幕时间轴偏移仍需后续专项。")
+        VideoFutureItem("ASS / SSA 高级字幕同步", "复杂样式和特效字幕同步暂不做完整支持。")
+        VideoFutureItem("解码增强", "FFmpeg / mpv / native decoder 属于高风险专项，需单独评估。")
+        VideoFutureItem("高级画面滤镜", "当前已支持基础画面调节；更复杂滤镜后续再做。")
     }
 }
 
