@@ -63,6 +63,22 @@ object VideoThumbnailStore {
         return bitmap
     }
 
+    fun hasValidCache(context: Context, file: LocalMediaFile): Boolean {
+        val appContext = context.applicationContext
+        val cacheFile = cacheFile(appContext, cacheKey(file))
+        if (!cacheFile.isFile) return false
+        val cached = BitmapFactory.decodeFile(cacheFile.absolutePath)
+        if (cached != null && !isInvalidThumbnail(cached)) {
+            return true
+        }
+        cacheFile.delete()
+        return false
+    }
+
+    fun isSourceReadable(context: Context, file: LocalMediaFile): Boolean {
+        return isReadable(context.applicationContext, file.uri)
+    }
+
     fun delete(context: Context, file: LocalMediaFile) {
         deleteForUri(context.applicationContext, file.uri)
     }

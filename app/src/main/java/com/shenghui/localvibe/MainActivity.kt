@@ -87,6 +87,7 @@ import com.shenghui.localvibe.core.datastore.PersistedVideoVisibilityRecord
 import com.shenghui.localvibe.core.media.deleteUri
 import com.shenghui.localvibe.core.media.resolveDocumentTreeName
 import com.shenghui.localvibe.core.media.VideoMetadata
+import com.shenghui.localvibe.core.media.VideoThumbnailPrewarmer
 import com.shenghui.localvibe.core.media.VideoThumbnailStore
 import com.shenghui.localvibe.core.media.videoMetadataCacheKey
 import com.shenghui.localvibe.core.player.AudioPlayMode
@@ -142,6 +143,9 @@ private fun LocalVibeApp() {
     val scannedFilesByFolder = remember { mutableStateMapOf<String, List<LocalMediaFile>>() }
     val videoProgressMap = remember { mutableStateMapOf<String, Long>() }
     val videoMetadataCache = remember { mutableStateMapOf<String, VideoMetadata>() }
+    val videoThumbnailPrewarmer = remember(context, coroutineScope) {
+        VideoThumbnailPrewarmer(context.applicationContext, coroutineScope)
+    }
     val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
     val bookProgressMap = remember { mutableStateMapOf<String, PersistedBookProgress>() }
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
@@ -182,6 +186,11 @@ private fun LocalVibeApp() {
     var folderVideoDeleteSuccessSignal by remember { mutableStateOf(0L) }
     lateinit var folderVideoDeleteLauncher:
         ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
+    DisposableEffect(videoThumbnailPrewarmer) {
+        onDispose {
+            videoThumbnailPrewarmer.cancel()
+        }
+    }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -947,6 +956,19 @@ private fun LocalVibeApp() {
             .filter { it.type == LocalMediaType.VIDEO }
     }
 
+    fun currentScannedVideoFiles(): List<LocalMediaFile> {
+        return scannedFilesByFolder
+            .filterKeys { it.startsWith("${LocalMediaType.VIDEO.name}:") }
+            .values
+            .flatten()
+            .filter { it.type == LocalMediaType.VIDEO }
+            .distinctBy { it.normalizedUri() }
+    }
+
+    fun prewarmVideoThumbnails(files: Collection<LocalMediaFile>) {
+        videoThumbnailPrewarmer.start(files.filter { it.type == LocalMediaType.VIDEO })
+    }
+
     fun runAutoScan(targetType: LocalMediaType, showCompletionToast: Boolean = false) {
         if (targetType == LocalMediaType.VIDEO && !isVideoVisibilityReady) {
             return
@@ -972,6 +994,7 @@ private fun LocalVibeApp() {
                             scannedFilesByFolder[typedFolderKey(LocalMediaType.VIDEO, result.folder.id)] =
                                 result.files
                         }
+                        prewarmVideoThumbnails(currentScannedVideoFiles())
                         if (showCompletionToast && folders.isEmpty()) {
                             Toast.makeText(context, "没有扫描到视频文件", Toast.LENGTH_SHORT).show()
                         }
@@ -1048,6 +1071,7 @@ private fun LocalVibeApp() {
                         scannedFilesByFolder[typedFolderKey(LocalMediaType.VIDEO, result.folder.id)] =
                             result.files
                     }
+                    prewarmVideoThumbnails(currentScannedVideoFiles())
                     currentFolder = folders.firstOrNull { it.folder.id == folderId }?.folder
                         ?: folder.copy(videoCount = 0, isScanning = false)
                     Toast.makeText(
@@ -1087,6 +1111,7 @@ private fun LocalVibeApp() {
                     folder = refreshedFolder,
                     files = typedFiles
                 )
+                prewarmVideoThumbnails(typedFiles)
                 currentFolder = refreshedFolder
                 appStateStore.upsertFolder(
                     PersistedFolder(
@@ -1200,6 +1225,9 @@ private fun LocalVibeApp() {
                     ),
                     files = typedFiles
                 )
+                if (targetType == LocalMediaType.VIDEO) {
+                    prewarmVideoThumbnails(typedFiles)
+                }
                 appStateStore.upsertFolder(
                     PersistedFolder(
                         folderId = uriText,
@@ -1433,6 +1461,7 @@ private fun LocalVibeApp() {
                     replaceFolderBookFiles(persistedFolder.folderId, emptyList())
                 }
             }
+        prewarmVideoThumbnails(currentScannedVideoFiles())
         Log.d(BOOK_LOG_TAG, "restored folder book count=$restoredFolderBookCount")
         Log.d(
             BOOK_LOG_TAG,
