@@ -349,3 +349,42 @@ Deferred thumbnail cache enhancements:
 - Show thumbnail cache usage in settings.
 - Provide a manual clear-thumbnail-cache button.
 - Dynamically adjust the cache limit based on device storage.
+
+## Player Queue Panel And Gesture Recovery Completion
+
+- The video player `视频列表 / 播放队列` panel refinement is complete.
+- Entry: the queue/list button inside the video player page.
+- Shape: right-side dark translucent glass panel, close to full-screen height, with compressed header spacing and more visible queue rows.
+- Visual behavior: player-side panels now use a more translucent background and no obvious heavy border while keeping rounded corners and readable text.
+- Queue data is real playback queue data only. Do not use mock queue entries or hard-coded titles/counts.
+- Search inside the current queue is a real filter.
+- Filters are real: `全部 / 未看 / 已看 / 失效`.
+- The current playing item uses a dark purple highlight and keeps the `正在播放` label.
+- The circular play overlay on the current item's thumbnail was removed so the thumbnail is not covered.
+- Tapping another playable queue item switches playback.
+- Unavailable queue items cannot be played and can only be removed from the list.
+- The queue panel must not add permanent-delete or dangerous file-management actions.
+- Player gesture recovery is complete for the current player instance.
+- Double-tap right performs real fast-forward; double-tap left performs real rewind.
+- Horizontal drag performs real seek on release.
+- Left vertical drag changes activity window brightness; right vertical drag changes media volume.
+- The gesture `pointerInput` is bound to the current `mediaFile.uri` and `player` so switching queue items does not leave gestures holding an old player reference.
+- The bottom system gesture safe area remains reserved so bottom-up system navigation does not trigger brightness, volume, or seek.
+
+Regression boundaries:
+
+- Do not let the queue panel become short/wrap-content again.
+- Do not restore the circular play overlay on the current queue thumbnail.
+- Do not turn queue search or filters into UI-only fake controls.
+- Do not make unavailable queue items playable.
+- Do not add permanent delete to the player queue panel.
+- Do not let gestures show hints without executing the real action.
+- Do not leave transparent overlays intercepting player gestures after panels close.
+- Do not restore thick borders or pure-black solid backgrounds for player function panels.
+
+Deferred player queue enhancements:
+
+- Queue sorting.
+- A small "locate current item" affordance.
+- Further queue information-density tuning.
+- Batch cleanup for unavailable queue items.

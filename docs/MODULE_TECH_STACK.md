@@ -240,3 +240,20 @@ docs-only 杞涓嶉渶瑕佺紪璇戯紝浣嗗繀椤荤‘璁ゅ彧鏀规�
 - Cache cleanup failures for individual files should be contained and must not crash playback, list rendering, or prewarming.
 - Real video deletion may clear the matching thumbnail cache, but cache-limit trimming must never delete source video files. Hide/list-hidden behavior must not clear thumbnail cache.
 - No new permissions, Gradle dependencies, Manifest changes, or scanner architecture changes are required for the thumbnail cache/prewarm path.
+
+## Video Player Queue Panel And Gesture Implementation Boundary
+
+- The video player queue/list panel is implemented inside the player page and should stay scoped to `VideoPlayerScreen.kt` unless routing data must be passed from the host.
+- The panel uses the current playback queue as its data source. It must not render hard-coded example videos.
+- The panel is a right-side translucent player function panel with compact header, real search, real filters, current-item highlight, unavailable-item state, and no permanent-delete action.
+- Queue item thumbnails should continue to use the existing video thumbnail cache path and must not bypass black/white/low-information frame validation.
+- Queue filters use real state: all items, no-progress/unwatched items, progress/watched items, and unavailable items.
+- Current item identity is based on the current queue URI. The current item is highlighted and may show `正在播放`, but must not overlay a circular play button on top of the thumbnail.
+- Unavailable queue items must not call playback switching. They may call the existing remove-from-list path.
+- Player function panel visuals are unified as dark translucent rounded panels without obvious thick borders.
+- This visual unification must not change equalizer, picture adjustment, subtitle sync, AB loop, sleep timer, audio track, speed, decode info, or gesture settings behavior.
+- Player gestures are handled by the full player surface pointer input in `LocalVideoPlayer`.
+- Double-tap seek, horizontal drag seek, brightness drag, and volume drag must execute real actions, not only show overlays.
+- The gesture pointer input is keyed by the current `mediaFile.uri` and `player` so an in-player queue switch recreates the gesture handler for the new player instance.
+- The bottom system gesture safe area remains part of the player gesture boundary and should only block gestures that start in that bottom zone.
+- No new permissions, Gradle dependencies, Manifest changes, video home changes, folder detail changes, music changes, or novel changes are required for this player queue/gesture work.

@@ -571,3 +571,24 @@ adb shell monkey -p com.shenghui.localvibe 1
 - Do not introduce full-disk thumbnail scans, startup-wide parallel thumbnail generation, new permissions, or new dependencies for prewarming.
 - Regression boundaries: do not restore `remove` as the main destructive/non-destructive wording, do not make hide delete files, do not fake delete success, do not let unavailable files show restore, do not let unrelated videos share thumbnail cache, do not cache black/white frames, do not let thumbnail cache grow without limit, do not clear real videos or the whole app cache, and do not start unlimited thumbnail work on app startup.
 - Deferred enhancements: show thumbnail cache usage in settings, add a manual clear-thumbnail-cache action, and adjust the cache limit based on available device storage.
+
+## Video Player Queue Panel And Gesture Pitfalls
+
+- The player `视频列表 / 播放队列` panel is a real right-side translucent queue panel, not a placeholder and not a file-management page.
+- Keep the panel close to full height. Do not let it fall back to wrap-content height that only shows a few videos.
+- Keep the header compact so the list area can show more queue items.
+- Queue search must filter the real current queue. Do not show a fake search field.
+- Queue filters (`全部 / 未看 / 已看 / 失效`) must be based on real progress/unavailable state.
+- The current playing item should be identifiable through dark purple highlight and the `正在播放` label.
+- Do not restore the circular play button overlay on the current item's thumbnail; it covers the thumbnail and is redundant.
+- Unavailable queue items must not switch playback. They can be removed from the list, but the queue panel must not expose permanent-delete actions.
+- Player function panels should stay translucent and border-light/no-obvious-border while keeping text readable.
+- Do not restore pure-black solid panel backgrounds or thick outlines while editing player panels.
+- Gesture hints must not be decoupled from real actions. A seek/brightness/volume hint is not enough unless the real player/window/audio action is executed.
+- Double-tap seek must call the current player's real seek path.
+- Horizontal drag seek must apply the final target on drag end.
+- Left vertical drag must write activity window brightness; right vertical drag must change media volume through `AudioManager`.
+- Player gesture `pointerInput` must stay bound to the current `mediaFile.uri` and `player`; otherwise switching videos from the queue can leave gestures using an old player reference.
+- Keep the bottom system gesture safe area: drags starting from the bottom navigation zone must not trigger brightness, volume, or seek.
+- When adding full-screen overlays for player panels, ensure they are only present while the panel is open and do not keep intercepting gestures after dismissal.
+- Deferred queue ideas such as queue sorting, current-item locator, density tuning, and unavailable-item batch cleanup are not complete and must not be documented as shipped.
