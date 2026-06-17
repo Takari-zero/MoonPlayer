@@ -79,6 +79,7 @@ import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.media.formatFileSize
 import com.shenghui.localvibe.core.media.loadVideoMetadata
+import com.shenghui.localvibe.core.media.videoMetadataCacheKey
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import kotlinx.coroutines.Dispatchers
@@ -147,7 +148,7 @@ fun FolderScreen(
         if (targetType == LocalMediaType.VIDEO) {
             when (videoSortMode) {
                 VideoFolderSortMode.NAME -> filtered.sortedBy { it.name.lowercase() }
-                VideoFolderSortMode.DURATION -> filtered.sortedByDescending { videoMetadataCache[it.id]?.durationMs ?: 0L }
+                VideoFolderSortMode.DURATION -> filtered.sortedByDescending { videoMetadataCache[videoMetadataCacheKey(it)]?.durationMs ?: 0L }
                 VideoFolderSortMode.SIZE -> filtered.sortedByDescending { it.size }
                 VideoFolderSortMode.PROGRESS -> filtered.sortedByDescending { videoProgressMap[it.uri] ?: 0L }
             }
@@ -455,7 +456,7 @@ fun FolderScreen(
                                     VideoGridFileCard(
                                         file = file,
                                         progressMs = videoProgressMap[file.uri] ?: 0L,
-                                        metadata = videoMetadataCache[file.id],
+                                        metadata = videoMetadataCache[videoMetadataCacheKey(file)],
                                         isFileUnavailable = isFileUnavailable,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = file.uri in selectedUris,
@@ -496,7 +497,7 @@ fun FolderScreen(
                                     VideoFileCard(
                                         file = file,
                                         progressMs = videoProgressMap[file.uri] ?: 0L,
-                                        metadata = videoMetadataCache[file.id],
+                                        metadata = videoMetadataCache[videoMetadataCacheKey(file)],
                                         isFileUnavailable = isFileUnavailable,
                                         isSelectionMode = isMultiSelectMode,
                                         isSelected = file.uri in selectedUris,
@@ -1307,9 +1308,9 @@ private fun VideoFileCard(
         onAvailabilityChanged(!isAvailable)
         if (!isAvailable || metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
-            loadVideoMetadata(context.applicationContext, file.uri)
+            loadVideoMetadata(context.applicationContext, file)
         }
-        onMetadataLoaded(file.id, loadedMetadata)
+        onMetadataLoaded(videoMetadataCacheKey(file), loadedMetadata)
     }
 
     Card(
@@ -1474,9 +1475,9 @@ private fun VideoGridFileCard(
         onAvailabilityChanged(!isAvailable)
         if (!isAvailable || metadata != null) return@LaunchedEffect
         val loadedMetadata = withContext(Dispatchers.IO) {
-            loadVideoMetadata(context.applicationContext, file.uri)
+            loadVideoMetadata(context.applicationContext, file)
         }
-        onMetadataLoaded(file.id, loadedMetadata)
+        onMetadataLoaded(videoMetadataCacheKey(file), loadedMetadata)
     }
 
     Column(

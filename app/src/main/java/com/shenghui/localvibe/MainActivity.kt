@@ -87,6 +87,8 @@ import com.shenghui.localvibe.core.datastore.PersistedVideoVisibilityRecord
 import com.shenghui.localvibe.core.media.deleteUri
 import com.shenghui.localvibe.core.media.resolveDocumentTreeName
 import com.shenghui.localvibe.core.media.VideoMetadata
+import com.shenghui.localvibe.core.media.VideoThumbnailStore
+import com.shenghui.localvibe.core.media.videoMetadataCacheKey
 import com.shenghui.localvibe.core.player.AudioPlayMode
 import com.shenghui.localvibe.core.player.MusicPlaybackService
 import com.shenghui.localvibe.core.scanner.FolderScanner
@@ -404,6 +406,7 @@ private fun LocalVibeApp() {
                 removeFileFromFolderState(LocalMediaType.VIDEO, file)
                 videoProgressMap.remove(file.uri)
                 videoMetadataCache.remove(file.id)
+                videoMetadataCache.remove(videoMetadataCacheKey(file))
                 videoQueue = videoQueue.filterNot { it.uri == file.uri }
                 currentVideoIndex = currentVideoIndex.coerceAtMost(videoQueue.lastIndex.coerceAtLeast(0))
                 if (selectedVideoUri == file.uri) {
@@ -547,6 +550,11 @@ private fun LocalVibeApp() {
     fun openVideoIfReadable(file: LocalMediaFile, queue: List<LocalMediaFile>) {
         coroutineScope.launch {
             if (!isLocalMediaFileReadable(file)) {
+                withContext(Dispatchers.IO) {
+                    VideoThumbnailStore.delete(context.applicationContext, file)
+                }
+                videoMetadataCache.remove(file.id)
+                videoMetadataCache.remove(videoMetadataCacheKey(file))
                 appStateStore.upsertUnavailableVideoRecord(file)
                 unavailableVideoRecords.clear()
                 unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())
@@ -570,6 +578,9 @@ private fun LocalVibeApp() {
             val uniqueDeletedFiles = deletedFiles
                 .filter { it.type == LocalMediaType.VIDEO }
                 .distinctBy { it.normalizedUri() }
+            withContext(Dispatchers.IO) {
+                VideoThumbnailStore.delete(context.applicationContext, uniqueDeletedFiles)
+            }
             uniqueDeletedFiles.forEach { file ->
                 removeMediaFromMemory(file)
                 appStateStore.saveProgress(
@@ -725,6 +736,11 @@ private fun LocalVibeApp() {
                 return@launch
             }
             if (deleted) {
+                if (file.type == LocalMediaType.VIDEO) {
+                    withContext(Dispatchers.IO) {
+                        VideoThumbnailStore.delete(context.applicationContext, file)
+                    }
+                }
                 removeMediaFromMemory(file)
                 when (file.type) {
                     LocalMediaType.VIDEO -> {
@@ -769,6 +785,12 @@ private fun LocalVibeApp() {
                 }
             }
             val deletedFiles = results.filterValues { it }.keys.toList()
+            withContext(Dispatchers.IO) {
+                VideoThumbnailStore.delete(
+                    context.applicationContext,
+                    deletedFiles.filter { it.type == LocalMediaType.VIDEO }
+                )
+            }
             val failedAudioFiles = results
                 .filter { !it.value && it.key.type == LocalMediaType.AUDIO }
                 .keys
@@ -895,6 +917,36 @@ private fun LocalVibeApp() {
         }
     }
 
+    suspend fun cleanupVideoThumbnailsForMissingFiles(
+        previousFiles: Collection<LocalMediaFile>,
+        nextFiles: Collection<LocalMediaFile>
+    ) {
+        val nextUris = nextFiles
+            .filter { it.type == LocalMediaType.VIDEO }
+            .map { it.normalizedUri() }
+            .toSet()
+        val missingFiles = previousFiles
+            .filter { it.type == LocalMediaType.VIDEO && it.normalizedUri() !in nextUris }
+            .distinctBy { it.normalizedUri() }
+        if (missingFiles.isEmpty()) return
+        missingFiles.forEach { file ->
+            videoMetadataCache.remove(file.id)
+            videoMetadataCache.remove(videoMetadataCacheKey(file))
+        }
+        withContext(Dispatchers.IO) {
+            VideoThumbnailStore.delete(context.applicationContext, missingFiles)
+        }
+    }
+
+    fun currentAutoVideoFiles(): List<LocalMediaFile> {
+        val prefix = "${LocalMediaType.VIDEO.name}:auto:"
+        return scannedFilesByFolder
+            .filterKeys { it.startsWith(prefix) }
+            .values
+            .flatten()
+            .filter { it.type == LocalMediaType.VIDEO }
+    }
+
     fun runAutoScan(targetType: LocalMediaType, showCompletionToast: Boolean = false) {
         if (targetType == LocalMediaType.VIDEO && !isVideoVisibilityReady) {
             return
@@ -906,9 +958,14 @@ private fun LocalVibeApp() {
             when (targetType) {
                 LocalMediaType.VIDEO -> {
                     try {
+                        val previousAutoVideoFiles = currentAutoVideoFiles()
                         val folders = withContext(Dispatchers.IO) {
                             MediaStoreScanner.scanVideos(context.applicationContext)
                         }.filterHiddenVideoFolders()
+                        cleanupVideoThumbnailsForMissingFiles(
+                            previousFiles = previousAutoVideoFiles,
+                            nextFiles = folders.flatMap { it.files }
+                        )
                         videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
                         folders.forEach { result ->
                             videoFolders.add(result.folder)
@@ -977,9 +1034,14 @@ private fun LocalVibeApp() {
             isVideoAutoScanning = true
             coroutineScope.launch {
                 try {
+                    val previousAutoVideoFiles = currentAutoVideoFiles()
                     val folders = withContext(Dispatchers.IO) {
                         MediaStoreScanner.scanVideos(context.applicationContext)
                     }.filterHiddenVideoFolders()
+                    cleanupVideoThumbnailsForMissingFiles(
+                        previousFiles = previousAutoVideoFiles,
+                        nextFiles = folders.flatMap { it.files }
+                    )
                     videoFolders.removeAutoFoldersAndScans(LocalMediaType.VIDEO, scannedFilesByFolder)
                     folders.forEach { result ->
                         videoFolders.add(result.folder)
@@ -1007,11 +1069,15 @@ private fun LocalVibeApp() {
         coroutineScope.launch {
             try {
                 val folderUri = Uri.parse(folder.uri.ifBlank { folderId })
+                val previousFiles = scannedFilesByFolder[
+                    typedFolderKey(LocalMediaType.VIDEO, folderId)
+                ].orEmpty()
                 val typedFiles = withContext(Dispatchers.IO) {
                     FolderScanner.scanFolder(context.applicationContext, folderUri)
                 }
                     .filter { it.type == LocalMediaType.VIDEO }
                     .filterVisibleVideos()
+                cleanupVideoThumbnailsForMissingFiles(previousFiles, typedFiles)
                 val refreshedFolder = folder.copy(
                     videoCount = typedFiles.count { it.type == LocalMediaType.VIDEO },
                     isScanning = false
@@ -1095,6 +1161,7 @@ private fun LocalVibeApp() {
         }
 
         coroutineScope.launch {
+            val previousFiles = scannedFilesByFolder[typedFolderKey(targetType, uriText)].orEmpty()
             val scannedFiles = withContext(Dispatchers.IO) {
                 runCatching {
                     FolderScanner.scanFolder(context.applicationContext, uri)
@@ -1108,6 +1175,9 @@ private fun LocalVibeApp() {
                         else -> files
                     }
                 }
+            if (targetType == LocalMediaType.VIDEO) {
+                cleanupVideoThumbnailsForMissingFiles(previousFiles, typedFiles)
+            }
 
             if (typedFiles.isEmpty()) {
                 targetFolders.removeAll { it.id == uriText }
@@ -1496,6 +1566,11 @@ private fun LocalVibeApp() {
                 val file = record.toLocalVideoFile()
                 if (!isLocalMediaFileReadable(file)) {
                     unavailableCount += 1
+                    withContext(Dispatchers.IO) {
+                        VideoThumbnailStore.delete(context.applicationContext, file)
+                    }
+                    videoMetadataCache.remove(file.id)
+                    videoMetadataCache.remove(videoMetadataCacheKey(file))
                     appStateStore.upsertUnavailableVideoRecord(file)
                 }
             }
@@ -1551,6 +1626,9 @@ private fun LocalVibeApp() {
                 appStateStore.removeHiddenVideoUris(removedUris)
             }
             if (unavailableUris.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    VideoThumbnailStore.deleteForUris(context.applicationContext, unavailableUris)
+                }
                 appStateStore.removeUnavailableVideoUris(unavailableUris)
             }
 
@@ -1890,6 +1968,11 @@ private fun LocalVibeApp() {
                     },
                     onUnavailableVideoDetected = { file ->
                         coroutineScope.launch {
+                            withContext(Dispatchers.IO) {
+                                VideoThumbnailStore.delete(context.applicationContext, file)
+                            }
+                            videoMetadataCache.remove(file.id)
+                            videoMetadataCache.remove(videoMetadataCacheKey(file))
                             appStateStore.upsertUnavailableVideoRecord(file)
                             unavailableVideoRecords.clear()
                             unavailableVideoRecords.addAll(appStateStore.loadUnavailableVideoRecords())

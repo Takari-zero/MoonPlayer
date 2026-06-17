@@ -1,8 +1,6 @@
 package com.shenghui.localvibe.feature.video
 
 import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -98,6 +96,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
+import com.shenghui.localvibe.core.media.VideoThumbnailStore
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
 import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordType
 import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordUiModel
@@ -1655,11 +1654,6 @@ private fun VideoFolderCard(
                 onLongClick = onLongClick
             )
     ) {
-        val representativeVideo = item.videos.firstOrNull()
-        val durationLabel = representativeVideo
-            ?.takeIf { showThumbnail && showThumbnailDuration }
-            ?.durationMs
-            ?.let(::formatThumbnailDuration)
         if (compact) {
             Column(
                 modifier = Modifier
@@ -1671,9 +1665,9 @@ private fun VideoFolderCard(
             ) {
                 FolderPreview(
                     folderName = item.folder.name,
-                    previewUri = representativeVideo?.uri.takeIf { showThumbnail },
+                    previewVideos = item.videos.takeIf { showThumbnail }.orEmpty(),
                     videoCount = item.videos.size,
-                    durationLabel = durationLabel,
+                    showThumbnailDuration = showThumbnailDuration,
                     compact = true
                 )
                 FolderText(
@@ -1694,9 +1688,9 @@ private fun VideoFolderCard(
             ) {
                 FolderPreview(
                     folderName = item.folder.name,
-                    previewUri = representativeVideo?.uri.takeIf { showThumbnail },
+                    previewVideos = item.videos.takeIf { showThumbnail }.orEmpty(),
                     videoCount = item.videos.size,
-                    durationLabel = durationLabel,
+                    showThumbnailDuration = showThumbnailDuration,
                     compact = false
                 )
                 FolderText(
@@ -1753,11 +1747,6 @@ private fun VideoFolderGridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val representativeVideo = item.videos.firstOrNull()
-    val durationLabel = representativeVideo
-        ?.takeIf { showThumbnail && showThumbnailDuration }
-        ?.durationMs
-        ?.let(::formatThumbnailDuration)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1771,9 +1760,9 @@ private fun VideoFolderGridItem(
         Box {
             FolderPreview(
                 folderName = item.folder.name,
-                previewUri = representativeVideo?.uri.takeIf { showThumbnail },
+                previewVideos = item.videos.takeIf { showThumbnail }.orEmpty(),
                 videoCount = item.videos.size,
-                durationLabel = durationLabel,
+                showThumbnailDuration = showThumbnailDuration,
                 compact = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1845,9 +1834,9 @@ private fun VideoFolderGridItem(
 @Composable
 private fun FolderPreview(
     folderName: String,
-    previewUri: String?,
+    previewVideos: List<LocalMediaFile>,
     videoCount: Int,
-    durationLabel: String? = null,
+    showThumbnailDuration: Boolean,
     compact: Boolean,
     modifier: Modifier = Modifier,
     useDefaultSize: Boolean = true,
@@ -1855,15 +1844,19 @@ private fun FolderPreview(
 ) {
     val coverKind = remember(folderName) { folderCoverKind(folderName) }
     val context = LocalContext.current
-    val thumbnail by produceState<Bitmap?>(initialValue = null, previewUri, compact) {
-        value = if (previewUri.isNullOrBlank()) {
-            null
-        } else {
-            withContext(Dispatchers.IO) {
-                loadFolderPreviewBitmap(context, previewUri)
+    val preview by produceState<FolderPreviewBitmap?>(initialValue = null, previewVideos, compact) {
+        value = withContext(Dispatchers.IO) {
+            previewVideos.firstNotNullOfOrNull { video ->
+                VideoThumbnailStore.loadOrCreate(context.applicationContext, video)
+                    ?.let { bitmap -> FolderPreviewBitmap(bitmap, video.durationMs) }
             }
         }
     }
+    val thumbnail = preview?.bitmap
+    val durationLabel = preview
+        ?.durationMs
+        ?.takeIf { showThumbnailDuration }
+        ?.let(::formatThumbnailDuration)
     Box(
         modifier = modifier
             .then(
@@ -1944,6 +1937,11 @@ private fun FolderPreview(
         }
     }
 }
+
+private data class FolderPreviewBitmap(
+    val bitmap: Bitmap,
+    val durationMs: Long?
+)
 
 @Composable
 private fun FolderText(
@@ -2222,36 +2220,6 @@ private fun formatByteCount(bytes: Long): String {
         "${bytes} B"
     } else {
         "${"%.1f".format(value)} ${units[unitIndex]}"
-    }
-}
-
-private fun loadFolderPreviewBitmap(
-    context: android.content.Context,
-    uri: String
-): Bitmap? {
-    val retriever = MediaMetadataRetriever()
-    return try {
-        retriever.setDataSource(context, Uri.parse(uri))
-        val durationMs = retriever
-            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            ?.toLongOrNull()
-            ?: 0L
-        val targetUs = when {
-            durationMs >= 8_000L -> 3_000_000L
-            durationMs > 0L -> (durationMs / 2) * 1_000L
-            else -> 1_000_000L
-        }
-        retriever.getFrameAtTime(
-            targetUs,
-            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-        ) ?: retriever.getFrameAtTime(
-            0L,
-            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-        )
-    } catch (_: Exception) {
-        null
-    } finally {
-        runCatching { retriever.release() }
     }
 }
 
