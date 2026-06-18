@@ -580,6 +580,39 @@ private fun LocalVideoPlayer(
         }
     }
 
+    fun handleUserPlayPauseClick() {
+        if (player.isPlaying) {
+            player.pause()
+            isPlaying = false
+            return
+        }
+
+        if (
+            sleepTimerMode != VideoSleepTimerMode.OFF ||
+            sleepTimerSelectedOption != VideoSleepTimerOption.Off ||
+            sleepTimerEndAtElapsedMs > 0L ||
+            sleepTimerRemainingMs > 0L ||
+            sleepTimerEndOfVideoEnabled
+        ) {
+            clearSleepTimer(showHint = false)
+        }
+
+        if (player.playbackState == Player.STATE_ENDED) {
+            val navigationIndex = currentNavigationIndex()
+            if (navigationIndex < navigationQueue.lastIndex) {
+                selectNavigationVideo(navigationQueue[navigationIndex + 1])
+                return
+            }
+            currentPositionMs = 0L
+            draggingPositionMs = 0L
+            player.seekTo(0L)
+        }
+
+        player.playWhenReady = true
+        player.play()
+        isPlaying = true
+    }
+
     fun seekToUserPosition(positionMs: Long): Long {
         val target = safeVideoSeekPosition(positionMs, durationMs)
         isSeekingByUser = false
@@ -1369,8 +1402,7 @@ private fun LocalVideoPlayer(
                 },
                 onPrevious = { previous() },
                 onPlayPause = {
-                    if (player.isPlaying) player.pause() else player.play()
-                    isPlaying = player.isPlaying
+                    handleUserPlayPauseClick()
                     showControls = true
                 },
                 onNext = { next() },
