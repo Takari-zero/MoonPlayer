@@ -512,3 +512,31 @@ Top-center gesture safety:
 Boundary:
 
 - These fixes add no permissions, dependencies, Gradle changes, Manifest changes, music changes, novel changes, video home logic changes, or folder detail logic changes.
+
+## Video Home And Folder Detail UI Polish
+
+Recent shipped UI polish includes `3d07001 feat(video): unify folder detail bottom navigation`.
+
+Completed:
+
+- Video home search field height and text rendering are tightened so input text is not vertically clipped.
+- Video home folder titles can show up to 2 lines, with ellipsis on the second line when needed.
+- Video folder detail search field uses the same stable single-line text rendering direction; short and long queries should not be vertically clipped.
+- Bottom navigation is shared through `app/src/main/java/com/shenghui/localvibe/core/ui/MoonBottomNavigationBar.kt`.
+- Video home and video folder detail both reuse the same bottom navigation component so their visual style stays identical.
+- Video folder detail shows bottom navigation with the `Video` tab highlighted.
+- Video folder detail content and the lower-right play FAB must avoid the bottom navigation bar.
+- Selection mode controls must not overlap the bottom navigation bar.
+
+Current interaction convention:
+
+- In video folder detail, tapping `Music`, `Novel`, or `Me` uses the existing top-level module navigation.
+- In video folder detail, tapping the already-selected `Video` tab does not force navigation back to video home.
+- Returning from video folder detail to video home uses the top-left back button.
+- This convention is intentional and should not be documented as a missing navigation bug.
+
+Boundary:
+
+- This work does not modify the video player page.
+- It adds no permissions, dependencies, Gradle changes, or Manifest changes.
+- It does not change music or novel module internals.

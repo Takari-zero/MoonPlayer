@@ -250,3 +250,10 @@ Moon播放器 的 UI 应体现成熟本地播放器的质感。
 - 不要在一级页面常驻大搜索框。
 - 不要把未实现功能做成假成功。
 
+## Video Folder Detail Bottom Navigation Exception
+
+- General secondary pages still avoid bottom navigation unless a module explicitly defines an exception.
+- Video folder detail is now an explicit exception: it shows the same bottom navigation as video home by reusing `MoonBottomNavigationBar`.
+- The bottom bar must match video home exactly; do not create a separate similar-looking implementation.
+- In video folder detail, tapping the selected `Video` tab does not force navigation back to video home. Use the top-left back button to return.
+- The list content and lower-right play FAB must avoid the bottom navigation bar.

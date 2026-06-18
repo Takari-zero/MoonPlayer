@@ -212,3 +212,11 @@ Moon播放器 是一个 Android 本地媒体播放器，聚焦用户设备中的
 
 每个阶段应先完成单模块闭环，再进入下一个模块。
 
+## Video Folder Detail Navigation Exception
+
+- Video folder detail is an explicit exception to the general secondary-page bottom-navigation rule.
+- It reuses `MoonBottomNavigationBar` so video home and folder detail bottom bars stay visually identical.
+- `Video` stays highlighted in folder detail.
+- `Music`, `Novel`, and `Me` are real top-level navigation targets.
+- Tapping the already-selected `Video` tab in folder detail does not force navigation back to video home; use the top-left back button.
+- The video player page remains unchanged.

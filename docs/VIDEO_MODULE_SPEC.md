@@ -404,3 +404,38 @@ Top-center gesture safe area:
 - The safe area is evaluated from the gesture start point. If a vertical gesture starts inside it, that gesture does not trigger brightness or volume adjustment.
 - This does not disable the whole top edge: left-side brightness and right-side volume gestures outside the safe area remain available.
 - Click, double-tap, control bar, subtitles, sleep, AB loop, and the player queue are not changed by this safe area.
+
+## 19. Video Home And Folder Detail UI Fixes
+
+Video home search:
+
+- The video home search field height and text rendering are optimized.
+- Search input, placeholder, and cursor should not be vertically clipped.
+- The search field uses a stable height and text style while remaining single-line.
+
+Video home long folder names:
+
+- Video home folder titles may show up to 2 lines.
+- If the second line still overflows, it uses ellipsis.
+- This is intended to help distinguish folders with similar long names.
+
+Video folder detail search:
+
+- The video folder detail search field uses the same stable height and text rendering direction as the video home search field.
+- Short and long query text should not be vertically clipped.
+- The field remains single-line and should keep the cursor position readable.
+
+Bottom navigation:
+
+- A shared bottom navigation component exists at `app/src/main/java/com/shenghui/localvibe/core/ui/MoonBottomNavigationBar.kt`.
+- The video home page and the video folder detail page both reuse this same component, so the bottom bar visuals must remain identical.
+- The video folder detail page shows the bottom bar with the `Video` tab highlighted.
+- Folder detail bottom navigation is for top-level module navigation: `Music` opens the music module, `Novel` opens the novel module, and `Me` opens the profile page.
+- Current interaction convention: tapping the `Video` tab while already in a video folder detail page does not force navigation back to the video home page. Use the top-left back button to return to the video home page.
+
+Layout boundaries:
+
+- Folder detail list content must avoid the bottom navigation bar.
+- The lower-right play FAB must not overlap the bottom navigation bar.
+- Selection mode controls must not overlap the bottom navigation bar.
+- The video player page was not changed for this UI fix.

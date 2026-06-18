@@ -702,3 +702,29 @@ Top-center gesture safe area:
 Boundary:
 
 - These fixes must not add permissions, dependencies, Gradle changes, Manifest changes, music changes, novel changes, video home changes, or folder detail changes.
+
+## Video Home And Folder Detail UI Regression Notes
+
+Shared bottom navigation:
+
+- Do not implement a separate "similar" bottom bar for video folder detail. It can drift from video home in height, padding, selected pill size, icon/text position, and safe-area behavior.
+- Video home and video folder detail must share `app/src/main/java/com/shenghui/localvibe/core/ui/MoonBottomNavigationBar.kt`.
+- In video folder detail, the `Video` tab is highlighted but tapping it does not force navigation back to video home. Use the top-left back button to return to video home.
+- `Music`, `Novel`, and `Me` remain real top-level navigation targets and must not become fake buttons.
+
+Search fields:
+
+- Do not shrink video home or video folder detail search fields back to a small fixed height that clips input text, placeholder, or cursor.
+- Keep search fields single-line with stable vertical centering and readable text while the IME is visible.
+
+Long folder titles:
+
+- Do not force video home folder titles back to a single line.
+- Folder titles may use up to 2 lines and should ellipsize only after the second line.
+
+Layout safety:
+
+- Video folder detail list content must avoid the bottom navigation bar.
+- The lower-right play FAB must not overlap the bottom navigation bar.
+- Selection mode controls must not collide with bottom navigation.
+- This UI work must not modify the video player page, Gradle, Manifest, permissions, dependencies, music internals, or novel internals.
