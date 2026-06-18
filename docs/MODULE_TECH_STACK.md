@@ -339,3 +339,27 @@ Video-module technical boundaries:
 - External `.srt` sync is the current supported subtitle-sync scope.
 - Embedded subtitle offset and ASS/SSA advanced subtitle sync remain deferred.
 - No FFmpeg/mpv/native decoder, new permissions, new dependencies, Gradle changes, Manifest changes, music changes, or novel changes are part of this completion.
+
+## Video Player Sleep And Gesture Safety Technical Notes
+
+Sleep-mode playback recovery:
+
+- Sleep pause state is consumed when the user manually taps the bottom play button after an automatic sleep pause.
+- Timed sleep pause should not immediately pause again after manual play.
+- `pause after current video` must handle `Player.STATE_ENDED` explicitly:
+  - Queue has next item: seek/move to the next media item and start playback.
+  - Queue has no next item: seek the current media item to `0` and start playback.
+- Sleep remains a reusable player feature; clearing the consumed sleep state must not permanently disable future sleep timers.
+
+Top-center gesture safe area:
+
+- `VideoPlayerScreen.kt` uses a top-center safe area before brightness/volume gesture mode selection.
+- Current safe area constants are about `96dp` from the top and the center `25%` through `75%` of screen width.
+- The check is based on the drag start point for the whole gesture.
+- If a gesture starts inside this safe area, vertical brightness/volume adjustment is ignored for that gesture.
+- Left-side brightness and right-side volume gestures remain active outside this safe area.
+- This safety rule should not affect click, double-tap seek, horizontal seek, subtitle controls, sleep, AB loop, player queue, or control-bar interactions.
+
+Boundary:
+
+- These fixes do not add permissions, dependencies, Gradle changes, Manifest changes, native decoder work, music-module changes, or novel-module changes.

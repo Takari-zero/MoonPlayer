@@ -384,3 +384,23 @@ Boundaries:
 - Current subtitle sync support is external `.srt` only.
 - Do not mark embedded subtitle offset or ASS/SSA advanced sync as complete.
 - Do not add FFmpeg/mpv/native decoder, permissions, dependencies, Gradle changes, Manifest changes, music changes, or novel changes as part of this video status.
+
+## 18. Latest Player Sleep And Gesture Fixes
+
+Sleep pause recovery:
+
+- Sleep-mode automatic pause is a one-shot pause state and must not permanently block manual playback.
+- After timed sleep pauses playback, tapping the bottom play button clears the consumed sleep-triggered state and resumes playback instead of immediately pausing again.
+- After `pause after current video` triggers, tapping play resumes deterministically:
+  - If the queue has a next item, the player moves to the next item and starts playback.
+  - If the queue has no next item, the current video seeks to the beginning and starts playback.
+- `Player.STATE_ENDED` is handled explicitly because a plain `player.play()` can be ineffective when the player is parked at the end.
+- Sleep features remain available after manual playback resumes; users can set a new sleep timer later.
+
+Top-center gesture safe area:
+
+- The player has a top-center gesture safe area to avoid accidental brightness or volume changes when swiping down from the upper middle of the screen.
+- Safe area rule: about `96dp` from the top and the horizontal center range from `25%` to `75%` of screen width.
+- The safe area is evaluated from the gesture start point. If a vertical gesture starts inside it, that gesture does not trigger brightness or volume adjustment.
+- This does not disable the whole top edge: left-side brightness and right-side volume gestures outside the safe area remain available.
+- Click, double-tap, control bar, subtitles, sleep, AB loop, and the player queue are not changed by this safe area.

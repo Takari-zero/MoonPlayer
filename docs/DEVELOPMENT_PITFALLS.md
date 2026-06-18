@@ -679,3 +679,26 @@ Current video-module boundary:
 - Supported subtitle sync remains external `.srt` only.
 - Embedded subtitle offset and ASS/SSA advanced sync are not complete.
 - Do not add FFmpeg/mpv/native decoder, permissions, dependencies, Gradle changes, Manifest changes, music-module changes, or novel-module changes while documenting this status.
+
+## Player Sleep And Gesture Regression Notes
+
+Sleep pause recovery:
+
+- Do not let sleep-mode pause become a permanent playback block.
+- After a timed sleep pause, the bottom play button must clear the consumed sleep-triggered state before resuming playback.
+- After `pause after current video`, the player may be in `Player.STATE_ENDED`; a plain `player.play()` can be insufficient.
+- In `Player.STATE_ENDED`, manual play should move to the next queue item when one exists, or seek the current video to `0` and play when no next item exists.
+- Do not delete sleep functionality to fix this. Sleep remains a one-shot automatic pause that users can configure again after manually resuming.
+
+Top-center gesture safe area:
+
+- Do not let a downward swipe starting from the upper middle of the player trigger brightness or volume adjustment.
+- The safe area is about `96dp` from the top and `25%` to `75%` of screen width.
+- Decide safety from the gesture start point only; do not dynamically toggle the safe area while dragging.
+- A gesture that starts in the safe area must not show brightness/volume hints or change window brightness/system media volume.
+- Do not disable the whole top edge. Left brightness and right volume gestures outside the top-center zone must still work.
+- Do not regress click, double-tap seek, horizontal seek, control bar, subtitles, sleep, AB loop, or queue interactions while changing gesture safety.
+
+Boundary:
+
+- These fixes must not add permissions, dependencies, Gradle changes, Manifest changes, music changes, novel changes, video home changes, or folder detail changes.

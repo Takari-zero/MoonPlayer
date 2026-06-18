@@ -487,3 +487,28 @@ Current video-module boundaries:
 - Do not document ASS/SSA advanced subtitle sync as complete.
 - Do not add FFmpeg, mpv, native decoder, permissions, dependencies, or cross-module changes as part of these completed items.
 - Music and novel modules are not changed by this video-module completion work.
+
+## Video Player Sleep And Gesture Safety Fixes
+
+Recent shipped fixes include `c00bdc3 fix(video): resume playback after sleep pause` and `c217353 fix(video): add top center gesture safe area`.
+
+Sleep-mode playback recovery:
+
+- Sleep-mode automatic pause is complete and should remain a one-shot pause behavior, not a permanent playback block.
+- After timed sleep pauses playback, tapping the bottom play button clears the consumed sleep-triggered state and resumes playback without being paused again by stale sleep state.
+- After `pause after current video` triggers, tapping play handles `Player.STATE_ENDED` explicitly:
+  - If there is a next queue item, move to the next video and play.
+  - If there is no next queue item, seek the current video to `0` and play.
+- This fix does not remove sleep functionality. Users can manually resume and later configure sleep again.
+
+Top-center gesture safety:
+
+- The player now protects the top-center gesture area to avoid accidental brightness or volume changes from a downward swipe starting near the upper middle of the screen.
+- The current rule is about `96dp` from the top and about `25%` to `75%` of screen width.
+- The rule is based on the gesture start point. A vertical gesture that starts inside this zone does not adjust brightness or volume.
+- Left brightness and right volume gestures remain available outside the safe area.
+- Click, double-tap, control bar, subtitles, sleep, AB loop, and queue interactions should not regress.
+
+Boundary:
+
+- These fixes add no permissions, dependencies, Gradle changes, Manifest changes, music changes, novel changes, video home logic changes, or folder detail logic changes.
