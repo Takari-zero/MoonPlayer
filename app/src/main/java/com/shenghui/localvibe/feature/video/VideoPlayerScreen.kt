@@ -1198,8 +1198,15 @@ private fun LocalVideoPlayer(
             }
             .pointerInput(mediaFile.uri, player) {
                 var isDragGestureBlocked = false
+                var ignoreVerticalAdjustmentForGesture = false
                     detectDragGestures(
                         onDragStart = { offset ->
+                            ignoreVerticalAdjustmentForGesture = isTopCenterGestureSafeStart(
+                                startX = offset.x,
+                                startY = offset.y,
+                                screenWidthPx = size.width,
+                                topSafeHeightPx = VIDEO_TOP_CENTER_GESTURE_SAFE_DP.dp.toPx()
+                            )
                             isDragGestureBlocked = latestIsScreenLocked ||
                                 latestIsSpeedPanelVisible ||
                                 latestIsAbLoopBarVisible ||
@@ -1222,6 +1229,7 @@ private fun LocalVideoPlayer(
                         onDragEnd = {
                             if (isDragGestureBlocked) {
                                 isDragGestureBlocked = false
+                                ignoreVerticalAdjustmentForGesture = false
                                 dragMode = VideoDragMode.UNKNOWN
                                 seekPreviewOverlay = null
                                 return@detectDragGestures
@@ -1239,10 +1247,12 @@ private fun LocalVideoPlayer(
                                     showVideoPlayerToast(context, "视频时长未知", ERROR_HINT_MS)
                                 }
                             }
+                            ignoreVerticalAdjustmentForGesture = false
                             dragMode = VideoDragMode.UNKNOWN
                         },
                         onDragCancel = {
                             isDragGestureBlocked = false
+                            ignoreVerticalAdjustmentForGesture = false
                             seekPreviewOverlay = null
                             dragMode = VideoDragMode.UNKNOWN
                         },
@@ -1271,12 +1281,14 @@ private fun LocalVideoPlayer(
                                         }
                                     } else if (
                                         absY > absX * VIDEO_GESTURE_HORIZONTAL_RATIO &&
+                                        !ignoreVerticalAdjustmentForGesture &&
                                         gestureStart.x < size.width / 2f &&
                                         latestGestureSettings.brightnessGestureEnabled
                                     ) {
                                         VideoDragMode.BRIGHTNESS
                                     } else if (
                                         absY > absX * VIDEO_GESTURE_HORIZONTAL_RATIO &&
+                                        !ignoreVerticalAdjustmentForGesture &&
                                         gestureStart.x >= size.width / 2f &&
                                         latestGestureSettings.volumeGestureEnabled
                                     ) {
@@ -7146,6 +7158,18 @@ private fun parseAbLoopTimeInput(input: String, durationMs: Long): Long? {
     return safeVideoMarkerPosition(totalSeconds * 1000L, durationMs)
 }
 
+private fun isTopCenterGestureSafeStart(
+    startX: Float,
+    startY: Float,
+    screenWidthPx: Int,
+    topSafeHeightPx: Float
+): Boolean {
+    val width = screenWidthPx.toFloat().coerceAtLeast(1f)
+    return startY <= topSafeHeightPx &&
+        startX >= width * VIDEO_TOP_CENTER_GESTURE_SAFE_START_FRACTION &&
+        startX <= width * VIDEO_TOP_CENTER_GESTURE_SAFE_END_FRACTION
+}
+
 private enum class VideoDragMode {
     UNKNOWN,
     BACK,
@@ -8265,3 +8289,6 @@ private const val VIDEO_DOUBLE_TAP_SEEK_MS = 10_000L
 private const val VIDEO_GESTURE_DRAG_THRESHOLD_DP = 22f
 private const val VIDEO_GESTURE_HORIZONTAL_RATIO = 1.2f
 private const val VIDEO_SYSTEM_GESTURE_BOTTOM_SAFE_DP = 96
+private const val VIDEO_TOP_CENTER_GESTURE_SAFE_DP = 96
+private const val VIDEO_TOP_CENTER_GESTURE_SAFE_START_FRACTION = 0.25f
+private const val VIDEO_TOP_CENTER_GESTURE_SAFE_END_FRACTION = 0.75f
