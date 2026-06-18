@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -75,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.shenghui.localvibe.LocalVibeRoute
 import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.media.formatFileSize
@@ -82,6 +84,7 @@ import com.shenghui.localvibe.core.media.loadVideoMetadata
 import com.shenghui.localvibe.core.media.videoMetadataCacheKey
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
+import com.shenghui.localvibe.core.ui.MoonBottomNavigationBar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -118,6 +121,11 @@ fun FolderScreen(
     onUnavailableVideoDetected: (LocalMediaFile) -> Unit = {},
     deleteSuccessSignal: Long = 0L,
     onRescanFolder: () -> Unit = {},
+    showBottomNavigation: Boolean = false,
+    onNavigateToVideoHome: () -> Unit = {},
+    onNavigateToAudio: () -> Unit = {},
+    onNavigateToBooks: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -199,6 +207,7 @@ fun FolderScreen(
             }
         }
     }
+    val shouldShowVideoBottomBar = targetType == LocalMediaType.VIDEO && showBottomNavigation
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -218,7 +227,10 @@ fun FolderScreen(
                         }
                     },
                     modifier = Modifier
-                        .padding(end = 10.dp, bottom = 72.dp)
+                        .padding(
+                            end = 10.dp,
+                            bottom = if (shouldShowVideoBottomBar) 12.dp else 72.dp
+                        )
                         .size(52.dp),
                     containerColor = Color(0xFF6F43F2),
                     contentColor = Color(0xFFF8F5FF),
@@ -230,6 +242,21 @@ fun FolderScreen(
                         modifier = Modifier.size(28.dp)
                     )
                 }
+            }
+        },
+        bottomBar = {
+            if (shouldShowVideoBottomBar) {
+                MoonBottomNavigationBar(
+                    selectedRoute = LocalVibeRoute.VideoLibrary,
+                    onRouteSelected = { route ->
+                        when (route) {
+                            LocalVibeRoute.VideoLibrary -> onNavigateToVideoHome()
+                            LocalVibeRoute.AudioLibrary -> onNavigateToAudio()
+                            LocalVibeRoute.BookLibrary -> onNavigateToBooks()
+                            LocalVibeRoute.Profile -> onNavigateToProfile()
+                        }
+                    }
+                )
             }
         }
     ) { innerPadding ->
@@ -251,7 +278,11 @@ fun FolderScreen(
                         start = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
                         end = if (targetType == LocalMediaType.VIDEO) 14.dp else 20.dp,
                         top = if (targetType == LocalMediaType.VIDEO) 12.dp else 20.dp,
-                        bottom = if (targetType == LocalMediaType.VIDEO) 96.dp else 20.dp
+                        bottom = when {
+                            targetType != LocalMediaType.VIDEO -> 20.dp
+                            shouldShowVideoBottomBar -> 16.dp
+                            else -> 96.dp
+                        }
                     )
                     .fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(
@@ -911,14 +942,19 @@ private fun VideoFolderTopBarV2(
                 onValueChange = onSearchKeywordChange,
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = 4.dp, end = 10.dp)
-                    .height(48.dp),
+                    .padding(start = 4.dp, end = 8.dp)
+                    .heightIn(min = 56.dp)
+                    .fillMaxWidth(),
                 singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = Color(0xFFF8F5FF),
+                    fontSize = 15.sp
+                ),
                 placeholder = {
                     Text(
                         text = "\u641c\u7d22\u89c6\u9891",
                         color = Color(0xFFA7A0B8),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp)
                     )
                 }
             )

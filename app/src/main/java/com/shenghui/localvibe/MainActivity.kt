@@ -54,9 +54,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -96,6 +93,7 @@ import com.shenghui.localvibe.core.scanner.FolderScanner
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.core.scanner.MediaStoreScanner
+import com.shenghui.localvibe.core.ui.MoonBottomNavigationBar
 import com.shenghui.localvibe.core.ui.theme.LocalVibeTheme
 import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
@@ -1702,6 +1700,15 @@ private fun LocalVibeApp() {
             selectedAudioUri = file.uri
             navController.navigate(LocalVibeRoute.AudioPlayer)
         }
+        fun navigateToMainTab(route: String) {
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
         NavHost(
             navController = navController,
             startDestination = LocalVibeRoute.VideoLibrary
@@ -2009,6 +2016,11 @@ private fun LocalVibeApp() {
                     },
                     deleteSuccessSignal = folderVideoDeleteSuccessSignal,
                     onRescanFolder = { rescanCurrentVideoFolder() },
+                    showBottomNavigation = currentFolderTargetType == LocalMediaType.VIDEO,
+                    onNavigateToVideoHome = { navigateToMainTab(LocalVibeRoute.VideoLibrary) },
+                    onNavigateToAudio = { navigateToMainTab(LocalVibeRoute.AudioLibrary) },
+                    onNavigateToBooks = { navigateToMainTab(LocalVibeRoute.BookLibrary) },
+                    onNavigateToProfile = { navigateToMainTab(LocalVibeRoute.Profile) },
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -2329,50 +2341,21 @@ private fun MainBottomBar(navController: NavController) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
-    NavigationBar(
-        containerColor = Color(0xFF08080C),
-        tonalElevation = 0.dp
-    ) {
-        MainTabs.forEach { tab ->
-            NavigationBarItem(
-                selected = currentRoute == tab.route,
-                onClick = {
-                    if (currentRoute != tab.route) {
-                        navController.navigate(tab.route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+    MoonBottomNavigationBar(
+        selectedRoute = currentRoute,
+        onRouteSelected = { route ->
+            if (currentRoute != route) {
+                navController.navigate(route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
                     }
-                },
-                icon = { Text(tab.iconText) },
-                label = { Text(tab.label) },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color(0xFFF6F3FF),
-                    selectedTextColor = Color(0xFFF6F3FF),
-                    indicatorColor = Color(0xFF6F4BEF).copy(alpha = 0.84f),
-                    unselectedIconColor = Color(0xFFA8A1B8),
-                    unselectedTextColor = Color(0xFFA8A1B8)
-                )
-            )
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         }
-    }
+    )
 }
-
-private data class MainTab(
-    val route: String,
-    val label: String,
-    val iconText: String
-)
-
-private val MainTabs = listOf(
-    MainTab(LocalVibeRoute.VideoLibrary, "视频", "▶"),
-    MainTab(LocalVibeRoute.AudioLibrary, "音乐", "♪"),
-    MainTab(LocalVibeRoute.BookLibrary, "小说", "文"),
-    MainTab(LocalVibeRoute.Profile, "我的", "我")
-)
 
 private enum class FolderVideoDeleteMode {
     SystemDelete,

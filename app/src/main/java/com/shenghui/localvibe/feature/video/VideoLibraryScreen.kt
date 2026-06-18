@@ -580,13 +580,18 @@ private fun VideoHeaderTitleOrSearch(
             onValueChange = onSearchKeywordChange,
             modifier = modifier
                 .padding(end = 10.dp)
-                .height(48.dp),
+                .heightIn(min = 56.dp)
+                .fillMaxWidth(),
             singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = VideoTextPrimary,
+                fontSize = 15.sp
+            ),
             placeholder = {
                 Text(
                     text = "\u641c\u7d22\u89c6\u9891\u6216\u6587\u4ef6\u5939",
                     color = VideoTextMuted,
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp)
                 )
             }
         )
@@ -2007,7 +2012,7 @@ private fun VideoFolderCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 5.dp),
+                    .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -2115,13 +2120,14 @@ private fun VideoFolderGridItem(
         ) {
             Text(
                 text = item.folder.name,
-                modifier = Modifier.height(20.dp),
+                modifier = Modifier.heightIn(min = 20.dp),
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 14.sp,
+                    lineHeight = 17.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
                 color = VideoTextPrimary,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Start
             )
@@ -2286,10 +2292,14 @@ private fun FolderText(
             style = if (compact) {
                 MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
             } else {
-                MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 17.sp,
+                    lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             },
             color = VideoTextPrimary,
-            maxLines = if (compact) 2 else 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
         Text(
