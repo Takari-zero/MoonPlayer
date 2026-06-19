@@ -21,6 +21,7 @@ import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +42,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,7 +50,7 @@ import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -57,6 +59,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -94,6 +97,7 @@ import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.core.scanner.MediaStoreScanner
 import com.shenghui.localvibe.core.ui.MoonBottomNavigationBar
+import com.shenghui.localvibe.core.ui.RotatingMusicThumb
 import com.shenghui.localvibe.core.ui.theme.LocalVibeTheme
 import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
@@ -1790,6 +1794,16 @@ private fun LocalVibeApp() {
                         val controller = musicController ?: return@MainTabScaffold
                         if (controller.isPlaying) controller.pause() else controller.play()
                     },
+                    onMiniNext = {
+                        val controller = musicController ?: return@MainTabScaffold
+                        if (controller.hasNextMediaItem()) {
+                            controller.seekToNextMediaItem()
+                            controller.play()
+                        } else {
+                            controller.seekTo(0L)
+                            controller.play()
+                        }
+                    },
                     onOpenMiniPlayer = { openMiniAudio() }
                 ) { contentModifier ->
                     val audioFolderGroups = audioFolders.map { folder ->
@@ -1815,6 +1829,7 @@ private fun LocalVibeApp() {
                         } else {
                             null
                         },
+                        currentAudioUri = musicCurrentUri,
                         onAddFolder = {
                             currentAddTargetType = LocalMediaType.AUDIO
                             openDocumentTreeLauncher.launch(null)
@@ -2237,24 +2252,13 @@ private fun MainTabScaffold(
     miniProgressMs: Long = 0L,
     miniDurationMs: Long = 0L,
     onMiniPlayPause: () -> Unit = {},
+    onMiniNext: () -> Unit = {},
     onOpenMiniPlayer: () -> Unit = {},
     content: @Composable (Modifier) -> Unit
 ) {
     Scaffold(
         bottomBar = {
-            Column {
-                if (miniAudioFile != null) {
-                    MiniAudioPlayerBar(
-                        file = miniAudioFile,
-                        isPlaying = miniIsPlaying,
-                        progressMs = miniProgressMs,
-                        durationMs = miniDurationMs,
-                        onPlayPause = onMiniPlayPause,
-                        onOpen = onOpenMiniPlayer
-                    )
-                }
-                MainBottomBar(navController = navController)
-            }
+            MainBottomBar(navController = navController)
         }
     ) { innerPadding ->
         Box(
@@ -2264,6 +2268,24 @@ private fun MainTabScaffold(
                 .padding(innerPadding)
         ) {
             content(Modifier)
+            if (miniAudioFile != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color.Transparent)
+                ) {
+                    MiniAudioPlayerBar(
+                        file = miniAudioFile,
+                        isPlaying = miniIsPlaying,
+                        progressMs = miniProgressMs,
+                        durationMs = miniDurationMs,
+                        onPlayPause = onMiniPlayPause,
+                        onNext = onMiniNext,
+                        onOpen = onOpenMiniPlayer
+                    )
+                }
+            }
         }
     }
 }
@@ -2275,62 +2297,92 @@ private fun MiniAudioPlayerBar(
     progressMs: Long,
     durationMs: Long,
     onPlayPause: () -> Unit,
+    onNext: () -> Unit,
     onOpen: () -> Unit
 ) {
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clickable(onClick = onOpen),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
+            .padding(horizontal = 20.dp, vertical = 5.dp)
+            .background(Color.Transparent)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    width = 1.dp,
+                    color = Color(0xFF8B5CFF).copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .clickable(onClick = onOpen),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xEA141528)
+            )
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .background(
-                        MaterialTheme.colorScheme.primaryContainer,
-                        RoundedCornerShape(10.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("♪", color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = file.name.substringBeforeLast('.', file.name),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1
-                )
-                Text(
-                    text = "Unknown",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-            if (durationMs > 0L) {
-                Text(
-                    text = formatMiniProgress(progressMs, durationMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            IconButton(onClick = onPlayPause) {
-                Icon(
-                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "暂停" else "播放"
-                )
-            }
-            IconButton(onClick = onOpen) {
-                Icon(Icons.Filled.QueueMusic, contentDescription = "播放队列")
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 5.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    RotatingMusicThumb(
+                        artworkUri = null,
+                        isRotating = true,
+                        modifier = Modifier.size(42.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = file.name.substringBeforeLast('.', file.name),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.92f),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = file.parentFolderName ?: "本地音乐",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFAAA3BF),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (isPlaying) "暂停" else "播放",
+                            tint = Color.White.copy(alpha = 0.92f)
+                        )
+                    }
+                    IconButton(onClick = onNext, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Filled.SkipNext,
+                            contentDescription = "下一首",
+                            tint = Color.White.copy(alpha = 0.86f)
+                        )
+                    }
+                }
+                if (durationMs > 0L) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp)
+                            .height(2.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFFB7A8D8).copy(alpha = 0.14f))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(
+                                    (progressMs.toFloat() / durationMs.toFloat())
+                                        .coerceIn(0f, 1f)
+                                )
+                                .height(2.dp)
+                                .background(Color(0xFF8B5CFF))
+                        )
+                    }
+                }
             }
         }
     }
