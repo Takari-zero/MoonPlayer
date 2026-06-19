@@ -257,3 +257,17 @@ Moon播放器 的 UI 应体现成熟本地播放器的质感。
 - The bottom bar must match video home exactly; do not create a separate similar-looking implementation.
 - In video folder detail, tapping the selected `Video` tab does not force navigation back to video home. Use the top-left back button to return.
 - The list content and lower-right play FAB must avoid the bottom navigation bar.
+
+## 音乐主页第一阶段 UI 状态
+
+最近完成提交：`9739c28 feat(audio): redesign music home screen`。
+
+- 音乐主页采用紧凑高信息密度布局，顶部显示“音乐 / 本地音乐”，右侧为搜索和更多。
+- “我喜欢 / 最近播放 / 播放列表”应保持紧凑入口形态；没有真实数据时显示真实空状态，不写假内容。
+- 主页主体是真实音频列表；歌曲行应保持紧凑，当前播放歌曲使用轻量高亮。
+- 无封面时使用统一默认音乐图标 / 月相方向视觉，不显示破图。
+- 迷你播放器位于音乐主页底部导航栏上方，外层包裹区域透明，内部控制卡片保留深色圆角卡片。
+- 迷你播放器支持播放 / 暂停、下一首，进度线位于内部控制器底部。
+- `RotatingMusicThumb` 用于左侧旋转小方块，当前方向为紫色月亮 / 月相，小方块整体慢速旋转。
+- 迷你播放器不得修改 `MoonBottomNavigationBar` 的尺寸、选中态、图标和文字样式。
+- 本阶段没有完成音乐播放页或音乐二级列表页，不要把相关 UI 规范写成已落地。

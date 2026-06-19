@@ -385,3 +385,16 @@ Top-center gesture safe area:
 Boundary:
 
 - These fixes do not add permissions, dependencies, Gradle changes, Manifest changes, native decoder work, music-module changes, or novel-module changes.
+
+## 音乐主页第一阶段技术状态
+
+最近完成提交：`9739c28 feat(audio): redesign music home screen`。
+
+- 音乐主页继续使用真实扫描到的本地音频数据作为列表来源，不使用正式假歌曲数据。
+- 迷你播放器读取真实当前音频状态，支持播放 / 暂停、下一首和底部进度线。
+- 迷你播放器外层包裹区域应保持透明；内部控制卡片保留深色圆角卡片、边框和控制按钮。
+- `app/src/main/java/com/shenghui/localvibe/core/ui/RotatingMusicThumb.kt` 提供迷你播放器左侧旋转小方块组件。
+- 当前 `RotatingMusicThumb` 视觉方向为紫色月亮 / 月相，小方块整体慢速旋转，无封面时不显示破图。
+- 当前阶段不新增权限、不新增依赖，不修改 Gradle / Manifest。
+- 当前阶段没有完成音乐播放页或音乐二级列表页；不要在技术文档中把它们写成已完成。
+- 本阶段不修改视频模块或小说模块。

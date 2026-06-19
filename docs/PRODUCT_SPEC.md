@@ -220,3 +220,18 @@ Moon播放器 是一个 Android 本地媒体播放器，聚焦用户设备中的
 - `Music`, `Novel`, and `Me` are real top-level navigation targets.
 - Tapping the already-selected `Video` tab in folder detail does not force navigation back to video home; use the top-left back button.
 - The video player page remains unchanged.
+
+## 音乐主页第一阶段完成状态
+
+最近完成提交：`9739c28 feat(audio): redesign music home screen`。
+
+- 音乐主页已进入第一阶段完成状态：紧凑高信息密度布局，顶部为“音乐 / 本地音乐”，右侧保留搜索和更多入口。
+- 主页以真实扫描到的本地音频列表为主体，不使用正式假歌曲数据。
+- “我喜欢 / 最近播放 / 播放列表”为紧凑入口；没有真实数据时应显示真实空状态，不写假数据。
+- 无封面时使用统一默认音乐图标 / 月相方向视觉，不显示破图。
+- 当前播放歌曲使用轻量高亮。
+- 底部迷你播放器接入真实当前音频状态，支持播放 / 暂停、下一首，进度线位于控制器底部。
+- 迷你播放器外层包裹区域透明，内部控制卡片保留；不修改底部导航栏样式。
+- `RotatingMusicThumb` 用于迷你播放器左侧旋转小方块，当前方向为紫色月亮 / 月相，小方块整体慢速旋转。
+
+边界：本阶段没有完成音乐播放页或音乐二级列表页；没有修改视频模块、小说模块；没有新增权限、依赖或 Gradle / Manifest 变更。

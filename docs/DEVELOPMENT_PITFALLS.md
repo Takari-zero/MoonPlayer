@@ -728,3 +728,26 @@ Layout safety:
 - The lower-right play FAB must not overlap the bottom navigation bar.
 - Selection mode controls must not collide with bottom navigation.
 - This UI work must not modify the video player page, Gradle, Manifest, permissions, dependencies, music internals, or novel internals.
+
+## Music Home First-Stage Regression Notes
+
+Recent completed commit: `9739c28 feat(audio): redesign music home screen`.
+
+Do not regress these completed items:
+
+- Music home is now a compact high-density page with `音乐 / 本地音乐` at the top and search/more actions on the right.
+- The main list must use real scanned local audio data. Do not introduce formal fake song data.
+- `我喜欢 / 最近播放 / 播放列表` are compact entry cards. If liked/recent data is not real yet, show a real empty state instead of fake counts or fake songs.
+- Missing artwork must use the unified default music icon / moon-phase direction and must not show broken images.
+- The current playing song uses lightweight highlighting only; do not restore heavy purple blocks.
+- The bottom mini player is connected to real current-audio state and supports play/pause, next, and a progress line at the bottom of the controller.
+- The mini player outer wrapper must stay transparent while the inner control card keeps its dark rounded background, border, controls, and progress line.
+- The mini player must not change `MoonBottomNavigationBar` styling.
+- `RotatingMusicThumb` is the mini player's left rotating thumb component. Current visual direction is a purple moon/moon phase, rotating slowly as a whole and never showing broken artwork.
+
+Current boundary:
+
+- Music player page is not complete in this first-stage music-home work.
+- Music secondary list/detail page is not complete in this first-stage music-home work.
+- Do not document video-module or novel-module changes as part of this audio commit.
+- No permissions, dependencies, Gradle changes, or Manifest changes are part of this work.

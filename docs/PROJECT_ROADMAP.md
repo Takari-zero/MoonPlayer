@@ -540,3 +540,24 @@ Boundary:
 - This work does not modify the video player page.
 - It adds no permissions, dependencies, Gradle changes, or Manifest changes.
 - It does not change music or novel module internals.
+
+## 音乐主页第一阶段完成状态
+
+最近完成提交：`9739c28 feat(audio): redesign music home screen`。
+
+已完成：
+
+- 音乐主页已改为紧凑高信息密度布局，顶部显示“音乐 / 本地音乐”，右侧保留搜索和更多。
+- 主页主体使用真实扫描到的音频列表，不写正式假歌曲数据。
+- “我喜欢 / 最近播放 / 播放列表”三个入口已作为紧凑快捷入口落地；无真实数据时应显示真实空状态。
+- 无封面时使用统一默认音乐图标 / 月相方向占位，不显示破图。
+- 当前播放歌曲使用轻量高亮。
+- 底部迷你播放器接入真实当前音频状态，支持播放 / 暂停、下一首；进度线位于迷你播放器控制器底部。
+- 迷你播放器外层包裹区域透明，内部控制卡片保留；底部导航栏样式不随迷你播放器调整而变化。
+- 新增 `RotatingMusicThumb`，迷你播放器左侧使用紫色月亮 / 月相方向旋转小方块，小方块整体慢速旋转。
+
+仍未完成 / 后续：
+
+- 音乐播放页仍未作为本轮完成项。
+- 音乐二级列表页仍未作为本轮完成项。
+- 本轮不涉及视频模块、小说模块、权限、依赖、Gradle 或 Manifest。
