@@ -149,6 +149,7 @@ fun VideoLibraryScreen(
     onRestoreVisibilityRecords: (List<VideoVisibilityRecordUiModel>) -> Unit = {},
     onClearVisibilityRecords: (List<VideoVisibilityRecordUiModel>) -> Unit = {},
     onMore: () -> Unit,
+    onBackToDesktop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -196,8 +197,17 @@ fun VideoLibraryScreen(
         focusManager.clearFocus()
     }
 
-    BackHandler(enabled = isSearching) {
-        closeSearch()
+    BackHandler {
+        when {
+            isSearching -> closeSearch()
+            showMorePanel -> showMorePanel = false
+            showDeleteSelectedFoldersConfirm -> showDeleteSelectedFoldersConfirm = false
+            isMultiSelectMode -> {
+                isMultiSelectMode = false
+                selectedFolderIds = emptySet()
+            }
+            else -> onBackToDesktop()
+        }
     }
 
     LaunchedEffect(isSearching) {

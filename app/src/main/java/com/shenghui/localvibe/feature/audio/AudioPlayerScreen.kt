@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
@@ -117,6 +118,7 @@ fun AudioPlayerScreen(
     currentPositionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
+    isFavorite: Boolean,
     audioSessionId: Int,
     queue: List<LocalMediaFile>,
     currentIndex: Int,
@@ -127,6 +129,7 @@ fun AudioPlayerScreen(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
+    onToggleFavorite: () -> Unit,
     onBack: () -> Unit,
     onRemoveCurrent: (LocalMediaFile) -> Unit = {},
     onDeleteCurrent: (LocalMediaFile) -> Unit = {},
@@ -201,6 +204,7 @@ fun AudioPlayerScreen(
                         currentPositionMs = currentPositionMs,
                         durationMs = durationMs,
                         isPlaying = isPlaying,
+                        isFavorite = isFavorite,
                         audioSessionId = audioSessionId,
                         queue = queue,
                         currentIndex = currentIndex,
@@ -211,6 +215,7 @@ fun AudioPlayerScreen(
                         onPrevious = onPrevious,
                         onNext = onNext,
                         onSeekTo = onSeekTo,
+                        onToggleFavorite = onToggleFavorite,
                         onBack = requestClose,
                         onRemoveCurrent = onRemoveCurrent,
                         onDeleteCurrent = onDeleteCurrent
@@ -228,6 +233,7 @@ private fun ServiceAudioPlayer(
     currentPositionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
+    isFavorite: Boolean,
     audioSessionId: Int,
     queue: List<LocalMediaFile>,
     currentIndex: Int,
@@ -238,6 +244,7 @@ private fun ServiceAudioPlayer(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
+    onToggleFavorite: () -> Unit,
     onBack: () -> Unit,
     onRemoveCurrent: (LocalMediaFile) -> Unit,
     onDeleteCurrent: (LocalMediaFile) -> Unit
@@ -475,8 +482,14 @@ private fun ServiceAudioPlayer(
                 )
                 SmallIconAction(
                     label = "收藏",
-                    icon = { Icon(Icons.Filled.FavoriteBorder, contentDescription = null) },
-                    onClick = { Toast.makeText(context, "收藏后续实现", Toast.LENGTH_SHORT).show() }
+                    icon = {
+                        Icon(
+                            if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            contentDescription = null
+                        )
+                    },
+                    onClick = onToggleFavorite,
+                    active = isFavorite
                 )
                 SmallIconAction(
                     label = "歌词",

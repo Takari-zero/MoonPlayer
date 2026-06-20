@@ -167,6 +167,30 @@ class AppStateStore(private val context: Context) {
         }
     }
 
+    suspend fun loadFavoriteAudioUris(): Set<String> {
+        val json = context.appStateDataStore.data.first()[FavoriteAudioUrisKey].orEmpty()
+        if (json.isBlank()) return emptySet()
+        return decodeAudioUriSet(json)
+    }
+
+    suspend fun saveFavoriteAudioUris(uris: Set<String>) {
+        context.appStateDataStore.edit { prefs ->
+            prefs[FavoriteAudioUrisKey] = encodeAudioUriSet(uris)
+        }
+    }
+
+    suspend fun loadAudioRecentRecords(): List<PersistedAudioRecentRecord> {
+        val json = context.appStateDataStore.data.first()[RecentAudioRecordsKey].orEmpty()
+        if (json.isBlank()) return emptyList()
+        return decodeAudioRecentRecords(json)
+    }
+
+    suspend fun saveAudioRecentRecords(records: List<PersistedAudioRecentRecord>) {
+        context.appStateDataStore.edit { prefs ->
+            prefs[RecentAudioRecordsKey] = encodeAudioRecentRecords(records)
+        }
+    }
+
     suspend fun loadHiddenVideoUris(): Set<String> {
         val json = context.appStateDataStore.data.first()[HiddenVideoUrisKey].orEmpty()
         if (json.isBlank()) return emptySet()
@@ -539,6 +563,75 @@ class AppStateStore(private val context: Context) {
         return array.toString()
     }
 
+    private fun decodeAudioUriSet(json: String): Set<String> {
+        if (json.isBlank()) return emptySet()
+        return runCatching {
+            val array = JSONArray(json)
+            buildSet {
+                repeat(array.length()) { index ->
+                    val value = array.opt(index)
+                    val uri = when (value) {
+                        is JSONObject -> value.optString("uri")
+                        else -> value?.toString().orEmpty()
+                    }.trim()
+                    if (uri.isNotBlank()) add(uri)
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    private fun encodeAudioUriSet(uris: Set<String>): String {
+        val array = JSONArray()
+        uris.map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { uri ->
+                array.put(JSONObject().put("uri", uri))
+            }
+        return array.toString()
+    }
+
+    private fun decodeAudioRecentRecords(json: String): List<PersistedAudioRecentRecord> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val array = JSONArray(json)
+            List(array.length()) { index ->
+                val value = array.opt(index)
+                when (value) {
+                    is JSONObject -> PersistedAudioRecentRecord(
+                        uri = value.optString("uri").trim(),
+                        playedAt = value.optLong("playedAt", 0L)
+                    )
+                    else -> PersistedAudioRecentRecord(
+                        uri = value?.toString().orEmpty().trim(),
+                        playedAt = 0L
+                    )
+                }
+            }
+                .filter { it.uri.isNotBlank() }
+                .sortedByDescending { it.playedAt }
+                .distinctBy { it.uri }
+                .take(MAX_AUDIO_RECENT_RECORDS)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeAudioRecentRecords(records: List<PersistedAudioRecentRecord>): String {
+        val array = JSONArray()
+        records
+            .filter { it.uri.trim().isNotBlank() }
+            .sortedByDescending { it.playedAt }
+            .distinctBy { it.uri.trim() }
+            .take(MAX_AUDIO_RECENT_RECORDS)
+            .forEach { record ->
+                array.put(
+                    JSONObject()
+                        .put("uri", record.uri.trim())
+                        .put("playedAt", record.playedAt)
+                )
+            }
+        return array.toString()
+    }
+
     private fun decodeHiddenVideoUris(json: String): Set<String> {
         if (json.isBlank()) return emptySet()
         return runCatching {
@@ -710,6 +803,8 @@ class AppStateStore(private val context: Context) {
         val BookFilesKey = stringPreferencesKey("book_files_json")
         val BookProgressKey = stringPreferencesKey("book_progress_json")
         val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
+        val FavoriteAudioUrisKey = stringPreferencesKey("favorite_audio_uris_json")
+        val RecentAudioRecordsKey = stringPreferencesKey("recent_audio_records_json")
         val HiddenVideoUrisKey = stringPreferencesKey("hidden_video_uris_json")
         val HiddenVideoFolderIdsKey = stringPreferencesKey("hidden_video_folder_ids_json")
         val UnavailableVideoRecordsKey = stringPreferencesKey("unavailable_video_records_json")
@@ -720,5 +815,6 @@ class AppStateStore(private val context: Context) {
         const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
         const val MAX_VIDEO_PLAYBACK_SPEED = 5f
         const val DEFAULT_VIDEO_PLAYBACK_SPEED = 1f
+        const val MAX_AUDIO_RECENT_RECORDS = 100
     }
 }
