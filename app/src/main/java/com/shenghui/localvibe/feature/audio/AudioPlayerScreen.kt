@@ -2,6 +2,13 @@ package com.shenghui.localvibe.feature.audio
 
 import android.media.audiofx.Equalizer
 import android.widget.Toast
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -19,17 +26,20 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -71,8 +81,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -87,6 +100,14 @@ import com.shenghui.localvibe.core.player.AudioPlayMode
 import com.shenghui.localvibe.core.player.EqualizerPreset
 import com.shenghui.localvibe.core.player.applyPreset
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import kotlinx.coroutines.delay
+
+private val AudioPlayerBackground = Color(0xFF090910)
+private val AudioPanelColor = Color(0xFF161421)
+private val AudioPurple = Color(0xFF8B5CFF)
+private val AudioPurpleLight = Color(0xFFD6C0FF)
+private val AudioTextPrimary = Color(0xFFF7F0FF)
+private val AudioTextSecondary = Color(0xFF9F95B4)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,52 +132,90 @@ fun AudioPlayerScreen(
     onDeleteCurrent: (LocalMediaFile) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var isClosing by remember { mutableStateOf(false) }
+    var hasDispatchedBack by remember { mutableStateOf(false) }
+
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
-        containerColor = Color.Black
+            .background(AudioPlayerBackground),
+        containerColor = AudioPlayerBackground
     ) { innerPadding ->
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
-                .background(Color.Black)
-                .padding(20.dp)
         ) {
-            if (mediaFile == null || player == null) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.align(Alignment.TopStart)
-                ) {
-                    Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+            val closeOffsetY by animateDpAsState(
+                targetValue = if (isClosing) maxHeight + 80.dp else 0.dp,
+                animationSpec = tween(durationMillis = 260),
+                label = "audioPlayerCloseOffset"
+            )
+            val requestClose = {
+                if (!isClosing) {
+                    isClosing = true
                 }
-                Text(
-                    text = "未选择音乐文件。",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White.copy(alpha = 0.72f),
-                    modifier = Modifier.align(Alignment.Center)
+            }
+
+            LaunchedEffect(isClosing) {
+                if (isClosing && !hasDispatchedBack) {
+                    delay(260)
+                    hasDispatchedBack = true
+                    onBack()
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset(y = closeOffsetY)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF221C2D),
+                            AudioPlayerBackground,
+                            Color(0xFF08080F)
+                        )
+                    )
                 )
-            } else {
-                ServiceAudioPlayer(
-                    mediaFile = mediaFile,
-                    currentPositionMs = currentPositionMs,
-                    durationMs = durationMs,
-                    isPlaying = isPlaying,
-                    audioSessionId = audioSessionId,
-                    queue = queue,
-                    currentIndex = currentIndex,
-                    playMode = playMode,
-                    onPlayModeChanged = onPlayModeChanged,
-                    onSelectAudio = onSelectAudio,
-                    onPlayPause = onPlayPause,
-                    onPrevious = onPrevious,
-                    onNext = onNext,
-                    onSeekTo = onSeekTo,
-                    onBack = onBack,
-                    onRemoveCurrent = onRemoveCurrent,
-                    onDeleteCurrent = onDeleteCurrent
-                )
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 14.dp)
+            ) {
+                if (mediaFile == null || player == null) {
+                    IconButton(
+                        onClick = requestClose,
+                        modifier = Modifier.align(Alignment.TopStart)
+                    ) {
+                        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "返回", tint = Color.White)
+                    }
+                    Text(
+                        text = "未选择音乐文件。",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = AudioTextSecondary,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else {
+                    ServiceAudioPlayer(
+                        mediaFile = mediaFile,
+                        currentPositionMs = currentPositionMs,
+                        durationMs = durationMs,
+                        isPlaying = isPlaying,
+                        audioSessionId = audioSessionId,
+                        queue = queue,
+                        currentIndex = currentIndex,
+                        playMode = playMode,
+                        onPlayModeChanged = onPlayModeChanged,
+                        onSelectAudio = onSelectAudio,
+                        onPlayPause = onPlayPause,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                        onSeekTo = onSeekTo,
+                        onBack = requestClose,
+                        onRemoveCurrent = onRemoveCurrent,
+                        onDeleteCurrent = onDeleteCurrent
+                    )
+                }
             }
         }
     }
@@ -246,72 +305,32 @@ private fun ServiceAudioPlayer(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Box(
+            AudioMoonDisc(
+                isPlaying = isPlaying,
                 modifier = Modifier
-                    .size(260.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF202020)),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(88.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF3A3A3A)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("♪", style = MaterialTheme.typography.displayMedium, color = Color.White)
-                }
-            }
+                    .size(292.dp)
+                    .sizeIn(maxWidth = 318.dp, maxHeight = 318.dp)
+            )
             Text(
                 text = mediaFile.displayTitle(),
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White,
+                style = MaterialTheme.typography.headlineMedium,
+                color = AudioTextPrimary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 24.dp)
+                modifier = Modifier
+                    .padding(top = 28.dp)
+                    .fillMaxWidth()
             )
             Text(
-                text = "Unknown",
+                text = mediaFile.audioSubtitle(),
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.7f),
+                color = AudioTextSecondary,
                 modifier = Modifier.padding(top = 6.dp)
             )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                SmallIconAction(
-                    label = "均衡器",
-                    icon = { Icon(Icons.Filled.Equalizer, contentDescription = null) },
-                    onClick = { showEqualizer = true }
-                )
-                SmallIconAction(
-                    label = "A-B",
-                    icon = { Text("A-B", color = Color.White.copy(alpha = 0.86f), fontSize = 12.sp) },
-                    onClick = { Toast.makeText(context, "A-B 循环功能后续实现", Toast.LENGTH_SHORT).show() }
-                )
-                SmallIconAction(
-                    label = "定时",
-                    icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-                    onClick = { Toast.makeText(context, "睡眠定时功能后续实现", Toast.LENGTH_SHORT).show() }
-                )
-                SmallIconAction(
-                    label = "收藏",
-                    icon = { Icon(Icons.Filled.FavoriteBorder, contentDescription = null) },
-                    onClick = { Toast.makeText(context, "收藏功能后续实现", Toast.LENGTH_SHORT).show() }
-                )
-                SmallIconAction(
-                    label = "更多",
-                    icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
-                    onClick = { Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show() }
-                )
-            }
-
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 AudioProgressSlider(
                     positionMs = displayPositionMs.coerceAtMost(durationMs.coerceAtLeast(0L)),
@@ -331,8 +350,8 @@ private fun ServiceAudioPlayer(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(formatDuration(displayPositionMs), color = Color.White.copy(alpha = 0.7f))
-                    Text(formatDuration(durationMs), color = Color.White.copy(alpha = 0.7f))
+                    Text(formatDuration(displayPositionMs), color = AudioTextSecondary, fontSize = 12.sp)
+                    Text(formatDuration(durationMs), color = AudioTextSecondary, fontSize = 12.sp)
                 }
             }
 
@@ -343,7 +362,7 @@ private fun ServiceAudioPlayer(
             ) {
                 Box(contentAlignment = Alignment.TopCenter) {
                     SmallIconAction(
-                        label = playMode.label,
+                        label = playMode.shortLabel(),
                         icon = { Icon(playMode.icon(), contentDescription = null) },
                         onClick = { onPlayModeChanged(playMode.next()) },
                         onLongClick = { showPlayModeMenu = true },
@@ -354,7 +373,7 @@ private fun ServiceAudioPlayer(
                         expanded = showPlayModeMenu,
                         onDismissRequest = { showPlayModeMenu = false },
                         modifier = Modifier.width(168.dp),
-                        containerColor = Color(0xFF141821),
+                        containerColor = AudioPanelColor,
                         shape = RoundedCornerShape(20.dp)
                     ) {
                         Column(
@@ -367,7 +386,7 @@ private fun ServiceAudioPlayer(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(14.dp))
-                                        .background(if (selected) Color(0xFF203B68) else Color.Transparent)
+                                        .background(if (selected) AudioPurple.copy(alpha = 0.18f) else Color.Transparent)
                                         .clickable {
                                             onPlayModeChanged(mode)
                                             showPlayModeMenu = false
@@ -379,12 +398,12 @@ private fun ServiceAudioPlayer(
                                     Icon(
                                         imageVector = mode.icon(),
                                         contentDescription = null,
-                                        tint = if (selected) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.82f),
+                                        tint = if (selected) AudioPurpleLight else AudioTextPrimary.copy(alpha = 0.82f),
                                         modifier = Modifier.size(22.dp)
                                     )
                                     Text(
                                         text = mode.fullLabel(),
-                                        color = if (selected) Color(0xFF8AB6FF) else Color.White,
+                                        color = if (selected) AudioPurpleLight else AudioTextPrimary,
                                         fontSize = 15.sp
                                     )
                                 }
@@ -399,21 +418,26 @@ private fun ServiceAudioPlayer(
                     iconSize = 38.dp
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Button(
-                        onClick = onPlayPause,
-                        modifier = Modifier.size(88.dp),
-                        shape = CircleShape
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(70.dp)
+                            .clip(CircleShape)
+                            .background(AudioPurple)
+                            .clickable(onClick = onPlayPause)
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                             contentDescription = null,
+                            tint = Color.White,
                             modifier = Modifier.size(38.dp)
                         )
                     }
                     Text(
                         text = if (isPlaying) "暂停" else "播放",
-                        color = Color.White.copy(alpha = 0.78f),
-                        fontSize = 12.sp
+                        color = AudioTextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 7.dp)
                     )
                 }
                 SmallIconAction(
@@ -430,14 +454,38 @@ private fun ServiceAudioPlayer(
                 )
             }
 
-            TextButton(
-                onClick = { Toast.makeText(context, "歌词功能后续实现", Toast.LENGTH_SHORT).show() }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("歌词", color = Color.White)
+                SmallIconAction(
+                    label = "均衡器",
+                    icon = { Icon(Icons.Filled.Equalizer, contentDescription = null) },
+                    onClick = { showEqualizer = true }
+                )
+                SmallIconAction(
+                    label = "A-B",
+                    icon = { Text("A-B", color = AudioTextPrimary.copy(alpha = 0.86f), fontSize = 12.sp) },
+                    onClick = { Toast.makeText(context, "A-B 循环后续实现", Toast.LENGTH_SHORT).show() }
+                )
+                SmallIconAction(
+                    label = "定时",
+                    icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
+                    onClick = { Toast.makeText(context, "睡眠定时后续实现", Toast.LENGTH_SHORT).show() }
+                )
+                SmallIconAction(
+                    label = "收藏",
+                    icon = { Icon(Icons.Filled.FavoriteBorder, contentDescription = null) },
+                    onClick = { Toast.makeText(context, "收藏后续实现", Toast.LENGTH_SHORT).show() }
+                )
+                SmallIconAction(
+                    label = "歌词",
+                    icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
+                    onClick = { Toast.makeText(context, "歌词后续实现", Toast.LENGTH_SHORT).show() }
+                )
             }
         }
     }
-
     if (showQueue) {
         QueueDialog(
             queue = queue,
@@ -496,6 +544,111 @@ private fun ServiceAudioPlayer(
                     Text("取消")
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun AudioMoonDisc(
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val transition = rememberInfiniteTransition(label = "audioMoonDisc")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 22_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "audioMoonDiscRotation"
+    )
+    val appliedRotation = if (isPlaying) rotation else 0f
+
+    Canvas(modifier = modifier) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val radius = size.minDimension * 0.46f
+        val labelRadius = radius * 0.25f
+
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFF302640).copy(alpha = 0.52f),
+                    Color(0xFF14121B).copy(alpha = 0.94f),
+                    Color(0xFF07080C)
+                ),
+                center = center,
+                radius = radius * 1.15f
+            ),
+            radius = radius * 1.06f,
+            center = center
+        )
+
+        rotate(appliedRotation, center) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF24202C),
+                        Color(0xFF101114),
+                        Color(0xFF050607)
+                    ),
+                    center = center,
+                    radius = radius
+                ),
+                radius = radius,
+                center = center
+            )
+            repeat(34) { index ->
+                val ringRadius = radius * (0.18f + index * 0.022f)
+                drawCircle(
+                    color = Color.White.copy(alpha = if (index % 3 == 0) 0.035f else 0.018f),
+                    radius = ringRadius.coerceAtMost(radius * 0.94f),
+                    center = center,
+                    style = Stroke(width = 0.8f)
+                )
+            }
+            repeat(10) { index ->
+                rotate(index * 36f, center) {
+                    drawArc(
+                        color = AudioPurpleLight.copy(alpha = 0.08f),
+                        startAngle = 210f,
+                        sweepAngle = 34f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - radius * 0.86f, center.y - radius * 0.86f),
+                        size = androidx.compose.ui.geometry.Size(radius * 1.72f, radius * 1.72f),
+                        style = Stroke(width = 1.2f, cap = StrokeCap.Round)
+                    )
+                }
+            }
+        }
+
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(Color(0xFF2A2334), Color(0xFF08080E)),
+                center = center,
+                radius = labelRadius * 1.45f
+            ),
+            radius = labelRadius,
+            center = center
+        )
+        drawCircle(
+            color = Color.Black.copy(alpha = 0.42f),
+            radius = labelRadius * 0.44f,
+            center = Offset(center.x + labelRadius * 0.45f, center.y + labelRadius * 0.16f)
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White.copy(alpha = 0.92f), AudioPurpleLight.copy(alpha = 0.76f)),
+                center = Offset(center.x - labelRadius * 0.12f, center.y - labelRadius * 0.12f),
+                radius = labelRadius * 0.72f
+            ),
+            radius = labelRadius * 0.48f,
+            center = Offset(center.x - labelRadius * 0.08f, center.y - labelRadius * 0.08f)
+        )
+        drawCircle(
+            color = Color(0xFF08080E),
+            radius = labelRadius * 0.46f,
+            center = Offset(center.x + labelRadius * 0.24f, center.y - labelRadius * 0.05f)
         )
     }
 }
@@ -567,21 +720,21 @@ private fun AudioProgressSlider(
         val thumbCenterX = startX + (endX - startX) * fraction
 
         drawLine(
-            color = Color(0xFF2E3445),
+            color = Color(0xFF3F374D).copy(alpha = 0.72f),
             start = Offset(startX, centerY),
             end = Offset(endX, centerY),
             strokeWidth = trackStrokePx,
             cap = StrokeCap.Round
         )
         drawLine(
-            color = Color(0xFF4D8DFF),
+            color = AudioPurple,
             start = Offset(startX, centerY),
             end = Offset(thumbCenterX, centerY),
             strokeWidth = trackStrokePx,
             cap = StrokeCap.Round
         )
         drawCircle(
-            color = Color(0xFF8AB6FF),
+            color = AudioPurpleLight,
             radius = thumbRadiusPx,
             center = Offset(thumbCenterX, centerY)
         )
@@ -602,71 +755,56 @@ private fun PlayerTopBar(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
+        @Suppress("UNUSED_VARIABLE")
+        val ignoredTitle = title
         IconButton(
             onClick = onBack,
             modifier = Modifier.align(Alignment.CenterStart)
         ) {
-            Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "返回", tint = AudioTextPrimary)
         }
-        Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth()
-                .padding(horizontal = 64.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = title,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleMedium
-            )
-        }
-        IconButton(
-            onClick = { expanded = true },
-            modifier = Modifier.align(Alignment.CenterEnd)
-        ) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = Color(0xFF141821),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            AudioTopMenuItem("歌曲信息") {
-                expanded = false
-                onSongInfo()
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+            IconButton(onClick = { expanded = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = AudioTextPrimary)
             }
-            AudioTopMenuItem("播放队列") {
-                expanded = false
-                onShowQueue()
-            }
-            AudioTopMenuItem("均衡器") {
-                expanded = false
-                onShowEqualizer()
-            }
-            AudioTopMenuItem("分享") {
-                expanded = false
-                onShare()
-            }
-            AudioTopMenuItem("从列表移除") {
-                expanded = false
-                onRemove()
-            }
-            AudioTopMenuItem("永久删除文件", danger = true) {
-                expanded = false
-                onDelete()
-            }
-            AudioTopMenuItem("更多功能") {
-                expanded = false
-                onMore()
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                containerColor = AudioPanelColor,
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                AudioTopMenuItem("歌曲信息") {
+                    expanded = false
+                    onSongInfo()
+                }
+                AudioTopMenuItem("播放列表") {
+                    expanded = false
+                    onShowQueue()
+                }
+                AudioTopMenuItem("均衡器") {
+                    expanded = false
+                    onShowEqualizer()
+                }
+                AudioTopMenuItem("分享") {
+                    expanded = false
+                    onShare()
+                }
+                AudioTopMenuItem("从列表移除") {
+                    expanded = false
+                    onRemove()
+                }
+                AudioTopMenuItem("永久删除文件", danger = true) {
+                    expanded = false
+                    onDelete()
+                }
+                AudioTopMenuItem("更多功能") {
+                    expanded = false
+                    onMore()
+                }
             }
         }
     }
 }
-
 @Composable
 private fun AudioTopMenuItem(
     text: String,
@@ -677,7 +815,7 @@ private fun AudioTopMenuItem(
         text = {
             Text(
                 text = text,
-                color = if (danger) Color(0xFFF97066) else Color.White.copy(alpha = 0.92f)
+                color = if (danger) Color(0xFFF97066) else AudioTextPrimary.copy(alpha = 0.92f)
             )
         },
         onClick = onClick
@@ -694,7 +832,7 @@ private fun SmallIconAction(
     active: Boolean = false,
     iconSize: androidx.compose.ui.unit.Dp = 28.dp
 ) {
-    val tint = if (active) Color(0xFF8AB6FF) else Color.White.copy(alpha = 0.86f)
+    val tint = if (active) AudioPurpleLight else AudioTextPrimary.copy(alpha = 0.86f)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
@@ -877,6 +1015,27 @@ private fun AudioPlayMode.fullLabel(): String {
     }
 }
 
+private fun AudioPlayMode.shortLabel(): String {
+    return when (this) {
+        AudioPlayMode.NORMAL -> "顺序"
+        AudioPlayMode.SHUFFLE -> "随机"
+        AudioPlayMode.REPEAT_ONE -> "单曲"
+        AudioPlayMode.REPEAT_ALL -> "循环"
+    }
+}
+
+private fun LocalMediaFile.audioSubtitle(): String {
+    val folder = parentFolderName?.takeIf { it.isNotBlank() }
+    val extension = name.substringAfterLast('.', missingDelimiterValue = "")
+        .takeIf { it.isNotBlank() }
+        ?.uppercase()
+    return when {
+        folder != null && extension != null -> "$folder · $extension"
+        folder != null -> folder
+        extension != null -> extension
+        else -> "本地音乐"
+    }
+}
 private val EqualizerBands = listOf("60Hz", "230Hz", "910Hz", "3600Hz", "14000Hz")
 
 private fun EqualizerPreset.defaultBandLevels(): List<Float> {

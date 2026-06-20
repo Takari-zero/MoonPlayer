@@ -1,6 +1,7 @@
 package com.shenghui.localvibe.feature.book
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -24,7 +26,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -36,7 +37,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,10 +49,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.shenghui.localvibe.core.ui.MoonInlineSearchField
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 
 @Composable
@@ -69,6 +74,8 @@ fun BookLibraryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val searchFocusRequester = remember { FocusRequester() }
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchKeyword by rememberSaveable { mutableStateOf("") }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
@@ -85,6 +92,22 @@ fun BookLibraryScreen(
         }
     }
 
+    fun closeSearch() {
+        searchKeyword = ""
+        isSearching = false
+        focusManager.clearFocus()
+    }
+
+    BackHandler(enabled = isSearching) {
+        closeSearch()
+    }
+
+    androidx.compose.runtime.LaunchedEffect(isSearching) {
+        if (isSearching) {
+            searchFocusRequester.requestFocus()
+        }
+    }
+
     Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
         Column(
             modifier = Modifier
@@ -95,11 +118,17 @@ fun BookLibraryScreen(
         ) {
             BookHeader(
                 isSearching = isSearching,
+                searchKeyword = searchKeyword,
+                onSearchKeywordChange = { searchKeyword = it },
+                searchModifier = Modifier.focusRequester(searchFocusRequester),
                 isMultiSelectMode = isMultiSelectMode,
                 selectedCount = selectedBookUris.size,
                 onToggleSearch = {
-                    if (isSearching) searchKeyword = ""
-                    isSearching = !isSearching
+                    if (isSearching) {
+                        closeSearch()
+                    } else {
+                        isSearching = true
+                    }
                 },
                 onImportBookFile = onImportBookFile,
                 onRescanBooks = onRescanBooks,
@@ -143,7 +172,15 @@ fun BookLibraryScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     state = gridState,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (isSearching && !isMultiSelectMode) {
+                                Modifier.clickable { closeSearch() }
+                            } else {
+                                Modifier
+                            }
+                        ),
                     contentPadding = PaddingValues(bottom = 96.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp)
@@ -167,21 +204,12 @@ fun BookLibraryScreen(
                                 if (isMultiSelectMode) {
                                     selectedBookUris = selectedBookUris.toggle(book.uri)
                                 } else {
+                                    if (isSearching) closeSearch()
                                     onOpenBook(book)
                                 }
                             }
                         )
                     }
-                }
-                if (isSearching && !isMultiSelectMode) {
-                    FloatingSearchBar(
-                        value = searchKeyword,
-                        onValueChange = { searchKeyword = it },
-                        placeholder = "搜索小说",
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 0.dp, vertical = 8.dp)
-                    )
                 }
             }
         }
@@ -217,6 +245,9 @@ fun BookLibraryScreen(
 @Composable
 private fun BookHeader(
     isSearching: Boolean,
+    searchKeyword: String,
+    onSearchKeywordChange: (String) -> Unit,
+    searchModifier: Modifier = Modifier,
     isMultiSelectMode: Boolean,
     selectedCount: Int,
     onToggleSearch: () -> Unit,
@@ -251,33 +282,68 @@ private fun BookHeader(
         }
     } else {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("小说", style = MaterialTheme.typography.headlineSmall)
+            Column(
+                modifier = Modifier
+                    .weight(if (isSearching) 0.42f else 1f)
+                    .padding(end = if (isSearching) 2.dp else 0.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                Text(
+                    "小说",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Text(
                     text = "TXT 小说",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isSearching) {
+                MoonInlineSearchField(
+                    value = searchKeyword,
+                    onValueChange = onSearchKeywordChange,
+                    placeholder = "搜索小说",
+                    textColor = MaterialTheme.colorScheme.onSurface,
+                    placeholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                    modifier = searchModifier
+                        .weight(1f)
+                        .padding(end = 4.dp)
                 )
             }
             var expanded by remember { mutableStateOf(false) }
             Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-                IconButton(onClick = onToggleSearch) {
-                    Icon(Icons.Filled.Search, contentDescription = if (isSearching) "关闭搜索" else "搜索")
-                }
-                IconButton(onClick = onImportBookFile) {
-                    Icon(Icons.Filled.Add, contentDescription = "导入文档")
-                }
-                IconButton(onClick = onRescanBooks) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "重新扫描")
-                }
+                BookHeaderIconButton(
+                    icon = Icons.Filled.Search,
+                    contentDescription = if (isSearching) "关闭搜索" else "搜索",
+                    onClick = onToggleSearch
+                )
+                BookHeaderIconButton(
+                    icon = Icons.Filled.Add,
+                    contentDescription = "导入文档",
+                    onClick = onImportBookFile
+                )
+                BookHeaderIconButton(
+                    icon = Icons.Filled.Refresh,
+                    contentDescription = "重新扫描",
+                    onClick = onRescanBooks
+                )
                 Box {
-                    IconButton(onClick = { expanded = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "更多")
-                    }
+                    BookHeaderIconButton(
+                        icon = Icons.Filled.MoreVert,
+                        contentDescription = "更多",
+                        onClick = { expanded = true }
+                    )
                     DropdownMenu(
                         expanded = expanded,
                         onDismissRequest = { expanded = false },
@@ -308,6 +374,21 @@ private fun BookHeader(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BookHeaderIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
@@ -480,40 +561,6 @@ private fun BookCard(
                     Text("取消")
                 }
             }
-        )
-    }
-}
-
-@Composable
-private fun FloatingSearchBar(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-        )
-    ) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            trailingIcon = {
-                if (value.isNotBlank()) {
-                    IconButton(onClick = { onValueChange("") }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "清空搜索")
-                    }
-                }
-            },
-            placeholder = { Text(placeholder) }
         )
     }
 }

@@ -48,7 +48,7 @@ fun RotatingMusicThumb(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxSize(0.86f)
                 .graphicsLayer { rotationZ = angle }
                 .clip(RoundedCornerShape(12.dp))
                 .background(
@@ -67,73 +67,38 @@ fun RotatingMusicThumb(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Box(
+            Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(4.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color(0xFF3A2A58),
-                                Color(0xFF12121D),
-                                Color(0xFF04050A)
-                            )
-                        )
-                    )
-                    .border(
-                        width = 0.7.dp,
-                        color = Color(0xFFE3D5FF).copy(alpha = 0.18f),
-                        shape = RoundedCornerShape(9.dp)
-                    ),
-                contentAlignment = Alignment.Center
+                    .padding(7.dp)
             ) {
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(6.dp)
-                ) {
-                    val radius = size.minDimension / 2f
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val moonRadius = radius * 0.58f
-                    val coverRadius = moonRadius * 1.03f
-                    val coverCenter = Offset(
-                        x = center.x + moonRadius * 0.52f,
-                        y = center.y - moonRadius * 0.03f
-                    )
-                    val innerBackground = Color(0xFF0D0D18)
+                val radius = size.minDimension / 2f
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val moonRadius = radius * 0.78f
+                val coverRadius = moonRadius * 0.96f
+                val coverCenter = Offset(
+                    x = center.x + moonRadius * 0.43f,
+                    y = center.y - moonRadius * 0.04f
+                )
 
-                    drawCircle(
-                        color = Color(0xFF8B5CFF).copy(alpha = 0.06f),
-                        radius = moonRadius * 1.08f,
-                        center = center
-                    )
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                Color(0xFFFFC7FF).copy(alpha = 0.92f),
-                                Color(0xFFC48BFF).copy(alpha = 0.88f),
-                                Color(0xFF7A45E8).copy(alpha = 0.82f)
-                            ),
-                            center = Offset(center.x - moonRadius * 0.26f, center.y - moonRadius * 0.28f),
-                            radius = moonRadius * 1.15f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFFFFD7FF).copy(alpha = 0.96f),
+                            Color(0xFFC792FF).copy(alpha = 0.92f),
+                            Color(0xFF7B45EC).copy(alpha = 0.86f)
                         ),
-                        radius = moonRadius,
-                        center = center
-                    )
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                Color(0xFF181524),
-                                innerBackground
-                            ),
-                            center = Offset(coverCenter.x - coverRadius * 0.18f, coverCenter.y - coverRadius * 0.16f),
-                            radius = coverRadius
-                        ),
-                        radius = coverRadius,
-                        center = coverCenter
-                    )
-                }
+                        center = Offset(center.x - moonRadius * 0.24f, center.y - moonRadius * 0.28f),
+                        radius = moonRadius * 1.15f
+                    ),
+                    radius = moonRadius,
+                    center = center
+                )
+                drawCircle(
+                    color = Color(0xFF151020),
+                    radius = coverRadius,
+                    center = coverCenter
+                )
             }
         }
     }

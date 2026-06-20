@@ -23,10 +23,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -51,6 +54,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -61,6 +65,7 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -116,6 +121,7 @@ import com.shenghui.localvibe.feature.library.MediaFolderGroupUiModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -170,6 +176,7 @@ private fun LocalVibeApp() {
     var audioQueue by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
     var currentAudioIndex by remember { mutableStateOf(0) }
     var audioPlayMode by remember { mutableStateOf(AudioPlayMode.NORMAL) }
+    var audioShuffleHistory by remember { mutableStateOf<List<String>>(emptyList()) }
     var videoQueue by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
     var currentVideoIndex by remember { mutableStateOf(0) }
     var selectedVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -212,7 +219,7 @@ private fun LocalVibeApp() {
 
     fun applyAudioPlayMode(controller: Player?, mode: AudioPlayMode) {
         controller ?: return
-        controller.shuffleModeEnabled = mode == AudioPlayMode.SHUFFLE
+        controller.shuffleModeEnabled = false
         controller.repeatMode = when (mode) {
             AudioPlayMode.REPEAT_ONE -> Player.REPEAT_MODE_ONE
             AudioPlayMode.REPEAT_ALL -> Player.REPEAT_MODE_ALL
@@ -272,6 +279,48 @@ private fun LocalVibeApp() {
         hiddenVideoRecords.addAll(appStateStore.loadHiddenVideoRecords())
     }
 
+    fun allVisibleAudioFiles(): List<LocalMediaFile> {
+        return scannedFilesByFolder.values
+            .flatten()
+            .filter { it.type == LocalMediaType.AUDIO }
+            .filterVisibleAudios()
+            .sortedBy { it.name.lowercase() }
+    }
+
+    fun audioPlaybackQueueFor(file: LocalMediaFile?): List<LocalMediaFile> {
+        val visibleCurrentQueue = audioQueue.filterVisibleAudios()
+        if (visibleCurrentQueue.size > 1) return visibleCurrentQueue
+        val scannedQueue = allVisibleAudioFiles()
+        if (scannedQueue.isNotEmpty()) return scannedQueue
+        return file?.let { listOf(it) }.orEmpty()
+    }
+
+    fun reshuffleAudioQueueKeepingCurrent(currentFile: LocalMediaFile?): List<LocalMediaFile> {
+        val queue = audioPlaybackQueueFor(currentFile)
+        val current = currentFile ?: return queue.shuffled(Random.Default)
+        val currentUri = current.normalizedUri()
+        return listOf(current) + queue
+            .filterNot { it.normalizedUri() == currentUri }
+            .shuffled(Random.Default)
+    }
+
+    fun findAudioFileByUri(uri: String?): LocalMediaFile? {
+        if (uri.isNullOrBlank()) return null
+        return audioQueue.firstOrNull { it.uri == uri || it.normalizedUri() == uri }
+            ?: scannedFilesByFolder.values
+                .flatten()
+                .firstOrNull { it.uri == uri || it.normalizedUri() == uri }
+    }
+
+    fun fallbackCurrentAudioFile(preferred: LocalMediaFile? = null): LocalMediaFile? {
+        return preferred
+            ?: findAudioFileByUri(musicController?.currentMediaItem?.mediaId)
+            ?: findAudioFileByUri(musicCurrentUri)
+            ?: selectedMediaFile?.takeIf { it.type == LocalMediaType.AUDIO }
+            ?: findAudioFileByUri(selectedAudioUri)
+            ?: findAudioFileByUri(recentAudioUri)
+    }
+
     fun playAudioQueue(queue: List<LocalMediaFile>, file: LocalMediaFile, shuffle: Boolean = false) {
         val controller = musicController ?: return
         requestNotificationPermissionIfNeeded()
@@ -287,6 +336,7 @@ private fun LocalVibeApp() {
         recentAudioUri = selectedAudioUri
         if (shuffle) {
             audioPlayMode = AudioPlayMode.SHUFFLE
+            audioShuffleHistory = emptyList()
         }
         applyAudioPlayMode(controller, audioPlayMode)
         controller.setMediaItems(
@@ -298,6 +348,96 @@ private fun LocalVibeApp() {
         controller.play()
         coroutineScope.launch {
             appStateStore.saveRecentAudioUri(recentAudioUri)
+        }
+    }
+
+    fun playAdjacentAudioFromRealQueue(
+        preferred: LocalMediaFile?,
+        direction: Int
+    ): Boolean {
+        val controller = musicController ?: return false
+        val currentFile = fallbackCurrentAudioFile(preferred)
+        val queue = audioPlaybackQueueFor(currentFile)
+        if (queue.isEmpty()) return false
+        val currentIndex = currentFile
+            ?.let { file ->
+                queue.indexOfFirst {
+                    it.uri == file.uri || it.normalizedUri() == file.normalizedUri()
+                }
+            }
+            ?.takeIf { it >= 0 }
+            ?: controller.currentMediaItemIndex.takeIf { it in queue.indices }
+            ?: 0
+        val targetIndex = currentIndex + direction
+        if (targetIndex !in queue.indices) return false
+        playAudioQueue(queue, queue[targetIndex])
+        return true
+    }
+
+    fun playWrappedAudioFromRealQueue(
+        preferred: LocalMediaFile?,
+        direction: Int
+    ): Boolean {
+        val controller = musicController ?: return false
+        val currentFile = fallbackCurrentAudioFile(preferred)
+        val queue = audioPlaybackQueueFor(currentFile)
+        if (queue.size <= 1) return false
+        val currentIndex = currentFile
+            ?.let { file ->
+                queue.indexOfFirst {
+                    it.uri == file.uri || it.normalizedUri() == file.normalizedUri()
+                }
+            }
+            ?.takeIf { it >= 0 }
+            ?: controller.currentMediaItemIndex.takeIf { it in queue.indices }
+            ?: 0
+        val targetIndex = (currentIndex + direction + queue.size) % queue.size
+        playAudioQueue(queue, queue[targetIndex])
+        return true
+    }
+
+    fun playRandomAudioFromRealQueue(
+        preferred: LocalMediaFile?,
+        direction: Int
+    ): Boolean {
+        val currentFile = fallbackCurrentAudioFile(preferred)
+        val queue = audioPlaybackQueueFor(currentFile)
+        if (queue.size <= 1) return false
+        val currentUri = currentFile?.normalizedUri()
+        if (direction < 0) {
+            val previousUri = audioShuffleHistory.lastOrNull()
+            if (previousUri != null) {
+                audioShuffleHistory = audioShuffleHistory.dropLast(1)
+                val target = queue.firstOrNull { it.normalizedUri() == previousUri }
+                if (target != null) {
+                    playAudioQueue(queue, target)
+                    return true
+                }
+            }
+        }
+        val candidates = queue.filterNot { it.normalizedUri() == currentUri }
+        val target = candidates.randomOrNull(Random.Default) ?: queue.random(Random.Default)
+        if (direction > 0 && !currentUri.isNullOrBlank()) {
+            audioShuffleHistory = (audioShuffleHistory + currentUri).takeLast(80)
+        }
+        playAudioQueue(queue, target)
+        return true
+    }
+
+    fun playAudioByMode(
+        preferred: LocalMediaFile?,
+        direction: Int
+    ): Boolean {
+        val controller = musicController ?: return false
+        return when (audioPlayMode) {
+            AudioPlayMode.SHUFFLE -> playRandomAudioFromRealQueue(preferred, direction)
+            AudioPlayMode.REPEAT_ONE -> {
+                controller.seekTo(0L)
+                controller.play()
+                true
+            }
+            AudioPlayMode.NORMAL,
+            AudioPlayMode.REPEAT_ALL -> playWrappedAudioFromRealQueue(preferred, direction)
         }
     }
 
@@ -1696,9 +1836,11 @@ private fun LocalVibeApp() {
             ?.takeIf { it.normalizedUri() !in hiddenAudioUris }
         fun openMiniAudio() {
             val file = miniAudioFile ?: return
-            if (audioQueue.none { it.uri == file.uri }) {
-                audioQueue = listOf(file)
-                currentAudioIndex = 0
+            if (audioQueue.size <= 1 || audioQueue.none { it.uri == file.uri }) {
+                val nextQueue = audioPlaybackQueueFor(file)
+                audioQueue = nextQueue
+                currentAudioIndex = nextQueue.indexOfFirst { it.uri == file.uri }
+                    .takeIf { it >= 0 } ?: 0
             }
             selectedMediaFile = file
             selectedAudioUri = file.uri
@@ -1790,19 +1932,41 @@ private fun LocalVibeApp() {
                     miniIsPlaying = musicIsPlaying,
                     miniProgressMs = musicCurrentPositionMs,
                     miniDurationMs = musicDurationMs,
+                    onMiniPrevious = {
+                        if (!playAudioByMode(miniAudioFile, direction = -1)) {
+                            Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onMiniPlayPause = {
                         val controller = musicController ?: return@MainTabScaffold
+                        if (controller.currentMediaItem == null) {
+                            val file = miniAudioFile ?: allVisibleAudioFiles().firstOrNull()
+                            if (file == null) {
+                                Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
+                            } else {
+                                playAudioQueue(audioPlaybackQueueFor(file), file)
+                            }
+                            return@MainTabScaffold
+                        }
                         if (controller.isPlaying) controller.pause() else controller.play()
                     },
                     onMiniNext = {
                         val controller = musicController ?: return@MainTabScaffold
-                        if (controller.hasNextMediaItem()) {
-                            controller.seekToNextMediaItem()
-                            controller.play()
-                        } else {
-                            controller.seekTo(0L)
-                            controller.play()
+                        if (controller.currentMediaItem == null) {
+                            val file = miniAudioFile ?: allVisibleAudioFiles().firstOrNull()
+                            if (file == null) {
+                                Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
+                            } else {
+                                playAudioQueue(audioPlaybackQueueFor(file), file)
+                            }
+                            return@MainTabScaffold
                         }
+                        if (!playAudioByMode(miniAudioFile, direction = 1)) {
+                            Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onMiniSeekTo = { positionMs ->
+                        musicController?.seekTo(positionMs)
                     },
                     onOpenMiniPlayer = { openMiniAudio() }
                 ) { contentModifier ->
@@ -1841,7 +2005,12 @@ private fun LocalVibeApp() {
                         },
                         onOpenAudio = { file, queue ->
                             playAudioQueue(queue, file)
-                            navController.navigate(LocalVibeRoute.AudioPlayer)
+                        },
+                        onToggleCurrentAudioPlayback = {
+                            val controller = musicController
+                            if (controller != null) {
+                                if (controller.isPlaying) controller.pause() else controller.play()
+                            }
                         },
                         onShuffleAll = { queue ->
                             val shuffledQueue = queue.shuffled()
@@ -1862,6 +2031,12 @@ private fun LocalVibeApp() {
                         },
                         onDeleteAudios = { files ->
                             permanentlyDeleteMedia(files)
+                        },
+                        onRemoveAudioFolder = { item ->
+                            removeMediaFromList(item.files)
+                        },
+                        onDeleteAudioFolder = { item ->
+                            permanentlyDeleteMedia(item.files)
                         },
                         onRescanAudio = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
@@ -2130,7 +2305,17 @@ private fun LocalVibeApp() {
                     currentIndex = currentAudioIndex,
                     playMode = audioPlayMode,
                     onPlayModeChanged = { mode ->
+                        val currentFile = resolvedAudioFile ?: fallbackCurrentAudioFile()
                         audioPlayMode = mode
+                        if (mode == AudioPlayMode.SHUFFLE) {
+                            audioShuffleHistory = emptyList()
+                            val shuffledQueue = reshuffleAudioQueueKeepingCurrent(currentFile)
+                            if (currentFile != null && shuffledQueue.size > 1) {
+                                playAudioQueue(shuffledQueue, currentFile)
+                            }
+                        } else {
+                            audioShuffleHistory = emptyList()
+                        }
                         applyAudioPlayMode(musicController, mode)
                     },
                     onSelectAudio = { index ->
@@ -2142,21 +2327,13 @@ private fun LocalVibeApp() {
                         if (controller.isPlaying) controller.pause() else controller.play()
                     },
                     onPrevious = {
-                        val controller = musicController ?: return@AudioPlayerScreen
-                        if (controller.currentPosition > 3_000L) {
-                            controller.seekTo(0L)
-                        } else if (controller.hasPreviousMediaItem()) {
-                            controller.seekToPreviousMediaItem()
-                        } else {
-                            Toast.makeText(context, "已经是第一首", Toast.LENGTH_SHORT).show()
+                        if (!playAudioByMode(resolvedAudioFile, direction = -1)) {
+                            Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onNext = {
-                        val controller = musicController ?: return@AudioPlayerScreen
-                        if (controller.hasNextMediaItem() || audioPlayMode == AudioPlayMode.REPEAT_ALL) {
-                            controller.seekToNextMediaItem()
-                        } else {
-                            Toast.makeText(context, "已经是最后一首", Toast.LENGTH_SHORT).show()
+                        if (!playAudioByMode(resolvedAudioFile, direction = 1)) {
+                            Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onSeekTo = { positionMs ->
@@ -2251,8 +2428,10 @@ private fun MainTabScaffold(
     miniIsPlaying: Boolean = false,
     miniProgressMs: Long = 0L,
     miniDurationMs: Long = 0L,
+    onMiniPrevious: () -> Unit = {},
     onMiniPlayPause: () -> Unit = {},
     onMiniNext: () -> Unit = {},
+    onMiniSeekTo: (Long) -> Unit = {},
     onOpenMiniPlayer: () -> Unit = {},
     content: @Composable (Modifier) -> Unit
 ) {
@@ -2280,8 +2459,10 @@ private fun MainTabScaffold(
                         isPlaying = miniIsPlaying,
                         progressMs = miniProgressMs,
                         durationMs = miniDurationMs,
+                        onPrevious = onMiniPrevious,
                         onPlayPause = onMiniPlayPause,
                         onNext = onMiniNext,
+                        onSeekTo = onMiniSeekTo,
                         onOpen = onOpenMiniPlayer
                     )
                 }
@@ -2296,10 +2477,24 @@ private fun MiniAudioPlayerBar(
     isPlaying: Boolean,
     progressMs: Long,
     durationMs: Long,
+    onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
+    onSeekTo: (Long) -> Unit,
     onOpen: () -> Unit
 ) {
+    val safeDurationMs = durationMs.coerceAtLeast(0L)
+    var pendingSeekMs by remember { mutableLongStateOf(progressMs.coerceIn(0L, safeDurationMs)) }
+    LaunchedEffect(progressMs, safeDurationMs) {
+        pendingSeekMs = progressMs.coerceIn(0L, safeDurationMs)
+    }
+
+    fun seekPositionFromX(x: Float, width: Float): Long {
+        if (safeDurationMs <= 0L) return 0L
+        val fraction = (x / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
+        return (safeDurationMs * fraction).toLong().coerceIn(0L, safeDurationMs)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -2313,8 +2508,7 @@ private fun MiniAudioPlayerBar(
                     width = 1.dp,
                     color = Color(0xFF8B5CFF).copy(alpha = 0.2f),
                     shape = RoundedCornerShape(12.dp)
-                )
-                .clickable(onClick = onOpen),
+                ),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
                 containerColor = Color(0xEA141528)
@@ -2326,25 +2520,41 @@ private fun MiniAudioPlayerBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
-                    RotatingMusicThumb(
-                        artworkUri = null,
-                        isRotating = true,
-                        modifier = Modifier.size(42.dp)
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = file.name.substringBeforeLast('.', file.name),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.92f),
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onOpen),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        RotatingMusicThumb(
+                            artworkUri = null,
+                            isRotating = true,
+                            modifier = Modifier.size(48.dp)
                         )
-                        Text(
-                            text = file.parentFolderName ?: "本地音乐",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFAAA3BF),
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = file.name.substringBeforeLast('.', file.name),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.92f),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = file.parentFolderName ?: "本地音乐",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFAAA3BF),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    IconButton(onClick = onPrevious, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Filled.SkipPrevious,
+                            contentDescription = "上一首",
+                            tint = Color.White.copy(alpha = 0.82f)
                         )
                     }
                     IconButton(onClick = onPlayPause, modifier = Modifier.size(36.dp)) {
@@ -2368,17 +2578,51 @@ private fun MiniAudioPlayerBar(
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
                             .padding(horizontal = 14.dp)
-                            .height(2.dp)
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color(0xFFB7A8D8).copy(alpha = 0.14f))
+                            .height(18.dp)
+                            .pointerInput(safeDurationMs) {
+                                detectTapGestures { offset ->
+                                    val target = seekPositionFromX(offset.x, size.width.toFloat())
+                                    pendingSeekMs = target
+                                    onSeekTo(target)
+                                }
+                            }
+                            .pointerInput(safeDurationMs) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        pendingSeekMs = seekPositionFromX(offset.x, size.width.toFloat())
+                                    },
+                                    onDragEnd = {
+                                        onSeekTo(pendingSeekMs)
+                                    },
+                                    onDragCancel = {
+                                        pendingSeekMs = progressMs.coerceIn(0L, safeDurationMs)
+                                    }
+                                ) { change, _ ->
+                                    pendingSeekMs = seekPositionFromX(
+                                        change.position.x,
+                                        size.width.toFloat()
+                                    )
+                                    change.consume()
+                                }
+                            }
                     ) {
                         Box(
                             modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(2.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFFB7A8D8).copy(alpha = 0.14f))
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
                                 .fillMaxWidth(
-                                    (progressMs.toFloat() / durationMs.toFloat())
+                                    (pendingSeekMs.toFloat() / safeDurationMs.toFloat())
                                         .coerceIn(0f, 1f)
                                 )
                                 .height(2.dp)
+                                .clip(RoundedCornerShape(999.dp))
                                 .background(Color(0xFF8B5CFF))
                         )
                     }

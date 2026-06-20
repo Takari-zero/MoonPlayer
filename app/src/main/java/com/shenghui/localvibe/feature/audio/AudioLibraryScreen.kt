@@ -1,8 +1,12 @@
 package com.shenghui.localvibe.feature.audio
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,8 +22,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -31,13 +35,13 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,6 +55,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +64,7 @@ import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.media.formatFileSize
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.feature.library.MediaFolderGroupUiModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun AudioLibraryScreen(
@@ -70,22 +76,30 @@ fun AudioLibraryScreen(
     onAddFolder: () -> Unit,
     onOpenFolder: (MediaFolderGroupUiModel) -> Unit,
     onOpenAudio: (LocalMediaFile, List<LocalMediaFile>) -> Unit,
+    onToggleCurrentAudioPlayback: () -> Unit,
     onShuffleAll: (List<LocalMediaFile>) -> Unit,
     onRemoveAudio: (LocalMediaFile) -> Unit,
     onDeleteAudio: (LocalMediaFile) -> Unit,
     onRemoveAudios: (List<LocalMediaFile>) -> Unit,
     onDeleteAudios: (List<LocalMediaFile>) -> Unit,
+    onRemoveAudioFolder: (MediaFolderGroupUiModel) -> Unit,
+    onDeleteAudioFolder: (MediaFolderGroupUiModel) -> Unit,
     onRescanAudio: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchKeyword by rememberSaveable { mutableStateOf("") }
     var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
     var selectedSongUris by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var isFolderMultiSelectMode by rememberSaveable { mutableStateOf(false) }
+    var selectedFolderKeys by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    var showFolderBatchDeleteConfirm by remember { mutableStateOf(false) }
     var showFolders by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     val sortedSongs = remember(audioFiles) {
         audioFiles.distinctBy { it.uri }.sortedBy { it.displayTitle().lowercase() }
@@ -105,108 +119,194 @@ fun AudioLibraryScreen(
     val recentlyPlayedCount = remember(audioProgressMap) {
         audioProgressMap.count { it.value > 0L }
     }
+    val listBottomPadding = if (currentAudioUri.isNullOrBlank()) 32.dp else 128.dp
+    val closeSearch = {
+        searchKeyword = ""
+        isSearching = false
+        focusManager.clearFocus()
+    }
+    val dismissSearchModifier = if (isSearching) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+        ) {
+            closeSearch()
+        }
+    } else {
+        Modifier
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(MusicBackground)
     ) {
-        if (isMultiSelectMode) {
-            AudioMultiSelectBar(
-                selectedCount = selectedSongUris.size,
-                onCancel = {
-                    isMultiSelectMode = false
-                    selectedSongUris = emptySet()
+        MusicHomeHeader(
+            isSearching = isSearching,
+            searchKeyword = searchKeyword,
+            showFolders = showFolders,
+            onSearchKeywordChange = { searchKeyword = it },
+            onToggleSearch = {
+                if (isSearching) {
+                    closeSearch()
+                } else {
+                    isSearching = true
+                }
+            },
+            onAddFolder = onAddFolder,
+            onShuffleAll = {
+                if (sortedSongs.isEmpty()) {
+                    Toast.makeText(context, "暂无音乐", Toast.LENGTH_SHORT).show()
+                } else {
+                    onShuffleAll(sortedSongs)
+                }
+            },
+            onRescanAudio = onRescanAudio,
+            onStartMultiSelect = {
+                showFolders = false
+                isFolderMultiSelectMode = false
+                selectedFolderKeys = emptySet()
+                isMultiSelectMode = true
+                selectedSongUris = emptySet()
+            },
+            onStartFolderMultiSelect = {
+                showFolders = true
+                isMultiSelectMode = false
+                selectedSongUris = emptySet()
+                isFolderMultiSelectMode = true
+                selectedFolderKeys = emptySet()
+            }
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(dismissSearchModifier)
+                .padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(13.dp)
+        ) {
+            MusicEntryCards(
+                likedCount = 0,
+                recentCount = recentlyPlayedCount,
+                playlistCount = audioFolders.size,
+                onLikedClick = {
+                    Toast.makeText(context, "喜欢歌曲后续支持", Toast.LENGTH_SHORT).show()
                 },
-                onSelectAll = {
-                    selectedSongUris = shownSongs.map { it.uri }.toSet()
+                onRecentClick = {
+                    Toast.makeText(
+                        context,
+                        if (recentlyPlayedCount > 0) "最近播放会在后续整理为独立列表" else "暂无最近播放",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 },
-                onRemoveSelected = {
-                    val selectedSongs = shownSongs.filter { it.uri in selectedSongUris }
-                    if (selectedSongs.isEmpty()) {
-                        Toast.makeText(context, "请先选择歌曲", Toast.LENGTH_SHORT).show()
+                onPlaylistClick = {
+                    if (audioFolders.isEmpty()) {
+                        Toast.makeText(context, "暂无音乐文件夹", Toast.LENGTH_SHORT).show()
                     } else {
-                        onRemoveAudios(selectedSongs)
+                        showFolders = !showFolders
                         isMultiSelectMode = false
                         selectedSongUris = emptySet()
-                    }
-                },
-                onDeleteSelected = {
-                    if (selectedSongUris.isEmpty()) {
-                        Toast.makeText(context, "请先选择歌曲", Toast.LENGTH_SHORT).show()
-                    } else {
-                        showBatchDeleteConfirm = true
+                        isFolderMultiSelectMode = false
+                        selectedFolderKeys = emptySet()
                     }
                 }
             )
-        } else {
-            MusicHomeHeader(
-                isSearching = isSearching,
-                searchKeyword = searchKeyword,
-                onSearchKeywordChange = { searchKeyword = it },
-                onToggleSearch = {
-                    if (isSearching) searchKeyword = ""
-                    isSearching = !isSearching
-                },
-                onAddFolder = onAddFolder,
-                onShuffleAll = {
-                    if (sortedSongs.isEmpty()) {
-                        Toast.makeText(context, "暂无音乐", Toast.LENGTH_SHORT).show()
+            SectionHeader(
+                title = if (showFolders) "音乐文件夹" else "全部歌曲",
+                count = if (showFolders) "${audioFolders.size} 个" else "${shownSongs.size} 首",
+                actionText = if (showFolders) null else "定位到当前播放位置",
+                actionEnabled = !showFolders && !currentAudioUri.isNullOrBlank(),
+                onActionClick = {
+                    val currentIndex = if (showFolders) {
+                        -1
                     } else {
-                        onShuffleAll(sortedSongs)
+                        shownSongs.indexOfFirst { it.uri == currentAudioUri }
                     }
-                },
-                onRescanAudio = onRescanAudio,
-                onStartMultiSelect = {
-                    showFolders = false
-                    isMultiSelectMode = true
-                    selectedSongUris = emptySet()
+                    if (currentIndex >= 0) {
+                        coroutineScope.launch {
+                            listState.animateScrollToItem(currentIndex)
+                        }
+                    } else {
+                        Toast.makeText(context, "当前播放歌曲不在当前列表中", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
-        }
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
-                top = 6.dp,
-                bottom = 18.dp
-            ),
-            verticalArrangement = Arrangement.spacedBy(11.dp)
-        ) {
-            item {
-                MusicEntryCards(
-                    likedCount = 0,
-                    recentCount = recentlyPlayedCount,
-                    playlistCount = audioFolders.size,
-                    onLikedClick = {
-                        Toast.makeText(context, "喜欢歌曲后续支持", Toast.LENGTH_SHORT).show()
+            if (isMultiSelectMode && !showFolders) {
+                AudioMultiSelectBar(
+                    selectedCount = selectedSongUris.size,
+                    onCancel = {
+                        isMultiSelectMode = false
+                        selectedSongUris = emptySet()
                     },
-                    onRecentClick = {
-                        Toast.makeText(
-                            context,
-                            if (recentlyPlayedCount > 0) "最近播放会在后续整理为独立列表" else "暂无最近播放",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                    onSelectAll = {
+                        selectedSongUris = shownSongs.map { it.uri }.toSet()
                     },
-                    onPlaylistClick = {
-                        if (audioFolders.isEmpty()) {
-                            Toast.makeText(context, "暂无音乐文件夹", Toast.LENGTH_SHORT).show()
+                    onRemoveSelected = {
+                        val selectedSongs = shownSongs.filter { it.uri in selectedSongUris }
+                        if (selectedSongs.isEmpty()) {
+                            Toast.makeText(context, "请先选择歌曲", Toast.LENGTH_SHORT).show()
                         } else {
-                            showFolders = !showFolders
+                            onRemoveAudios(selectedSongs)
+                            isMultiSelectMode = false
+                            selectedSongUris = emptySet()
+                        }
+                    },
+                    onDeleteSelected = {
+                        if (selectedSongUris.isEmpty()) {
+                            Toast.makeText(context, "请先选择歌曲", Toast.LENGTH_SHORT).show()
+                        } else {
+                            showBatchDeleteConfirm = true
                         }
                     }
                 )
             }
-
-            item {
-                SectionHeader(
-                    title = if (showFolders) "音乐文件夹" else "全部歌曲",
-                    count = if (showFolders) "${audioFolders.size} 个" else "${shownSongs.size} 首"
+            if (isFolderMultiSelectMode && showFolders) {
+                AudioMultiSelectBar(
+                    selectedCount = selectedFolderKeys.size,
+                    removeText = "从列表移除",
+                    onCancel = {
+                        isFolderMultiSelectMode = false
+                        selectedFolderKeys = emptySet()
+                    },
+                    onSelectAll = {
+                        selectedFolderKeys = audioFolders.map { it.selectionKey() }.toSet()
+                    },
+                    onRemoveSelected = {
+                        val selectedFolders = audioFolders.filter { it.selectionKey() in selectedFolderKeys }
+                        if (selectedFolders.isEmpty()) {
+                            Toast.makeText(context, "请先选择文件夹", Toast.LENGTH_SHORT).show()
+                        } else {
+                            selectedFolders.forEach(onRemoveAudioFolder)
+                            isFolderMultiSelectMode = false
+                            selectedFolderKeys = emptySet()
+                        }
+                    },
+                    onDeleteSelected = {
+                        if (selectedFolderKeys.isEmpty()) {
+                            Toast.makeText(context, "请先选择文件夹", Toast.LENGTH_SHORT).show()
+                        } else {
+                            showFolderBatchDeleteConfirm = true
+                        }
+                    }
                 )
             }
+        }
+
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(dismissSearchModifier)
+                .weight(1f),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = 0.dp,
+                bottom = listBottomPadding
+            ),
+            verticalArrangement = Arrangement.spacedBy(11.dp)
+        ) {
 
             if (!permissionDeniedMessage.isNullOrBlank()) {
                 item {
@@ -223,7 +323,24 @@ fun AudioLibraryScreen(
                     item { MusicEmptyState("暂无音乐文件夹，下载音乐后会自动显示，也可以手动添加文件夹。") }
                 } else {
                     items(audioFolders, key = { "${it.folder.id}:${it.source}" }) { item ->
-                        MusicFolderRow(item = item, onClick = { onOpenFolder(item) })
+                        MusicFolderRow(
+                            item = item,
+                            isSelectionMode = isFolderMultiSelectMode,
+                            isSelected = item.selectionKey() in selectedFolderKeys,
+                            onClick = {
+                                if (isFolderMultiSelectMode) {
+                                    selectedFolderKeys = selectedFolderKeys.toggle(item.selectionKey())
+                                } else {
+                                    if (isSearching) closeSearch()
+                                    onOpenFolder(item)
+                                }
+                            },
+                            onToggleSelected = {
+                                selectedFolderKeys = selectedFolderKeys.toggle(item.selectionKey())
+                            },
+                            onRemove = { onRemoveAudioFolder(item) },
+                            onDelete = { onDeleteAudioFolder(item) }
+                        )
                     }
                 }
             } else {
@@ -253,8 +370,12 @@ fun AudioLibraryScreen(
                             onClick = {
                                 if (isMultiSelectMode) {
                                     selectedSongUris = selectedSongUris.toggle(song.uri)
+                                } else if (song.uri == currentAudioUri) {
+                                    onToggleCurrentAudioPlayback()
+                                    if (isSearching) closeSearch()
                                 } else {
-                                    onOpenAudio(song, shownSongs)
+                                    onOpenAudio(song, sortedSongs)
+                                    if (isSearching) closeSearch()
                                 }
                             }
                         )
@@ -289,50 +410,126 @@ fun AudioLibraryScreen(
             }
         )
     }
+
+    if (showFolderBatchDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showFolderBatchDeleteConfirm = false },
+            title = { Text("删除文件夹内音乐？") },
+            text = { Text("将删除选中文件夹下已扫描到的音频文件，不会删除文件夹本身或非音频文件。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedFolders = audioFolders.filter { it.selectionKey() in selectedFolderKeys }
+                        showFolderBatchDeleteConfirm = false
+                        selectedFolders.forEach(onDeleteAudioFolder)
+                        isFolderMultiSelectMode = false
+                        selectedFolderKeys = emptySet()
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFolderBatchDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun MusicHomeHeader(
     isSearching: Boolean,
     searchKeyword: String,
+    showFolders: Boolean,
     onSearchKeywordChange: (String) -> Unit,
     onToggleSearch: () -> Unit,
     onAddFolder: () -> Unit,
     onShuffleAll: () -> Unit,
     onRescanAudio: () -> Unit,
-    onStartMultiSelect: () -> Unit
+    onStartMultiSelect: () -> Unit,
+    onStartFolderMultiSelect: () -> Unit
 ) {
+    var expanded by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MusicBackground)
             .padding(horizontal = 20.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Column(
+                modifier = Modifier
+                    .weight(if (isSearching) 0.42f else 1f)
+                    .padding(end = if (isSearching) 2.dp else 0.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
                 Text(
                     text = "音乐",
                     style = MaterialTheme.typography.titleMedium,
                     color = Color.White,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "本地音乐",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MusicMuted.copy(alpha = 0.82f)
+                    color = MusicMuted.copy(alpha = 0.82f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            var expanded by remember { mutableStateOf(false) }
-            Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+            if (isSearching) {
+                BasicTextField(
+                    value = searchKeyword,
+                    onValueChange = { onSearchKeywordChange(it) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .border(
+                            width = 1.dp,
+                            color = Color(0xFF8B5CFF).copy(alpha = 0.38f),
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        .padding(horizontal = 12.dp),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                        color = Color.White,
+                        fontSize = 13.sp
+                    ),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (searchKeyword.isBlank()) {
+                                Text(
+                                    text = "搜索歌曲",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MusicMuted.copy(alpha = 0.72f),
+                                    maxLines = 1
+                                )
+                            }
+                            innerTextField()
+                        }
+                    }
+                )
                 IconButton(onClick = onToggleSearch) {
                     Icon(
                         Icons.Filled.Search,
-                        contentDescription = if (isSearching) "关闭搜索" else "搜索",
+                        contentDescription = "搜索",
                         tint = Color.White.copy(alpha = 0.82f)
                     )
                 }
@@ -341,7 +538,7 @@ private fun MusicHomeHeader(
                         Icon(
                             Icons.Filled.MoreVert,
                             contentDescription = "更多",
-                            tint = Color.White.copy(alpha = 0.82f)
+                            tint = Color.White.copy(alpha = 0.56f)
                         )
                     }
                     DropdownMenu(
@@ -364,10 +561,14 @@ private fun MusicHomeHeader(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("多选") },
+                            text = { Text(if (showFolders) "多选管理" else "多选") },
                             onClick = {
                                 expanded = false
-                                onStartMultiSelect()
+                                if (showFolders) {
+                                    onStartFolderMultiSelect()
+                                } else {
+                                    onStartMultiSelect()
+                                }
                             }
                         )
                         DropdownMenuItem(
@@ -379,29 +580,64 @@ private fun MusicHomeHeader(
                         )
                     }
                 }
-            }
-        }
-
-        if (isSearching) {
-            OutlinedTextField(
-                value = searchKeyword,
-                onValueChange = onSearchKeywordChange,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 50.dp),
-                singleLine = true,
-                leadingIcon = {
-                    Icon(Icons.Filled.Search, contentDescription = null, tint = MusicMuted)
-                },
-                trailingIcon = {
-                    if (searchKeyword.isNotBlank()) {
-                        IconButton(onClick = { onSearchKeywordChange("") }) {
-                            Icon(Icons.Filled.Clear, contentDescription = "清空搜索")
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                    IconButton(onClick = onToggleSearch) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = "搜索",
+                            tint = Color.White.copy(alpha = 0.82f)
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { expanded = true }) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "更多",
+                                tint = Color.White.copy(alpha = 0.82f)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false },
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("添加文件夹") },
+                                onClick = {
+                                    expanded = false
+                                    onAddFolder()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("随机播放全部") },
+                                onClick = {
+                                    expanded = false
+                                    onShuffleAll()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (showFolders) "多选管理" else "多选") },
+                                onClick = {
+                                    expanded = false
+                                    if (showFolders) {
+                                        onStartFolderMultiSelect()
+                                    } else {
+                                        onStartMultiSelect()
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("重扫") },
+                                onClick = {
+                                    expanded = false
+                                    onRescanAudio()
+                                }
+                            )
                         }
                     }
-                },
-                placeholder = { Text("搜索歌曲") }
-            )
+                }
+            }
         }
     }
 }
@@ -409,6 +645,7 @@ private fun MusicHomeHeader(
 @Composable
 private fun AudioMultiSelectBar(
     selectedCount: Int,
+    removeText: String = "隐藏",
     onCancel: () -> Unit,
     onSelectAll: () -> Unit,
     onRemoveSelected: () -> Unit,
@@ -417,26 +654,44 @@ private fun AudioMultiSelectBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MusicBackground)
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(MusicSurface),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .height(46.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF15162A).copy(alpha = 0.92f))
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = "已选择 $selectedCount 项",
-            modifier = Modifier.padding(start = 16.dp),
-            style = MaterialTheme.typography.titleMedium,
-            color = Color.White
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
         )
-        Row {
-            TextButton(onClick = onCancel) { Text("取消") }
-            TextButton(onClick = onSelectAll) { Text("全选") }
-            TextButton(onClick = onRemoveSelected) { Text("隐藏") }
-            TextButton(onClick = onDeleteSelected) { Text("删除", color = Color(0xFFFF8B8B)) }
-        }
+        CompactActionText(text = "取消", onClick = onCancel)
+        CompactActionText(text = "全选", onClick = onSelectAll)
+        CompactActionText(text = removeText, onClick = onRemoveSelected)
+        CompactActionText(text = "删除", color = Color(0xFFFF8B8B), onClick = onDeleteSelected)
     }
+}
+
+@Composable
+private fun CompactActionText(
+    text: String,
+    color: Color = Color(0xFFB28CFF),
+    onClick: () -> Unit
+) {
+    Text(
+        text = text,
+        modifier = Modifier.clickable(onClick = onClick),
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip
+    )
 }
 
 @Composable
@@ -471,8 +726,8 @@ private fun MusicEntryCards(
         MusicEntryCard(
             modifier = Modifier.weight(1f),
             icon = "≡",
-            title = "播放列表",
-            subtitle = "$playlistCount 个列表",
+            title = "音乐文件夹",
+            subtitle = "$playlistCount 个文件夹",
             accent = Color(0xFFB28CFF),
             onClick = onPlaylistClick
         )
@@ -528,7 +783,13 @@ private fun MusicEntryCard(
 }
 
 @Composable
-private fun SectionHeader(title: String, count: String) {
+private fun SectionHeader(
+    title: String,
+    count: String,
+    actionText: String? = null,
+    actionEnabled: Boolean = false,
+    onActionClick: (() -> Unit)? = null
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -540,11 +801,34 @@ private fun SectionHeader(title: String, count: String) {
             color = Color.White,
             fontWeight = FontWeight.SemiBold
         )
-        Text(
-            text = count,
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White.copy(alpha = 0.82f)
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (actionText != null && onActionClick != null) {
+                TextButton(
+                    onClick = onActionClick,
+                    enabled = actionEnabled,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.height(30.dp)
+                ) {
+                    Text(
+                        text = actionText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (actionEnabled) {
+                            Color(0xFFB28CFF)
+                        } else {
+                            Color.White.copy(alpha = 0.28f)
+                        }
+                    )
+                }
+            }
+            Text(
+                text = count,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White.copy(alpha = 0.82f)
+            )
+        }
     }
 }
 
@@ -755,42 +1039,123 @@ private fun SongMoreMenu(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun MusicFolderRow(
     item: MediaFolderGroupUiModel,
-    onClick: () -> Unit
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onToggleSelected: () -> Unit,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MusicSurface)
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+    var expanded by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val folderSize = remember(item.files) { item.files.sumOf { it.size.coerceAtLeast(0L) } }
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = {
+                        if (isSelectionMode) {
+                            onToggleSelected()
+                        } else {
+                            expanded = true
+                        }
+                    }
+                ),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isSelected) Color(0xFF21183A) else MusicSurface
+            )
         ) {
-            DefaultMusicArtwork(isCurrent = false)
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = item.folder.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "${item.files.size} 首音乐 · ${item.source}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MusicMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (isSelectionMode) {
+                    Checkbox(checked = isSelected, onCheckedChange = { onToggleSelected() })
+                }
+                DefaultMusicArtwork(isCurrent = false)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = item.folder.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${item.files.size} 首音乐 · ${formatFileSize(folderSize)} · ${item.source}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MusicMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (!isSelectionMode) {
+                    Box {
+                        IconButton(onClick = { expanded = true }) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "文件夹操作",
+                                tint = MusicMuted
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false },
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("从列表移除") },
+                                onClick = {
+                                    expanded = false
+                                    onRemove()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除音频文件") },
+                                onClick = {
+                                    expanded = false
+                                    showDeleteConfirm = true
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
     }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("删除文件夹内音乐？") },
+            text = { Text("只会删除该文件夹中已扫描到的 ${item.files.size} 个音频文件，不会删除文件夹本身或其它非音频文件。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
 }
 
 @Composable
@@ -826,6 +1191,10 @@ private fun LocalMediaFile.durationText(): String {
 
 private fun Set<String>.toggle(value: String): Set<String> {
     return if (value in this) this - value else this + value
+}
+
+private fun MediaFolderGroupUiModel.selectionKey(): String {
+    return "${folder.id}:${source}"
 }
 
 private val MusicBackground = Color(0xFF090A16)

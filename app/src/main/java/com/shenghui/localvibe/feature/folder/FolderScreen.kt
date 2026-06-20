@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,7 +27,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -70,6 +68,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -85,6 +86,7 @@ import com.shenghui.localvibe.core.media.videoMetadataCacheKey
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.core.ui.MoonBottomNavigationBar
+import com.shenghui.localvibe.core.ui.MoonInlineSearchField
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -130,6 +132,8 @@ fun FolderScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val videoSearchFocusRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
     var selectedCategory by rememberSaveable(targetType) {
         mutableStateOf(if (targetType == LocalMediaType.VIDEO) "视频" else Categories.first())
@@ -165,9 +169,20 @@ fun FolderScreen(
         }
     }
 
-    BackHandler(enabled = targetType == LocalMediaType.VIDEO && isVideoSearching) {
+    fun closeVideoSearch() {
         videoSearchKeyword = ""
         isVideoSearching = false
+        focusManager.clearFocus()
+    }
+
+    BackHandler(enabled = targetType == LocalMediaType.VIDEO && isVideoSearching) {
+        closeVideoSearch()
+    }
+
+    LaunchedEffect(isVideoSearching) {
+        if (isVideoSearching) {
+            videoSearchFocusRequester.requestFocus()
+        }
     }
 
     BackHandler(enabled = targetType == LocalMediaType.VIDEO && isMultiSelectMode && !isVideoSearching) {
@@ -194,6 +209,7 @@ fun FolderScreen(
     }
 
     fun openVideoIfAvailable(file: LocalMediaFile) {
+        if (isVideoSearching) closeVideoSearch()
         coroutineScope.launch {
             val isAvailable = withContext(Dispatchers.IO) {
                 isMediaFileReadable(context.applicationContext, file)
@@ -297,12 +313,16 @@ fun FolderScreen(
                         isSearching = isVideoSearching,
                         searchKeyword = videoSearchKeyword,
                         onSearchKeywordChange = { videoSearchKeyword = it },
+                        searchModifier = Modifier.focusRequester(videoSearchFocusRequester),
                         isGridMode = isVideoGridMode,
                         sortMode = videoSortMode,
                         onBack = onBack,
                         onToggleSearch = {
-                            if (isVideoSearching) videoSearchKeyword = ""
-                            isVideoSearching = !isVideoSearching
+                            if (isVideoSearching) {
+                                closeVideoSearch()
+                            } else {
+                                isVideoSearching = true
+                            }
                         },
                         onToggleViewMode = { isVideoGridMode = !isVideoGridMode },
                         onSortChange = { videoSortMode = it },
@@ -348,12 +368,16 @@ fun FolderScreen(
                         isSearching = isVideoSearching,
                         searchKeyword = videoSearchKeyword,
                         onSearchKeywordChange = { videoSearchKeyword = it },
+                        searchModifier = Modifier.focusRequester(videoSearchFocusRequester),
                         isGridMode = isVideoGridMode,
                         sortMode = videoSortMode,
                         onBack = onBack,
                         onToggleSearch = {
-                            if (isVideoSearching) videoSearchKeyword = ""
-                            isVideoSearching = !isVideoSearching
+                            if (isVideoSearching) {
+                                closeVideoSearch()
+                            } else {
+                                isVideoSearching = true
+                            }
                         },
                         onToggleViewMode = { isVideoGridMode = !isVideoGridMode },
                         onSortChange = { videoSortMode = it },
@@ -421,7 +445,14 @@ fun FolderScreen(
                 ) {
                     LazyColumn(
                         modifier = Modifier
-                            .fillMaxSize(),
+                            .fillMaxSize()
+                            .then(
+                                if (targetType == LocalMediaType.VIDEO && isVideoSearching) {
+                                    Modifier.clickable { closeVideoSearch() }
+                                } else {
+                                    Modifier
+                                }
+                            ),
                         verticalArrangement = Arrangement.spacedBy(
                             if (targetType == LocalMediaType.VIDEO) 8.dp else 12.dp
                         ),
@@ -602,18 +633,6 @@ fun FolderScreen(
                             }
                         }
                 }
-            }
-            if (targetType == LocalMediaType.VIDEO && isVideoSearching) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 92.dp)
-                        .zIndex(8f)
-                        .clickable {
-                            videoSearchKeyword = ""
-                            isVideoSearching = false
-                        }
-                )
             }
         }
     }
@@ -913,6 +932,7 @@ private fun VideoFolderTopBarV2(
     isSearching: Boolean,
     searchKeyword: String,
     onSearchKeywordChange: (String) -> Unit,
+    searchModifier: Modifier = Modifier,
     isGridMode: Boolean,
     sortMode: VideoFolderSortMode,
     onBack: () -> Unit,
@@ -926,60 +946,57 @@ private fun VideoFolderTopBarV2(
         modifier = Modifier
             .fillMaxWidth()
             .zIndex(2f)
-            .padding(top = 18.dp, bottom = 16.dp),
+            .height(50.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(
             onClick = onBack,
-            modifier = Modifier.size(42.dp)
+            modifier = Modifier.size(36.dp)
         ) {
-            Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color(0xFFCCC5D8))
+            Icon(
+                Icons.Filled.ArrowBack,
+                contentDescription = "返回",
+                tint = Color(0xFFCCC5D8),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(if (isSearching) 0.42f else 1f)
+                .padding(end = if (isSearching) 2.dp else 10.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = folderName,
+                color = Color(0xFFF8F5FF),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "$videoCount \u4e2a\u89c6\u9891 \u00b7 ${formatFileSize(totalSize)}",
+                color = Color(0xFFA7A0B8).copy(alpha = 0.82f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
 
         if (isSearching) {
-            androidx.compose.material3.OutlinedTextField(
+            MoonInlineSearchField(
                 value = searchKeyword,
                 onValueChange = onSearchKeywordChange,
+                placeholder = "搜索视频",
+                textColor = Color(0xFFF8F5FF),
+                placeholderColor = Color(0xFFA7A0B8).copy(alpha = 0.72f),
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = 4.dp, end = 8.dp)
-                    .heightIn(min = 56.dp)
-                    .fillMaxWidth(),
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = Color(0xFFF8F5FF),
-                    fontSize = 15.sp
-                ),
-                placeholder = {
-                    Text(
-                        text = "\u641c\u7d22\u89c6\u9891",
-                        color = Color(0xFFA7A0B8),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp)
-                    )
-                }
+                    .padding(end = 6.dp)
+                    .then(searchModifier)
             )
-        } else {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp, end = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                Text(
-                    text = folderName,
-                    color = Color(0xFFF8F5FF),
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "$videoCount \u4e2a\u89c6\u9891 \u00b7 ${formatFileSize(totalSize)}",
-                    color = Color(0xFFA7A0B8),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
 
         Row(
@@ -988,9 +1005,14 @@ private fun VideoFolderTopBarV2(
         ) {
             IconButton(
                 onClick = onToggleSearch,
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(36.dp)
             ) {
-                Icon(Icons.Filled.Search, contentDescription = "搜索", tint = Color(0xFFF8F5FF))
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = "搜索",
+                    tint = Color(0xFFF8F5FF),
+                    modifier = Modifier.size(22.dp)
+                )
             }
 
             Row(
@@ -1004,27 +1026,29 @@ private fun VideoFolderTopBarV2(
                 IconButton(
                     onClick = { if (isGridMode) onToggleViewMode() },
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
                         .background(if (!isGridMode) Color(0xFF4A2D83) else Color.Transparent)
                 ) {
                     Icon(
                         Icons.Filled.ViewList,
                         contentDescription = "列表视图",
-                        tint = if (!isGridMode) Color(0xFFF8F5FF) else Color(0xFFBEB7CD)
+                        tint = if (!isGridMode) Color(0xFFF8F5FF) else Color(0xFFBEB7CD),
+                        modifier = Modifier.size(20.dp)
                     )
                 }
                 IconButton(
                     onClick = { if (!isGridMode) onToggleViewMode() },
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
                         .background(if (isGridMode) Color(0xFF4A2D83) else Color.Transparent)
                 ) {
                     Icon(
                         Icons.Filled.GridView,
                         contentDescription = "网格视图",
-                        tint = if (isGridMode) Color(0xFFF8F5FF) else Color(0xFFBEB7CD)
+                        tint = if (isGridMode) Color(0xFFF8F5FF) else Color(0xFFBEB7CD),
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -1033,9 +1057,14 @@ private fun VideoFolderTopBarV2(
             Box {
                 IconButton(
                     onClick = { expanded = true },
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(36.dp)
                 ) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color(0xFFF8F5FF))
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "更多",
+                        tint = Color(0xFFF8F5FF),
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
                 DropdownMenu(
                     expanded = expanded,
@@ -1102,39 +1131,6 @@ private fun VideoFolderTopBarV2(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun VideoFolderSearchOverlay(
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = {}),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xF2111722))
-    ) {
-        androidx.compose.material3.OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF8AB6FF)) },
-            trailingIcon = {
-                if (value.isNotBlank()) {
-                    IconButton(onClick = { onValueChange("") }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "清空", tint = Color(0xFFA8B2C2))
-                    }
-                }
-            },
-            placeholder = { Text("搜索当前文件夹视频", color = Color(0xFF6F7A8A)) }
-        )
     }
 }
 

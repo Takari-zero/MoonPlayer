@@ -68,7 +68,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -92,6 +91,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +103,7 @@ import androidx.compose.ui.zIndex
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.core.media.VideoThumbnailStore
+import com.shenghui.localvibe.core.ui.MoonInlineSearchField
 import com.shenghui.localvibe.feature.video.model.VideoFolderUiModel
 import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordType
 import com.shenghui.localvibe.feature.video.model.VideoVisibilityRecordUiModel
@@ -149,6 +152,8 @@ fun VideoLibraryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val searchFocusRequester = remember { FocusRequester() }
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchKeyword by rememberSaveable { mutableStateOf("") }
     var isGridMode by rememberSaveable { mutableStateOf(false) }
@@ -185,9 +190,20 @@ fun VideoLibraryScreen(
         }
     }
 
-    BackHandler(enabled = isSearching) {
+    fun closeSearch() {
         searchKeyword = ""
         isSearching = false
+        focusManager.clearFocus()
+    }
+
+    BackHandler(enabled = isSearching) {
+        closeSearch()
+    }
+
+    LaunchedEffect(isSearching) {
+        if (isSearching) {
+            searchFocusRequester.requestFocus()
+        }
     }
 
     Scaffold(
@@ -232,10 +248,14 @@ fun VideoLibraryScreen(
                     isSearching = isSearching,
                     searchKeyword = searchKeyword,
                     onSearchKeywordChange = { searchKeyword = it },
+                    searchModifier = Modifier.focusRequester(searchFocusRequester),
                     isGridMode = isGridMode,
                     onToggleSearch = {
-                        if (isSearching) searchKeyword = ""
-                        isSearching = !isSearching
+                        if (isSearching) {
+                            closeSearch()
+                        } else {
+                            isSearching = true
+                        }
                     },
                     onAddFolder = onAddFolder,
                     onToggleViewMode = {
@@ -285,7 +305,15 @@ fun VideoLibraryScreen(
 
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (isSearching) {
+                                Modifier.clickable { closeSearch() }
+                            } else {
+                                Modifier
+                            }
+                        ),
                     contentPadding = PaddingValues(
                         start = 20.dp,
                         end = 20.dp,
@@ -355,6 +383,7 @@ fun VideoLibraryScreen(
                                             if (isMultiSelectMode) {
                                                 selectedFolderIds = selectedFolderIds.toggle(item.folder.id)
                                             } else {
+                                                if (isSearching) closeSearch()
                                                 onOpenFolder(item)
                                             }
                                         },
@@ -386,6 +415,7 @@ fun VideoLibraryScreen(
                                             if (isMultiSelectMode) {
                                                 selectedFolderIds = selectedFolderIds.toggle(item.folder.id)
                                             } else {
+                                                if (isSearching) closeSearch()
                                                 onOpenFolder(item)
                                             }
                                         },
@@ -401,18 +431,6 @@ fun VideoLibraryScreen(
                 }
             }
 
-            if (isSearching) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 78.dp)
-                        .zIndex(8f)
-                        .clickable {
-                            searchKeyword = ""
-                            isSearching = false
-                        }
-                )
-            }
             if (showMorePanel) {
                 VideoLibraryMorePanelV2(
                     isGridMode = isGridMode,
@@ -514,6 +532,7 @@ private fun VideoHeader(
     isSearching: Boolean,
     searchKeyword: String,
     onSearchKeywordChange: (String) -> Unit,
+    searchModifier: Modifier = Modifier,
     isGridMode: Boolean,
     onToggleSearch: () -> Unit,
     onAddFolder: () -> Unit,
@@ -525,20 +544,33 @@ private fun VideoHeader(
             .fillMaxWidth()
             .zIndex(2f)
             .background(VideoBackground)
-            .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+            .padding(horizontal = 20.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            VideoHeaderTitleOrSearch(
-                isSearching = isSearching,
-                searchKeyword = searchKeyword,
-                onSearchKeywordChange = onSearchKeywordChange,
-                modifier = Modifier.weight(1f)
+            VideoHeaderTitle(
+                modifier = Modifier
+                    .weight(if (isSearching) 0.42f else 1f)
+                    .padding(end = if (isSearching) 2.dp else 0.dp)
             )
+            if (isSearching) {
+                MoonInlineSearchField(
+                    value = searchKeyword,
+                    onValueChange = onSearchKeywordChange,
+                    placeholder = "搜索视频或文件夹",
+                    textColor = VideoTextPrimary,
+                    placeholderColor = VideoTextMuted.copy(alpha = 0.72f),
+                    modifier = searchModifier
+                        .weight(1f)
+                        .padding(end = 6.dp)
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 HeaderIconButton(
                     icon = Icons.Filled.Search,
@@ -568,52 +600,28 @@ private fun VideoHeader(
 }
 
 @Composable
-private fun VideoHeaderTitleOrSearch(
-    isSearching: Boolean,
-    searchKeyword: String,
-    onSearchKeywordChange: (String) -> Unit,
+private fun VideoHeaderTitle(
     modifier: Modifier = Modifier
 ) {
-    if (isSearching) {
-        androidx.compose.material3.OutlinedTextField(
-            value = searchKeyword,
-            onValueChange = onSearchKeywordChange,
-            modifier = modifier
-                .padding(end = 10.dp)
-                .heightIn(min = 56.dp)
-                .fillMaxWidth(),
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = VideoTextPrimary,
-                fontSize = 15.sp
-            ),
-            placeholder = {
-                Text(
-                    text = "\u641c\u7d22\u89c6\u9891\u6216\u6587\u4ef6\u5939",
-                    color = VideoTextMuted,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp)
-                )
-            }
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        Text(
+            text = "\u89c6\u9891",
+            style = MaterialTheme.typography.titleMedium,
+            color = VideoTextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
-    } else {
-        Column(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(1.dp)
-        ) {
-            Text(
-                text = "\u89c6\u9891",
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    fontSize = 29.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
-                color = VideoTextPrimary
-            )
-            Text(
-                text = "\u672c\u5730\u89c6\u9891",
-                style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp),
-                color = VideoTextMuted
-            )
-        }
+        Text(
+            text = "\u672c\u5730\u89c6\u9891",
+            style = MaterialTheme.typography.labelSmall,
+            color = VideoTextMuted.copy(alpha = 0.82f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -624,26 +632,13 @@ private fun HeaderIconButton(
     selected: Boolean = false,
     onClick: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.size(if (selected) 36.dp else 32.dp),
-        shape = if (selected) CircleShape else RoundedCornerShape(13.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) VideoPrimary.copy(alpha = 0.34f) else Color.Transparent
-        ),
-        border = if (selected) {
-            BorderStroke(1.dp, VideoAccentSoft.copy(alpha = 0.2f))
-        } else {
-            null
-        }
-    ) {
-        IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = if (selected) VideoPrimarySoft else VideoTextSecondary.copy(alpha = 0.92f),
-                modifier = Modifier.size(if (selected) 18.dp else 17.dp)
-            )
-        }
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (selected) VideoPrimarySoft else VideoTextSecondary.copy(alpha = 0.92f),
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
@@ -1852,41 +1847,6 @@ private fun PermissionHint(message: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = Color(0xFFFFB4AB),
             modifier = Modifier.padding(14.dp)
-        )
-    }
-}
-
-@Composable
-private fun FloatingSearchBar(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = {}),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = VideoSurface.copy(alpha = 0.98f)),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.075f))
-    ) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = VideoPrimarySoft) },
-            trailingIcon = {
-                if (value.isNotBlank()) {
-                    IconButton(onClick = { onValueChange("") }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "清空搜索", tint = VideoTextSecondary)
-                    }
-                }
-            },
-            placeholder = { Text(placeholder, color = VideoTextMuted) }
         )
     }
 }
