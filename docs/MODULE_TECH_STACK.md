@@ -81,6 +81,47 @@
 ```
 
 docs-only 杞涓嶉渶瑕佺紪璇戯紝浣嗗繀椤荤‘璁ゅ彧鏀规枃妗ｃ€?
+
+## Recent Media Module Technical Status
+
+Latest synced commit: `b77cd10 feat(media): refine music player and unify search`.
+
+Music home and playback:
+
+- Music home continues to use real scanned local audio files and real scanned audio folder groups. Do not introduce formal fake song data.
+- Music home search is an inline top-bar search. It does not add a second row, does not increase top-bar height, and does not render internal search or clear icons.
+- Music list item clicks play audio only. They do not navigate to the player page.
+- Clicking the current song toggles play/pause without rebuilding the queue or seeking to `0`.
+- The mini player reads the real current audio state and supports previous, play/pause, next, and seek through the bottom progress line.
+- The mini player wrapper remains transparent while the inner control card keeps its own dark rounded background.
+- `RotatingMusicThumb` remains the mini player's left moon-phase rotating thumb.
+- Music playback queue uses the real scanned audio list so previous/next are not limited to a single Media3 item.
+- Sequential mode supports wrap-around at the first and last item.
+- Random mode uses non-fixed randomness, avoids the current song when possible, and uses random history for previous.
+- Music player page first UI is complete and controls the same playback controller/queue. Bottom function entries such as lyrics, A-B, timer, and favorite may still be placeholders or Toasts unless their real logic is separately implemented.
+
+Music folders and selection:
+
+- Music folder entry uses real `audioFolders` and shows real folder counts/sizes.
+- Folder deletion is scoped to scanned audio files inside that folder. It must not delete non-audio files or the folder itself.
+- Folder deletion must require confirmation and must respect Android storage permission limits.
+- Song multi-select and folder multi-select are separate states and must not trigger each other.
+
+Shared search UI:
+
+- `app/src/main/java/com/shenghui/localvibe/core/ui/MoonInlineSearchField.kt` is the shared inline top-bar search field for cross-module alignment.
+- Video home, video folder detail, and book home search should match the music home search behavior: inline top-bar expansion, search/more buttons remain visible, no internal icon/X, blank/result click exits search.
+- This shared search alignment is a UI/interaction alignment only. It does not imply video player or book reader feature changes.
+
+Bottom navigation icons:
+
+- The book tab uses an open-book icon and the profile tab uses a profile/person icon.
+- `MoonBottomNavigationBar` height, selected state behavior, and navigation logic should remain unchanged unless a separate task explicitly allows it.
+
+Boundaries:
+
+- No permissions, dependencies, Gradle changes, or Manifest changes are part of this media refinement.
+- Full lyrics, lyric parsing/sync, complete music A-B loop logic, complete sleep timer logic, favorite persistence, complex playlist management, album/artist metadata, audio tag parsing, advanced music secondary filters, visualization, and enhanced background notification controls remain deferred.
 ### 鐪熸満瀹夎楠岃瘉
 
 娑夊強涓氬姟浠ｇ爜銆佹潈闄愩€佹挱鏀俱€佹壂鎻忋€佸垹闄ゃ€乀TS銆侀€氱煡鏍忔垨閿佸睆鎺у埗鐨勮疆娆★紝缂栬瘧鎴愬姛鍚庡簲灏介噺杩涜鐪熸満楠岃瘉銆傛棤娉曠湡鏈洪獙璇佹椂蹇呴』鏄庣‘璇存槑銆?
@@ -386,15 +427,25 @@ Boundary:
 
 - These fixes do not add permissions, dependencies, Gradle changes, Manifest changes, native decoder work, music-module changes, or novel-module changes.
 
-## 音乐主页第一阶段技术状态
+## 音乐模块媒体精修技术状态
 
-最近完成提交：`9739c28 feat(audio): redesign music home screen`。
+最近完成提交：`b77cd10 feat(media): refine music player and unify search`。
 
 - 音乐主页继续使用真实扫描到的本地音频数据作为列表来源，不使用正式假歌曲数据。
-- 迷你播放器读取真实当前音频状态，支持播放 / 暂停、下一首和底部进度线。
+- 音乐主页搜索使用通用 `MoonInlineSearchField`，在顶部栏内展开，不新增搜索行，不撑高顶部栏，输入框内部不放搜索图标或 X。
+- 音乐主页的 `我喜欢 / 最近播放 / 音乐文件夹` 入口和 `全部歌曲` 标题固定，只有歌曲列表区域滚动。
+- `音乐文件夹` 入口使用真实扫描分组和 `audioFolders.size`，文件夹列表显示真实歌曲数量和大小。
+- 歌曲列表点击只播放，不直接进入音乐播放页；点击当前歌曲会在播放 / 暂停之间切换，不重建队列，不 seek 到 `0`。
+- 音乐队列使用真实扫描音频列表，避免 Media3 只有当前单曲导致上一曲 / 下一曲失效。
+- 顺序模式支持首尾循环；随机模式使用非固定随机源，下一曲尽量避开当前歌曲，上一曲优先使用随机历史。
+- 迷你播放器读取真实当前音频状态，支持上一曲、播放 / 暂停、下一曲，以及底部进度线点击 / 拖动 seek。
 - 迷你播放器外层包裹区域应保持透明；内部控制卡片保留深色圆角卡片、边框和控制按钮。
 - `app/src/main/java/com/shenghui/localvibe/core/ui/RotatingMusicThumb.kt` 提供迷你播放器左侧旋转小方块组件。
-- 当前 `RotatingMusicThumb` 视觉方向为紫色月亮 / 月相，小方块整体慢速旋转，无封面时不显示破图。
-- 当前阶段不新增权限、不新增依赖，不修改 Gradle / Manifest。
-- 当前阶段没有完成音乐播放页或音乐二级列表页；不要在技术文档中把它们写成已完成。
-- 本阶段不修改视频模块或小说模块。
+- 当前 `RotatingMusicThumb` 视觉方向为紫色月亮 / 月相，小方块整体慢速旋转，裁切问题已处理，无封面时不显示破图。
+- 音乐播放页第一版 UI 已完成：沉浸式展示，不显示底部导航栏，顶部保留下箭头和更多，使用真实当前音频、同一套队列控制、真实进度和 seek。
+- 音乐播放页底部的歌词、A-B、定时、收藏等入口若仍为占位或 Toast，必须继续标记为后续能力，不得写成完整逻辑已完成。
+- 音乐文件夹删除只允许删除已扫描到的音频文件，必须二次确认，不删除非音频文件，不删除整个文件夹。
+- 歌曲多选和文件夹多选状态分离，避免互相误触。
+- 跨模块搜索统一仅表示音乐、视频、小说顶部栏搜索框样式和交互对齐，不代表视频播放页或小说阅读页功能变化。
+- 小说 tab 和我的 tab 已替换为真实图标，但底部导航栏整体样式、高度、选中态和功能逻辑不变。
+- 当前阶段不新增权限、不新增依赖，不修改 Gradle / Manifest，不修改视频播放页或小说阅读页。

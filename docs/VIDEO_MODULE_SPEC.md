@@ -439,3 +439,16 @@ Layout boundaries:
 - The lower-right play FAB must not overlap the bottom navigation bar.
 - Selection mode controls must not overlap the bottom navigation bar.
 - The video player page was not changed for this UI fix.
+
+## 20. Cross-Module Search Alignment
+
+Recent cross-module search work is part of `b77cd10 feat(media): refine music player and unify search`.
+
+- Video home search now uses the shared `MoonInlineSearchField` style aligned with the approved music home search.
+- Video home search opens inside the top bar, does not add a new search row, and does not increase the top-bar height.
+- The video title area, search button, and more button remain visible in search state.
+- The search field has no internal search icon and no internal X.
+- Tapping the search button again closes search, clears the query, clears focus, and restores the full list.
+- Tapping blank list area or a search result exits search.
+- Video folder detail search follows the same top-bar inline search pattern.
+- This search alignment does not modify the video player page, player queue, subtitles, gestures, sleep, AB, equalizer, picture adjustment, Gradle, Manifest, permissions, or dependencies.

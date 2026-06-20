@@ -729,25 +729,42 @@ Layout safety:
 - Selection mode controls must not collide with bottom navigation.
 - This UI work must not modify the video player page, Gradle, Manifest, permissions, dependencies, music internals, or novel internals.
 
-## Music Home First-Stage Regression Notes
+## Music Media Refinement Regression Notes
 
-Recent completed commit: `9739c28 feat(audio): redesign music home screen`.
+Recent completed commit: `b77cd10 feat(media): refine music player and unify search`.
 
 Do not regress these completed items:
 
 - Music home is now a compact high-density page with `音乐 / 本地音乐` at the top and search/more actions on the right.
+- Music home search opens inline in the top bar. It must not add a new row, must not increase top-bar height, and must not render an internal search icon or X.
+- Clicking a search result plays the song, exits search, and does not navigate to the player page.
+- Clicking blank space exits search.
 - The main list must use real scanned local audio data. Do not introduce formal fake song data.
-- `我喜欢 / 最近播放 / 播放列表` are compact entry cards. If liked/recent data is not real yet, show a real empty state instead of fake counts or fake songs.
+- `我喜欢 / 最近播放 / 音乐文件夹` are compact entry cards. If liked/recent data is not real yet, show a real empty state instead of fake counts or fake songs.
+- `音乐文件夹` count must come from real `audioFolders.size`.
+- The quick entries and `全部歌曲` header stay fixed; only the song list scrolls.
+- The locate-current-song affordance exists and should continue to scroll the list to the current audio item.
 - Missing artwork must use the unified default music icon / moon-phase direction and must not show broken images.
 - The current playing song uses lightweight highlighting only; do not restore heavy purple blocks.
-- The bottom mini player is connected to real current-audio state and supports play/pause, next, and a progress line at the bottom of the controller.
+- Clicking a song row only plays audio. It must not directly enter the music player page.
+- Clicking the current song toggles play/pause without rebuilding the queue or seeking to `0`.
+- The row's right-side more button must not trigger row playback.
+- The bottom mini player is connected to real current-audio state and supports previous, play/pause, next, and a progress line at the bottom of the controller.
+- Mini-player progress supports click and drag seek.
+- Mini-player control buttons must not navigate to the player page; only the info area / moon thumb enters the player page.
 - The mini player outer wrapper must stay transparent while the inner control card keeps its dark rounded background, border, controls, and progress line.
 - The mini player must not change `MoonBottomNavigationBar` styling.
-- `RotatingMusicThumb` is the mini player's left rotating thumb component. Current visual direction is a purple moon/moon phase, rotating slowly as a whole and never showing broken artwork.
+- `RotatingMusicThumb` is the mini player's left rotating thumb component. Current visual direction is a purple moon/moon phase, rotating slowly as a whole, with clipping handled and no broken artwork.
+- Music player page first UI is complete and uses the real current audio and shared queue/controller. However, bottom function entries such as lyrics, A-B, timer, and favorite may still be placeholders / Toasts unless their real logic is separately implemented.
+- Music queue must use the real scanned audio list, not a single-item Media3 queue.
+- Sequential mode wraps at the first/last item; random mode uses non-fixed randomness and random history for previous.
+- Music folders are real scanned folder groups. Folder delete must delete only scanned audio files after confirmation and must not delete non-audio files or the folder itself.
+- Song multi-select and folder multi-select states must remain separate.
+- Cross-module search alignment uses `MoonInlineSearchField`. Video home, video folder detail, and book home search should keep top-bar inline behavior, visible search/more buttons, no internal icon/X, and blank/result click exit.
+- Book tab and profile tab bottom navigation icons are real icons, but bottom navigation height, selected state, and behavior must not change.
 
 Current boundary:
 
-- Music player page is not complete in this first-stage music-home work.
-- Music secondary list/detail page is not complete in this first-stage music-home work.
-- Do not document video-module or novel-module changes as part of this audio commit.
+- Complete lyrics, lyric parsing/sync, full music A-B loop logic, full sleep-timer logic, favorite persistence, complex playlist management, album/artist metadata, audio tag parsing, advanced music secondary filters, visualization, and enhanced background notification controls remain deferred.
+- Cross-module search alignment is a UI/interaction alignment only. It does not mean video player or book reader behavior changed.
 - No permissions, dependencies, Gradle changes, or Manifest changes are part of this work.
