@@ -415,6 +415,20 @@ class AppStateStore(private val context: Context) {
         return context.appStateDataStore.data.first()[RecentAudioUriKey]
     }
 
+    suspend fun loadLastMainTabRoute(): String? {
+        return context.appStateDataStore.data.first()[LastMainTabRouteKey]
+    }
+
+    suspend fun saveLastMainTabRoute(route: String?) {
+        context.appStateDataStore.edit { prefs ->
+            if (route.isNullOrBlank()) {
+                prefs.remove(LastMainTabRouteKey)
+            } else {
+                prefs[LastMainTabRouteKey] = route
+            }
+        }
+    }
+
     suspend fun saveRecentAudioUri(uri: String?) {
         context.appStateDataStore.edit { prefs ->
             if (uri.isNullOrBlank()) {
@@ -812,6 +826,7 @@ class AppStateStore(private val context: Context) {
         val VideoFolderPlaybackSpeedKey = stringPreferencesKey("video_folder_playback_speed_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")
         val RecentAudioUriKey = stringPreferencesKey("recent_audio_uri")
+        val LastMainTabRouteKey = stringPreferencesKey("last_main_tab_route")
         const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
         const val MAX_VIDEO_PLAYBACK_SPEED = 5f
         const val DEFAULT_VIDEO_PLAYBACK_SPEED = 1f

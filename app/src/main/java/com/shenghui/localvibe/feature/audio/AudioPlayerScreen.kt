@@ -2,6 +2,7 @@ package com.shenghui.localvibe.feature.audio
 
 import android.media.audiofx.Equalizer
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
@@ -16,7 +17,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -54,6 +58,7 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -76,6 +81,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,6 +94,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -102,6 +110,7 @@ import com.shenghui.localvibe.core.player.EqualizerPreset
 import com.shenghui.localvibe.core.player.applyPreset
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 
 private val AudioPlayerBackground = Color(0xFF090910)
 private val AudioPanelColor = Color(0xFF161421)
@@ -141,8 +150,8 @@ fun AudioPlayerScreen(
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .background(AudioPlayerBackground),
-        containerColor = AudioPlayerBackground
+            .background(Color.Transparent),
+        containerColor = Color.Transparent
     ) { innerPadding ->
         BoxWithConstraints(
             modifier = Modifier
@@ -159,6 +168,8 @@ fun AudioPlayerScreen(
                     isClosing = true
                 }
             }
+            val edgeGestureWidthPx = with(LocalDensity.current) { 32.dp.toPx() }
+            val edgeDismissThresholdPx = with(LocalDensity.current) { 64.dp.toPx() }
 
             LaunchedEffect(isClosing) {
                 if (isClosing && !hasDispatchedBack) {
@@ -168,22 +179,25 @@ fun AudioPlayerScreen(
                 }
             }
 
+            BackHandler(enabled = !isClosing) {
+                requestClose()
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .offset(y = closeOffsetY)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0xFF221C2D),
-                            AudioPlayerBackground,
-                            Color(0xFF08080F)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFF221C2D),
+                                AudioPlayerBackground,
+                                Color(0xFF08080F)
+                            )
                         )
                     )
-                )
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 14.dp)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
             ) {
                 if (mediaFile == null || player == null) {
                     IconButton(
@@ -201,6 +215,7 @@ fun AudioPlayerScreen(
                 } else {
                     ServiceAudioPlayer(
                         mediaFile = mediaFile,
+                        player = player,
                         currentPositionMs = currentPositionMs,
                         durationMs = durationMs,
                         isPlaying = isPlaying,
@@ -221,15 +236,83 @@ fun AudioPlayerScreen(
                         onDeleteCurrent = onDeleteCurrent
                     )
                 }
+                EdgeDismissArea(
+                    direction = 1,
+                    widthPx = edgeGestureWidthPx,
+                    thresholdPx = edgeDismissThresholdPx,
+                    enabled = !isClosing,
+                    onDismiss = requestClose,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+                EdgeDismissArea(
+                    direction = -1,
+                    widthPx = edgeGestureWidthPx,
+                    thresholdPx = edgeDismissThresholdPx,
+                    enabled = !isClosing,
+                    onDismiss = requestClose,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
         }
     }
+}
+
+@Composable
+private fun EdgeDismissArea(
+    direction: Int,
+    widthPx: Float,
+    thresholdPx: Float,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val widthDp = with(LocalDensity.current) { widthPx.toDp() }
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(widthDp)
+            .pointerInput(direction, thresholdPx, enabled) {
+                var dragX = 0f
+                var dragY = 0f
+                var triggered = false
+                detectDragGestures(
+                    onDragStart = {
+                        dragX = 0f
+                        dragY = 0f
+                        triggered = false
+                    },
+                    onDragEnd = {
+                        dragX = 0f
+                        dragY = 0f
+                        triggered = false
+                    },
+                    onDragCancel = {
+                        dragX = 0f
+                        dragY = 0f
+                        triggered = false
+                    }
+                ) { change, dragAmount ->
+                    if (!enabled || triggered) return@detectDragGestures
+                    dragX += dragAmount.x * direction
+                    dragY += dragAmount.y
+                    if (dragX > 0f) {
+                        change.consume()
+                    }
+                    if (dragX >= thresholdPx && dragX > abs(dragY) * 1.15f) {
+                        triggered = true
+                        change.consume()
+                        onDismiss()
+                    }
+                }
+            }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServiceAudioPlayer(
     mediaFile: LocalMediaFile,
+    player: Player,
     currentPositionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
@@ -256,14 +339,99 @@ private fun ServiceAudioPlayer(
     var showEqualizer by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showPlayModeMenu by remember { mutableStateOf(false) }
+    var showSleepTimer by remember { mutableStateOf(false) }
+    var sleepTimerEndAtMs by rememberSaveable { mutableLongStateOf(0L) }
+    var sleepTimerMinutes by rememberSaveable { mutableStateOf<Int?>(null) }
+    var sleepTimerMode by rememberSaveable { mutableStateOf(AudioSleepTimerMode.Off) }
+    var sleepTimerNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var draftSleepHours by rememberSaveable { mutableStateOf(0) }
+    var draftSleepMinutes by rememberSaveable { mutableStateOf(30) }
+    var draftStopAfterCurrent by rememberSaveable { mutableStateOf(false) }
+    var draftFinishTrackAfterTimer by rememberSaveable { mutableStateOf(false) }
     var selectedPreset by remember { mutableStateOf(EqualizerPreset.DEFAULT) }
     var equalizerEnabled by remember { mutableStateOf(true) }
     var bandLevels by remember { mutableStateOf(listOf(0f, 0f, 0f, 0f, 0f)) }
     var equalizerSupported by remember { mutableStateOf(true) }
+    val sleepRemainingMs = (sleepTimerEndAtMs - sleepTimerNowMs).coerceAtLeast(0L)
+    val sleepTimerActive = sleepTimerMode != AudioSleepTimerMode.Off
+    val openSleepTimerSheet = {
+        val minutes = when {
+            sleepTimerEndAtMs > System.currentTimeMillis() -> {
+                ((sleepTimerEndAtMs - System.currentTimeMillis() + 59_999L) / 60_000L)
+                    .toInt()
+                    .coerceIn(1, MaxSleepTimerHours * 60 + 59)
+            }
+            sleepTimerMinutes != null -> sleepTimerMinutes!!.coerceIn(1, MaxSleepTimerHours * 60 + 59)
+            else -> DefaultSleepTimerMinutes
+        }
+        draftSleepHours = (minutes / 60).coerceIn(0, MaxSleepTimerHours)
+        draftSleepMinutes = (minutes % 60).coerceIn(0, 59)
+        draftStopAfterCurrent = sleepTimerMode == AudioSleepTimerMode.StopAfterCurrentTrack
+        draftFinishTrackAfterTimer =
+            sleepTimerMode == AudioSleepTimerMode.CountdownThenFinishTrack ||
+                sleepTimerMode == AudioSleepTimerMode.PendingPauseAfterCurrentTrack
+        showSleepTimer = true
+    }
+    val clearSleepTimer = {
+        sleepTimerEndAtMs = 0L
+        sleepTimerMinutes = null
+        sleepTimerMode = AudioSleepTimerMode.Off
+        sleepTimerNowMs = System.currentTimeMillis()
+        draftStopAfterCurrent = false
+        draftFinishTrackAfterTimer = false
+    }
 
     LaunchedEffect(currentPositionMs, isDraggingProgress) {
         if (!isDraggingProgress) {
             displayPositionMs = currentPositionMs
+        }
+    }
+
+    LaunchedEffect(sleepTimerEndAtMs, sleepTimerMode, player) {
+        if (
+            sleepTimerEndAtMs <= 0L ||
+            sleepTimerMode == AudioSleepTimerMode.Off ||
+            sleepTimerMode == AudioSleepTimerMode.StopAfterCurrentTrack ||
+            sleepTimerMode == AudioSleepTimerMode.PendingPauseAfterCurrentTrack
+        ) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            val now = System.currentTimeMillis()
+            sleepTimerNowMs = now
+            val remainingMs = sleepTimerEndAtMs - now
+            if (remainingMs <= 0L) {
+                if (sleepTimerMode == AudioSleepTimerMode.CountdownThenFinishTrack) {
+                    sleepTimerMode = AudioSleepTimerMode.PendingPauseAfterCurrentTrack
+                    sleepTimerEndAtMs = 0L
+                    Toast.makeText(context, "定时结束，将播完当前歌曲后暂停", Toast.LENGTH_SHORT).show()
+                } else {
+                    player.pause()
+                    sleepTimerEndAtMs = 0L
+                    sleepTimerMinutes = null
+                    sleepTimerMode = AudioSleepTimerMode.Off
+                    Toast.makeText(context, "定时结束，已暂停播放", Toast.LENGTH_SHORT).show()
+                }
+                break
+            }
+            delay(remainingMs.coerceAtMost(1000L))
+        }
+    }
+
+    LaunchedEffect(currentPositionMs, durationMs, sleepTimerMode, player) {
+        if (
+            sleepTimerMode == AudioSleepTimerMode.StopAfterCurrentTrack ||
+            sleepTimerMode == AudioSleepTimerMode.PendingPauseAfterCurrentTrack
+        ) {
+            if (durationMs <= 0L) return@LaunchedEffect
+            val remainingToTrackEndMs = durationMs - currentPositionMs
+            if (remainingToTrackEndMs in 0L..1200L) {
+                player.pause()
+                sleepTimerEndAtMs = 0L
+                sleepTimerMinutes = null
+                sleepTimerMode = AudioSleepTimerMode.Off
+                Toast.makeText(context, "已播完当前歌曲，暂停播放", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -291,7 +459,9 @@ private fun ServiceAudioPlayer(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -425,13 +595,12 @@ private fun ServiceAudioPlayer(
                     iconSize = 38.dp
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                        contentAlignment = Alignment.Center,
+                    IconButton(
+                        onClick = onPlayPause,
                         modifier = Modifier
                             .size(70.dp)
                             .clip(CircleShape)
                             .background(AudioPurple)
-                            .clickable(onClick = onPlayPause)
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -476,9 +645,10 @@ private fun ServiceAudioPlayer(
                     onClick = { Toast.makeText(context, "A-B 循环后续实现", Toast.LENGTH_SHORT).show() }
                 )
                 SmallIconAction(
-                    label = "定时",
+                    label = sleepTimerButtonLabel(sleepTimerMode, sleepRemainingMs),
                     icon = { Icon(Icons.Filled.Timer, contentDescription = null) },
-                    onClick = { Toast.makeText(context, "睡眠定时后续实现", Toast.LENGTH_SHORT).show() }
+                    onClick = openSleepTimerSheet,
+                    active = sleepTimerActive
                 )
                 SmallIconAction(
                     label = "收藏",
@@ -534,6 +704,60 @@ private fun ServiceAudioPlayer(
                 bandLevels = EqualizerPreset.DEFAULT.defaultBandLevels()
             },
             onDismiss = { showEqualizer = false }
+        )
+    }
+
+    if (showSleepTimer) {
+        SleepTimerSheet(
+            hours = draftSleepHours,
+            minutes = draftSleepMinutes,
+            stopAfterCurrent = draftStopAfterCurrent,
+            finishTrackAfterTimer = draftFinishTrackAfterTimer,
+            mode = sleepTimerMode,
+            remainingMs = sleepRemainingMs,
+            onHoursChange = { draftSleepHours = it.coerceIn(0, MaxSleepTimerHours) },
+            onMinutesChange = { draftSleepMinutes = it.coerceIn(0, 59) },
+            onStopAfterCurrentChange = { enabled ->
+                draftStopAfterCurrent = enabled
+                if (enabled) draftFinishTrackAfterTimer = false
+            },
+            onFinishTrackAfterTimerChange = { enabled ->
+                draftFinishTrackAfterTimer = enabled
+                if (enabled) draftStopAfterCurrent = false
+            },
+            onConfirm = {
+                if (draftStopAfterCurrent) {
+                    sleepTimerEndAtMs = 0L
+                    sleepTimerMinutes = null
+                    sleepTimerMode = AudioSleepTimerMode.StopAfterCurrentTrack
+                    sleepTimerNowMs = System.currentTimeMillis()
+                    showSleepTimer = false
+                    Toast.makeText(context, "已开启：播完当前歌曲后暂停", Toast.LENGTH_SHORT).show()
+                    return@SleepTimerSheet
+                }
+                val totalMinutes = draftSleepHours * 60 + draftSleepMinutes
+                if (totalMinutes <= 0) {
+                    Toast.makeText(context, "请选择有效时间", Toast.LENGTH_SHORT).show()
+                    return@SleepTimerSheet
+                }
+                val now = System.currentTimeMillis()
+                sleepTimerMinutes = totalMinutes
+                sleepTimerEndAtMs = now + totalMinutes * 60_000L
+                sleepTimerNowMs = now
+                sleepTimerMode = if (draftFinishTrackAfterTimer) {
+                    AudioSleepTimerMode.CountdownThenFinishTrack
+                } else {
+                    AudioSleepTimerMode.Countdown
+                }
+                showSleepTimer = false
+                Toast.makeText(context, "已开启睡眠定时", Toast.LENGTH_SHORT).show()
+            },
+            onCancelTimer = {
+                clearSleepTimer()
+                showSleepTimer = false
+                Toast.makeText(context, "已关闭睡眠定时", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showSleepTimer = false }
         )
     }
 
@@ -910,6 +1134,289 @@ private fun QueueDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun SleepTimerSheet(
+    hours: Int,
+    minutes: Int,
+    stopAfterCurrent: Boolean,
+    finishTrackAfterTimer: Boolean,
+    mode: AudioSleepTimerMode,
+    remainingMs: Long,
+    onHoursChange: (Int) -> Unit,
+    onMinutesChange: (Int) -> Unit,
+    onStopAfterCurrentChange: (Boolean) -> Unit,
+    onFinishTrackAfterTimerChange: (Boolean) -> Unit,
+    onConfirm: () -> Unit,
+    onCancelTimer: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF181421),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .size(width = 38.dp, height = 4.dp)
+                    .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(99.dp))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.62f)
+                .navigationBarsPadding()
+                .padding(start = 22.dp, end = 22.dp, bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "设定睡眠定时",
+                    color = AudioTextPrimary,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "×",
+                    color = AudioTextPrimary.copy(alpha = 0.82f),
+                    fontSize = 28.sp,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .clip(CircleShape)
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (mode != AudioSleepTimerMode.Off) {
+                    Text(
+                        text = sleepTimerStatusText(mode, remainingMs),
+                        color = AudioPurpleLight.copy(alpha = 0.86f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 20.dp),
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(118.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.White.copy(alpha = 0.025f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TimeWheelColumn(
+                            value = hours,
+                            range = 0..MaxSleepTimerHours,
+                            enabled = !stopAfterCurrent,
+                            loop = true,
+                            onValueChange = onHoursChange
+                        )
+                        Text(
+                            text = ":",
+                            color = AudioPurpleLight.copy(alpha = if (stopAfterCurrent) 0.36f else 0.82f),
+                            fontSize = 26.sp,
+                            modifier = Modifier.padding(horizontal = 18.dp)
+                        )
+                        TimeWheelColumn(
+                            value = minutes,
+                            range = 0..59,
+                            enabled = !stopAfterCurrent,
+                            loop = true,
+                            onValueChange = onMinutesChange
+                        )
+                    }
+                }
+
+                if (stopAfterCurrent) {
+                    Text(
+                        text = "将忽略倒计时，在当前歌曲结束后暂停。",
+                        color = AudioTextSecondary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                SleepTimerSwitchRow(
+                    text = "播完当前歌曲后暂停",
+                    checked = stopAfterCurrent,
+                    onCheckedChange = onStopAfterCurrentChange
+                )
+                SleepTimerSwitchRow(
+                    text = "定时结束后播放完整歌曲再暂停",
+                    checked = finishTrackAfterTimer,
+                    onCheckedChange = onFinishTrackAfterTimerChange
+                )
+
+                if (mode != AudioSleepTimerMode.Off) {
+                    TextButton(
+                        onClick = onCancelTimer,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text("关闭定时", color = Color(0xFFFFB4C1))
+                    }
+                }
+            }
+
+            Button(
+                onClick = onConfirm,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AudioPurple.copy(alpha = 0.34f),
+                    contentColor = AudioTextPrimary
+                )
+            ) {
+                Text("确认定时", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimeWheelColumn(
+    value: Int,
+    range: IntRange,
+    enabled: Boolean,
+    loop: Boolean,
+    onValueChange: (Int) -> Unit
+) {
+    val stepPx = with(LocalDensity.current) { 18.dp.toPx() }
+    val latestValue by rememberUpdatedState(value)
+    val latestOnValueChange by rememberUpdatedState(onValueChange)
+    val alpha = if (enabled) 1f else 0.38f
+    val previous = value.stepIn(range, -1, loop)
+    val next = value.stepIn(range, 1, loop)
+    Column(
+        modifier = Modifier
+            .width(86.dp)
+            .graphicsLayer { this.alpha = alpha }
+            .pointerInput(enabled, stepPx, loop, range.first, range.last) {
+                var accumulatedDragPx = 0f
+                var gestureValue = latestValue
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        accumulatedDragPx = 0f
+                        gestureValue = latestValue
+                    },
+                    onDragEnd = { accumulatedDragPx = 0f },
+                    onDragCancel = { accumulatedDragPx = 0f }
+                ) { change, dragAmount ->
+                    if (enabled) {
+                        change.consume()
+                        accumulatedDragPx += dragAmount
+                        val stepCount = (accumulatedDragPx / stepPx).toInt()
+                        if (stepCount != 0) {
+                            gestureValue = gestureValue.stepIn(range, -stepCount, loop)
+                            latestOnValueChange(gestureValue)
+                            accumulatedDragPx -= stepCount * stepPx
+                        }
+                    } else {
+                        change.consume()
+                    }
+                }
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = previous.toString().padStart(2, '0'),
+            color = AudioTextSecondary.copy(alpha = 0.24f),
+            fontSize = 13.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = enabled) { onValueChange(previous) }
+                .padding(horizontal = 18.dp, vertical = 2.dp)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.035f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = value.toString().padStart(2, '0'),
+                color = AudioPurpleLight,
+                fontSize = 27.sp
+            )
+        }
+        Text(
+            text = next.toString().padStart(2, '0'),
+            color = AudioTextSecondary.copy(alpha = 0.24f),
+            fontSize = 13.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = enabled) { onValueChange(next) }
+                .padding(horizontal = 18.dp, vertical = 2.dp)
+        )
+    }
+}
+
+@Composable
+private fun SleepTimerSwitchRow(
+    text: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.025f))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = text,
+            color = AudioTextPrimary.copy(alpha = 0.88f),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.scale(0.72f),
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = AudioPurple.copy(alpha = 0.74f),
+                uncheckedThumbColor = Color.White.copy(alpha = 0.82f),
+                uncheckedTrackColor = Color.White.copy(alpha = 0.16f),
+                uncheckedBorderColor = Color.Transparent
+            )
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun EqualizerDialog(
     selectedPreset: EqualizerPreset,
     enabled: Boolean,
@@ -1146,5 +1653,67 @@ private fun VerticalBandControl(
             fontSize = 11.sp,
             maxLines = 1
         )
+    }
+}
+
+private enum class AudioSleepTimerMode {
+    Off,
+    Countdown,
+    CountdownThenFinishTrack,
+    StopAfterCurrentTrack,
+    PendingPauseAfterCurrentTrack
+}
+
+private const val MaxSleepTimerHours = 24
+private const val DefaultSleepTimerMinutes = 30
+
+private fun Int.stepIn(range: IntRange, delta: Int, loop: Boolean): Int {
+    if (!loop) {
+        return (this + delta).coerceIn(range.first, range.last)
+    }
+    val size = range.last - range.first + 1
+    val normalized = (this - range.first + delta).floorMod(size)
+    return range.first + normalized
+}
+
+private fun Int.floorMod(divisor: Int): Int {
+    return ((this % divisor) + divisor) % divisor
+}
+
+private fun sleepTimerButtonLabel(mode: AudioSleepTimerMode, remainingMs: Long): String {
+    return when (mode) {
+        AudioSleepTimerMode.Off -> "定时"
+        AudioSleepTimerMode.StopAfterCurrentTrack -> "播完暂停"
+        AudioSleepTimerMode.PendingPauseAfterCurrentTrack -> "待播完"
+        AudioSleepTimerMode.Countdown,
+        AudioSleepTimerMode.CountdownThenFinishTrack -> {
+            if (remainingMs > 0L) formatSleepTimerRemaining(remainingMs) else "定时中"
+        }
+    }
+}
+
+private fun sleepTimerStatusText(mode: AudioSleepTimerMode, remainingMs: Long): String {
+    return when (mode) {
+        AudioSleepTimerMode.Off -> ""
+        AudioSleepTimerMode.Countdown -> "已开启 · 剩余 ${formatSleepTimerRemaining(remainingMs)}"
+        AudioSleepTimerMode.CountdownThenFinishTrack -> {
+            "已开启 · 剩余 ${formatSleepTimerRemaining(remainingMs)} · 到时播完本曲"
+        }
+        AudioSleepTimerMode.StopAfterCurrentTrack -> "已开启 · 播完当前歌曲后暂停"
+        AudioSleepTimerMode.PendingPauseAfterCurrentTrack -> "定时已到 · 将播完当前歌曲后暂停"
+    }
+}
+
+private fun formatSleepTimerRemaining(remainingMs: Long): String {
+    val totalSeconds = (remainingMs / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+    } else if (minutes > 0L) {
+        "${minutes}:${seconds.toString().padStart(2, '0')}"
+    } else {
+        "${seconds}秒"
     }
 }

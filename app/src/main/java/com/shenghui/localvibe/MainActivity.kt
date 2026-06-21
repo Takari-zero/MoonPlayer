@@ -194,6 +194,7 @@ private fun LocalVibeApp() {
     var musicCurrentPositionMs by remember { mutableStateOf(0L) }
     var musicDurationMs by remember { mutableStateOf(0L) }
     var musicIsPlaying by remember { mutableStateOf(false) }
+    var initialMainRoute by remember { mutableStateOf<String?>(null) }
     var lastRootBackToastAt by remember { mutableLongStateOf(0L) }
     var rootBackToast by remember { mutableStateOf<Toast?>(null) }
     var pendingFolderVideoDeleteFiles by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
@@ -427,6 +428,29 @@ private fun LocalVibeApp() {
         )
         controller.prepare()
         controller.play()
+    }
+
+    fun playOrResumeAudio(preferred: LocalMediaFile? = null): Boolean {
+        val controller = musicController ?: return false
+        if (controller.isPlaying) {
+            controller.pause()
+            return true
+        }
+        val currentFile = fallbackCurrentAudioFile(preferred)
+        if (controller.mediaItemCount == 0) {
+            val file = currentFile ?: allVisibleAudioFiles().firstOrNull() ?: return false
+            playAudioQueue(audioPlaybackQueueFor(file), file)
+            return true
+        }
+        when (controller.playbackState) {
+            Player.STATE_IDLE -> controller.prepare()
+            Player.STATE_ENDED -> controller.seekTo(
+                controller.currentMediaItemIndex.coerceAtLeast(0),
+                0L
+            )
+        }
+        controller.play()
+        return true
     }
 
     fun playAdjacentAudioFromRealQueue(
@@ -1553,6 +1577,10 @@ private fun LocalVibeApp() {
         }
     }
     LaunchedEffect(Unit) {
+        initialMainRoute = appStateStore.loadLastMainTabRoute().toRestorableMainRoute()
+    }
+
+    LaunchedEffect(Unit) {
         appStateStore.loadProgress().forEach { progress ->
             when (progress.mediaType) {
                 LocalMediaType.VIDEO.name -> {
@@ -1941,9 +1969,17 @@ private fun LocalVibeApp() {
                 restoreState = true
             }
         }
-        NavHost(
+        val backStackEntry by navController.currentBackStackEntryAsState()
+        val currentRoute = backStackEntry?.destination?.route
+        LaunchedEffect(currentRoute, currentFolderTargetType) {
+            currentRoute.toMainTabRoute(currentFolderTargetType)?.let { route ->
+                appStateStore.saveLastMainTabRoute(route)
+            }
+        }
+        val startRoute = initialMainRoute
+        if (startRoute != null) NavHost(
             navController = navController,
-            startDestination = LocalVibeRoute.VideoLibrary
+            startDestination = startRoute
         ) {
             composable(LocalVibeRoute.VideoLibrary) {
                 MainTabScaffold(navController = navController) { contentModifier ->
@@ -2025,17 +2061,9 @@ private fun LocalVibeApp() {
                         }
                     },
                     onMiniPlayPause = {
-                        val controller = musicController ?: return@MainTabScaffold
-                        if (controller.currentMediaItem == null) {
-                            val file = miniAudioFile ?: allVisibleAudioFiles().firstOrNull()
-                            if (file == null) {
-                                Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
-                            } else {
-                                playAudioQueue(audioPlaybackQueueFor(file), file)
-                            }
-                            return@MainTabScaffold
+                        if (!playOrResumeAudio(miniAudioFile)) {
+                            Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
                         }
-                        if (controller.isPlaying) controller.pause() else controller.play()
                     },
                     onMiniNext = {
                         val controller = musicController ?: return@MainTabScaffold
@@ -2393,59 +2421,173 @@ private fun LocalVibeApp() {
                 } ?: selectedMediaFile
                     ?.takeIf { it.type == LocalMediaType.AUDIO }
                     ?: selectedAudioUri?.let { uri -> audioQueue.firstOrNull { it.uri == uri } }
-                AudioPlayerScreen(
-                    mediaFile = resolvedAudioFile,
-                    player = musicController,
-                    currentPositionMs = musicCurrentPositionMs,
-                    durationMs = musicDurationMs,
-                    isPlaying = musicIsPlaying,
-                    isFavorite = resolvedAudioFile?.normalizedUri() in favoriteAudioUris,
-                    audioSessionId = MusicPlaybackService.currentAudioSessionId,
-                    queue = audioQueue,
-                    currentIndex = currentAudioIndex,
-                    playMode = audioPlayMode,
-                    onPlayModeChanged = { mode ->
-                        val currentFile = resolvedAudioFile ?: fallbackCurrentAudioFile()
-                        audioPlayMode = mode
-                        if (mode == AudioPlayMode.SHUFFLE) {
-                            audioShuffleHistory = emptyList()
-                            val shuffledQueue = reshuffleAudioQueueKeepingCurrent(currentFile)
-                            if (currentFile != null && shuffledQueue.size > 1) {
-                                playAudioQueue(shuffledQueue, currentFile)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    MainTabScaffold(
+                        navController = navController,
+                        miniAudioFile = miniAudioFile,
+                        miniIsPlaying = musicIsPlaying,
+                        miniProgressMs = musicCurrentPositionMs,
+                        miniDurationMs = musicDurationMs,
+                        onMiniPrevious = {
+                            if (!playAudioByMode(miniAudioFile, direction = -1)) {
+                                Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
                             }
-                        } else {
-                            audioShuffleHistory = emptyList()
-                        }
-                        applyAudioPlayMode(musicController, mode)
-                    },
-                    onSelectAudio = { index ->
-                        val nextFile = audioQueue.getOrNull(index) ?: return@AudioPlayerScreen
-                        playAudioQueue(audioQueue, nextFile)
-                    },
-                    onPlayPause = {
-                        val controller = musicController ?: return@AudioPlayerScreen
-                        if (controller.isPlaying) controller.pause() else controller.play()
-                    },
-                    onPrevious = {
-                        if (!playAudioByMode(resolvedAudioFile, direction = -1)) {
-                            Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onNext = {
-                        if (!playAudioByMode(resolvedAudioFile, direction = 1)) {
-                            Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onSeekTo = { positionMs ->
-                        musicController?.seekTo(positionMs)
-                    },
-                    onToggleFavorite = {
-                        toggleFavoriteAudio(resolvedAudioFile)
-                    },
-                    onBack = { navController.popBackStack() },
-                    onRemoveCurrent = { file -> removeMediaFromList(file) },
-                    onDeleteCurrent = { file -> permanentlyDeleteMedia(file) }
-                )
+                        },
+                        onMiniPlayPause = {
+                            if (!playOrResumeAudio(miniAudioFile)) {
+                                Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onMiniNext = {
+                            if (!playAudioByMode(miniAudioFile, direction = 1)) {
+                                Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onMiniSeekTo = { positionMs ->
+                            musicController?.seekTo(positionMs)
+                        },
+                        onOpenMiniPlayer = { openMiniAudio() }
+                    ) { contentModifier ->
+                        val audioFolderGroups = audioFolders.map { folder ->
+                            val visibleFiles = scannedFilesByFolder[
+                                typedFolderKey(LocalMediaType.AUDIO, folder.id)
+                            ].orEmpty().filterVisibleAudios()
+                            MediaFolderGroupUiModel(
+                                folder = folder,
+                                files = visibleFiles,
+                                source = folder.sourceLabel()
+                            )
+                        }.filter { it.files.isNotEmpty() }
+                        val audioFiles = audioFolderGroups
+                            .flatMap { it.files }
+                            .filterVisibleAudios()
+                            .sortedBy { it.name.lowercase() }
+                        val visibleFavoriteAudioUris = favoriteAudioUris.filter { uri ->
+                            audioFiles.any { it.normalizedUri() == uri.trim() }
+                        }.toSet()
+                        val visibleRecentAudioUris = audioRecentRecords
+                            .map { it.uri.trim() }
+                            .filter { uri -> audioFiles.any { it.normalizedUri() == uri } }
+                        AudioLibraryScreen(
+                            audioFiles = audioFiles,
+                            audioFolders = audioFolderGroups,
+                            audioProgressMap = emptyMap(),
+                            favoriteAudioUris = visibleFavoriteAudioUris,
+                            recentAudioUris = visibleRecentAudioUris,
+                            permissionDeniedMessage = if (audioPermissionDenied) {
+                                "没有媒体权限，无法自动扫描音乐。你仍然可以手动添加文件夹。"
+                            } else {
+                                null
+                            },
+                            currentAudioUri = musicCurrentUri,
+                            onAddFolder = {
+                                currentAddTargetType = LocalMediaType.AUDIO
+                                openDocumentTreeLauncher.launch(null)
+                            },
+                            onOpenFolder = { item ->
+                                currentFolder = item.folder
+                                currentFolderTargetType = LocalMediaType.AUDIO
+                                navController.navigate(LocalVibeRoute.Folder)
+                            },
+                            onOpenAudio = { file, queue ->
+                                playAudioQueue(queue, file)
+                            },
+                            onToggleCurrentAudioPlayback = {
+                                val currentFile = fallbackCurrentAudioFile()
+                                if (!playOrResumeAudio(currentFile)) {
+                                    Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onRemoveFavoriteAudio = { file ->
+                                removeFavoriteAudio(file)
+                            },
+                            onShuffleAll = { queue ->
+                                val shuffledQueue = queue.shuffled()
+                                val firstFile = shuffledQueue.firstOrNull()
+                                if (firstFile != null) {
+                                    playAudioQueue(shuffledQueue, firstFile, shuffle = true)
+                                }
+                            },
+                            onRemoveAudio = { file ->
+                                removeMediaFromList(file)
+                            },
+                            onDeleteAudio = { file ->
+                                permanentlyDeleteMedia(file)
+                            },
+                            onRemoveAudios = { files ->
+                                removeMediaFromList(files)
+                            },
+                            onDeleteAudios = { files ->
+                                permanentlyDeleteMedia(files)
+                            },
+                            onRemoveAudioFolder = { item ->
+                                removeMediaFromList(item.files)
+                            },
+                            onDeleteAudioFolder = { item ->
+                                permanentlyDeleteMedia(item.files)
+                            },
+                            onRescanAudio = {
+                                autoScanVideoAndAudio(force = true, showCompletionToast = true)
+                            },
+                            onBackToDesktop = { returnToDesktopFromRoot() },
+                            modifier = contentModifier
+                        )
+                    }
+                    AudioPlayerScreen(
+                        mediaFile = resolvedAudioFile,
+                        player = musicController,
+                        currentPositionMs = musicCurrentPositionMs,
+                        durationMs = musicDurationMs,
+                        isPlaying = musicIsPlaying,
+                        isFavorite = resolvedAudioFile?.normalizedUri() in favoriteAudioUris,
+                        audioSessionId = MusicPlaybackService.currentAudioSessionId,
+                        queue = audioQueue,
+                        currentIndex = currentAudioIndex,
+                        playMode = audioPlayMode,
+                        onPlayModeChanged = { mode ->
+                            val currentFile = resolvedAudioFile ?: fallbackCurrentAudioFile()
+                            audioPlayMode = mode
+                            if (mode == AudioPlayMode.SHUFFLE) {
+                                audioShuffleHistory = emptyList()
+                                val shuffledQueue = reshuffleAudioQueueKeepingCurrent(currentFile)
+                                if (currentFile != null && shuffledQueue.size > 1) {
+                                    playAudioQueue(shuffledQueue, currentFile)
+                                }
+                            } else {
+                                audioShuffleHistory = emptyList()
+                            }
+                            applyAudioPlayMode(musicController, mode)
+                        },
+                        onSelectAudio = { index ->
+                            val nextFile = audioQueue.getOrNull(index) ?: return@AudioPlayerScreen
+                            playAudioQueue(audioQueue, nextFile)
+                        },
+                        onPlayPause = {
+                            if (!playOrResumeAudio(resolvedAudioFile)) {
+                                Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onPrevious = {
+                            if (!playAudioByMode(resolvedAudioFile, direction = -1)) {
+                                Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onNext = {
+                            if (!playAudioByMode(resolvedAudioFile, direction = 1)) {
+                                Toast.makeText(context, "当前列表只有一首歌", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onSeekTo = { positionMs ->
+                            musicController?.seekTo(positionMs)
+                        },
+                        onToggleFavorite = {
+                            toggleFavoriteAudio(resolvedAudioFile)
+                        },
+                        onBack = { navController.popBackStack() },
+                        onRemoveCurrent = { file -> removeMediaFromList(file) },
+                        onDeleteCurrent = { file -> permanentlyDeleteMedia(file) }
+                    )
+                }
             }
             composable(LocalVibeRoute.Settings) {
                 SettingsScreen(
@@ -2739,9 +2881,14 @@ private fun MiniAudioPlayerBar(
 private fun MainBottomBar(navController: NavController) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    val selectedRoute = if (currentRoute == LocalVibeRoute.AudioPlayer) {
+        LocalVibeRoute.AudioLibrary
+    } else {
+        currentRoute
+    }
 
     MoonBottomNavigationBar(
-        selectedRoute = currentRoute,
+        selectedRoute = selectedRoute,
         onRouteSelected = { route ->
             if (currentRoute != route) {
                 navController.navigate(route) {
@@ -2902,6 +3049,33 @@ private fun LocalMediaType.emptyFolderMessage(): String {
 
 private fun String.toLocalMediaTypeOrNull(): LocalMediaType? {
     return runCatching { LocalMediaType.valueOf(this) }.getOrNull()
+}
+
+private fun String?.toRestorableMainRoute(): String {
+    return when (this) {
+        LocalVibeRoute.AudioLibrary -> LocalVibeRoute.AudioLibrary
+        LocalVibeRoute.BookLibrary -> LocalVibeRoute.BookLibrary
+        LocalVibeRoute.VideoLibrary -> LocalVibeRoute.VideoLibrary
+        else -> LocalVibeRoute.VideoLibrary
+    }
+}
+
+private fun String?.toMainTabRoute(folderTargetType: LocalMediaType?): String? {
+    return when (this) {
+        LocalVibeRoute.AudioLibrary,
+        LocalVibeRoute.AudioPlayer -> LocalVibeRoute.AudioLibrary
+        LocalVibeRoute.VideoLibrary,
+        LocalVibeRoute.VideoPlayer -> LocalVibeRoute.VideoLibrary
+        LocalVibeRoute.BookLibrary,
+        LocalVibeRoute.BookListen -> LocalVibeRoute.BookLibrary
+        LocalVibeRoute.Folder -> when (folderTargetType) {
+            LocalMediaType.AUDIO -> LocalVibeRoute.AudioLibrary
+            LocalMediaType.BOOK -> LocalVibeRoute.BookLibrary
+            LocalMediaType.VIDEO -> LocalVibeRoute.VideoLibrary
+            else -> null
+        }
+        else -> null
+    }
 }
 
 private fun Uri.toLocalBookFile(context: android.content.Context): LocalMediaFile? {
