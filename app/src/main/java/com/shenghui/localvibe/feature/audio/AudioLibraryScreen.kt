@@ -162,8 +162,7 @@ fun AudioLibraryScreen(
 
     LaunchedEffect(librarySection, selectedAudioFolderKey, sectionSongs) {
         val shouldScopeQueue = selectedAudioFolder != null ||
-            librarySection == AudioLibrarySection.Favorites ||
-            librarySection == AudioLibrarySection.Recent
+            librarySection == AudioLibrarySection.Favorites
         if (shouldScopeQueue && sectionSongs.isNotEmpty()) {
             onQueueScopeChanged(sectionSongs)
         }
@@ -343,8 +342,7 @@ fun AudioLibraryScreen(
             if (
                 !isMultiSelectMode &&
                 (selectedAudioFolder != null ||
-                    librarySection == AudioLibrarySection.Favorites ||
-                    librarySection == AudioLibrarySection.Recent)
+                    librarySection == AudioLibrarySection.Favorites)
             ) {
                 AudioPlayAllActions(
                     onPlayAll = {
@@ -515,7 +513,19 @@ fun AudioLibraryScreen(
                                     onToggleCurrentAudioPlayback()
                                     if (isSearching) closeSearch()
                                 } else {
-                                    onOpenAudio(song, shownSongs)
+                                    if (librarySection == AudioLibrarySection.Recent && selectedAudioFolder == null) {
+                                        val songUri = song.uri.trim()
+                                        val sourceSong = sortedSongs.firstOrNull {
+                                            it.uri.trim() == songUri
+                                        }
+                                        if (sourceSong == null) {
+                                            Toast.makeText(context, "歌曲不存在或已被移除", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            onOpenAudio(sourceSong, sortedSongs)
+                                        }
+                                    } else {
+                                        onOpenAudio(song, shownSongs)
+                                    }
                                     if (isSearching) closeSearch()
                                 }
                             }
