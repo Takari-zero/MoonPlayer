@@ -51,6 +51,8 @@ object MediaStoreScanner {
                 add(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
                 add(MediaStore.Video.Media.BUCKET_ID)
                 add(MediaStore.Video.Media.DURATION)
+            } else if (type == LocalMediaType.AUDIO) {
+                add(MediaStore.Audio.Media.DURATION)
             }
         }.toTypedArray()
         val groupedFiles = linkedMapOf<String, MutableList<LocalMediaFile>>()
@@ -74,10 +76,16 @@ object MediaStoreScanner {
                 } else {
                     -1
                 }
-                val durationColumn = if (includeVideoBucketColumns) {
-                    cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
-                } else {
-                    -1
+                val durationColumn = when {
+                    includeVideoBucketColumns -> {
+                        cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+                    }
+                    type == LocalMediaType.AUDIO -> {
+                        cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                    }
+                    else -> {
+                        -1
+                    }
                 }
 
                 while (cursor.moveToNext()) {
@@ -103,7 +111,7 @@ object MediaStoreScanner {
                     val rawFolderKey = relativePath.toFolderKey()
                         .ifBlank { dataPath.toParentFolderKey() }
                         .ifBlank { fallbackFolderName }
-                    val folderKey = if (type == LocalMediaType.VIDEO) {
+                    val folderKey = if (type == LocalMediaType.VIDEO || type == LocalMediaType.AUDIO) {
                         rawFolderKey.toCanonicalFolderKey().ifBlank { rawFolderKey }
                     } else {
                         rawFolderKey
@@ -138,7 +146,10 @@ object MediaStoreScanner {
         }
 
         val scannedFolders = groupedFiles.map { (folderId, files) ->
-            val folderName = files.toBestFolderDisplayName(fallbackFolderName)
+            val folderName = files.toBestFolderDisplayName(
+                fallbackFolderName = fallbackFolderName,
+                preferLowercaseName = type == LocalMediaType.AUDIO
+            )
             ScannedMediaFolder(
                 folder = MediaFolderUiModel(
                     id = folderId,
@@ -190,7 +201,10 @@ object MediaStoreScanner {
             .substringAfterLast('/', missingDelimiterValue = "")
     }
 
-    private fun List<LocalMediaFile>.toBestFolderDisplayName(fallbackFolderName: String): String {
+    private fun List<LocalMediaFile>.toBestFolderDisplayName(
+        fallbackFolderName: String,
+        preferLowercaseName: Boolean = false
+    ): String {
         val names = mapNotNull { it.parentFolderName?.trim()?.takeIf { name -> name.isNotBlank() } }
         if (names.isEmpty()) return fallbackFolderName
 
@@ -203,6 +217,12 @@ object MediaStoreScanner {
             )
             ?.key
             ?: return names.first()
+
+        if (preferLowercaseName) {
+            names.firstOrNull { name ->
+                name.equals(dominantKey, ignoreCase = false)
+            }?.let { return it }
+        }
 
         return names
             .filter { it.equals(dominantKey, ignoreCase = true) }

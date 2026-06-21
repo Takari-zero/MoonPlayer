@@ -108,6 +108,7 @@ import com.shenghui.localvibe.core.ui.theme.LocalVibeTheme
 import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
 import com.shenghui.localvibe.feature.audio.AudioLibrarySection
+import com.shenghui.localvibe.feature.audio.AudioSortMode
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
 import com.shenghui.localvibe.feature.folder.FolderScreen
@@ -160,6 +161,7 @@ private fun LocalVibeApp() {
     val audioProgressMap = remember { mutableStateMapOf<String, Long>() }
     val bookProgressMap = remember { mutableStateMapOf<String, PersistedBookProgress>() }
     var hiddenAudioUris by remember { mutableStateOf(emptySet<String>()) }
+    var hiddenAudioFolderKeys by remember { mutableStateOf(emptySet<String>()) }
     var favoriteAudioUris by remember { mutableStateOf(emptySet<String>()) }
     var audioRecentRecords by remember { mutableStateOf<List<PersistedAudioRecentRecord>>(emptyList()) }
     var hiddenVideoUris by remember { mutableStateOf(emptySet<String>()) }
@@ -181,6 +183,8 @@ private fun LocalVibeApp() {
     var audioQueue by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
     var currentAudioIndex by remember { mutableStateOf(0) }
     var audioPlayMode by remember { mutableStateOf(AudioPlayMode.NORMAL) }
+    var audioSortMode by remember { mutableStateOf(AudioSortMode.Default) }
+    var audioSortAscending by remember { mutableStateOf(false) }
     var audioShuffleHistory by remember { mutableStateOf<List<String>>(emptyList()) }
     var audioLibrarySection by rememberSaveable { mutableStateOf(AudioLibrarySection.AllSongs) }
     var selectedAudioFolderKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -273,19 +277,20 @@ private fun LocalVibeApp() {
     }
 
     fun List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder>.filterHiddenAudioFolders(): List<com.shenghui.localvibe.core.scanner.ScannedMediaFolder> {
-        return mapNotNull { result ->
-            val visibleFiles = result.files.filterVisibleAudios()
-            if (visibleFiles.isEmpty()) {
-                null
-            } else {
-                result.copy(
-                    folder = result.folder.copy(
-                        audioCount = visibleFiles.count { it.type == LocalMediaType.AUDIO }
-                    ),
-                    files = visibleFiles
-                )
+        return filterNot { it.folder.id.trim() in hiddenAudioFolderKeys }
+            .mapNotNull { result ->
+                val visibleFiles = result.files.filterVisibleAudios()
+                if (visibleFiles.isEmpty()) {
+                    null
+                } else {
+                    result.copy(
+                        folder = result.folder.copy(
+                            audioCount = visibleFiles.count { it.type == LocalMediaType.AUDIO }
+                        ),
+                        files = visibleFiles
+                    )
+                }
             }
-        }
     }
 
     suspend fun hideAudioFiles(files: List<LocalMediaFile>) {
@@ -809,8 +814,10 @@ private fun LocalVibeApp() {
                     "已从书架移除"
                 } else if (file.type == LocalMediaType.VIDEO) {
                     "已从列表移除"
+                } else if (file.type == LocalMediaType.AUDIO) {
+                    "已隐藏歌曲"
                 } else {
-                    "已从当前列表移除，重新扫描后可能恢复"
+                    "已移除"
                 },
                 Toast.LENGTH_SHORT
             ).show()
@@ -857,7 +864,12 @@ private fun LocalVibeApp() {
             appStateStore.saveRecentVideoUri(recentVideoUri)
             appStateStore.saveRecentAudioUri(recentAudioUri)
             refreshMusicControllerAfterAudioRemoval(removedAudioUris)
-            Toast.makeText(context, "已移除 ${uniqueFiles.size} 项", Toast.LENGTH_SHORT).show()
+            val message = if (uniqueFiles.all { it.type == LocalMediaType.AUDIO }) {
+                "已隐藏歌曲"
+            } else {
+                "已移除 ${uniqueFiles.size} 项"
+            }
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -869,6 +881,17 @@ private fun LocalVibeApp() {
                 false
             }
         }
+    }
+
+    suspend fun hideAudioFolder(folder: MediaFolderUiModel) {
+        val folderKey = folder.id.trim()
+        if (folderKey.isBlank()) return
+        hiddenAudioFolderKeys = hiddenAudioFolderKeys + folderKey
+        appStateStore.hideAudioFolderKeys(listOf(folderKey))
+        audioFolders.removeAll { it.id.trim() == folderKey }
+        scannedFilesByFolder.remove(typedFolderKey(LocalMediaType.AUDIO, folderKey))
+        selectedAudioFolderKey = null
+        Toast.makeText(context, "已隐藏音乐文件夹", Toast.LENGTH_SHORT).show()
     }
 
     fun showUnavailableVideoHint() {
@@ -1060,7 +1083,7 @@ private fun LocalVibeApp() {
                 removeMediaFromMemory(file)
                 appStateStore.saveRecentAudioUri(recentAudioUri)
                 refreshMusicControllerAfterAudioRemoval(setOf(file.normalizedUri()))
-                Toast.makeText(context, "系统不允许直接删除该文件，已为你从列表移除。", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "系统不允许直接删除该文件，已为你隐藏。", Toast.LENGTH_SHORT).show()
                 return@launch
             }
             if (deleted) {
@@ -1167,7 +1190,7 @@ private fun LocalVibeApp() {
                 Toast.makeText(context, "$failedCount 项删除失败，请检查文件权限", Toast.LENGTH_SHORT).show()
             }
             if (failedAudioFiles.isNotEmpty()) {
-                Toast.makeText(context, "系统不允许直接删除 ${failedAudioFiles.size} 首音乐，已为你从列表移除。", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "系统不允许直接删除 ${failedAudioFiles.size} 首音乐，已为你隐藏。", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1651,6 +1674,21 @@ private fun LocalVibeApp() {
             runAutoScan(LocalMediaType.AUDIO, showCompletionToast = showCompletionToast)
         }
     }
+
+    suspend fun restoreHiddenAudioFolders() {
+        appStateStore.clearHiddenAudioFolderKeys()
+        hiddenAudioFolderKeys = emptySet()
+        autoScanVideoAndAudio(force = true, showCompletionToast = false)
+        Toast.makeText(context, "已恢复隐藏音乐文件夹", Toast.LENGTH_SHORT).show()
+    }
+
+    suspend fun restoreHiddenAudioSongs() {
+        appStateStore.clearHiddenAudioUris()
+        hiddenAudioUris = emptySet()
+        autoScanVideoAndAudio(force = true, showCompletionToast = false)
+        Toast.makeText(context, "已恢复隐藏歌曲", Toast.LENGTH_SHORT).show()
+    }
+
     LaunchedEffect(Unit) {
         initialMainRoute = appStateStore.loadLastMainTabRoute().toRestorableMainRoute()
     }
@@ -1672,6 +1710,8 @@ private fun LocalVibeApp() {
         recentAudioUri = persistedRecentAudioUri
         lastAudioUri = appStateStore.loadLastAudioUri() ?: persistedRecentAudioUri
         audioPlayMode = appStateStore.loadAudioPlayModeName().toAudioPlayMode()
+        audioSortMode = appStateStore.loadAudioSortModeName().toAudioSortMode()
+        audioSortAscending = appStateStore.loadAudioSortAscending()
         favoriteAudioUris = appStateStore.loadFavoriteAudioUris()
         audioRecentRecords = appStateStore.loadAudioRecentRecords()
             .ifEmpty {
@@ -1682,6 +1722,7 @@ private fun LocalVibeApp() {
                     .orEmpty()
             }
         hiddenAudioUris = appStateStore.loadHiddenAudioUris()
+        hiddenAudioFolderKeys = appStateStore.loadHiddenAudioFolderKeys()
         hiddenVideoUris = appStateStore.loadHiddenVideoUris()
         hiddenVideoFolderIds = appStateStore.loadHiddenVideoFolderIds()
         hiddenVideoRecords.clear()
@@ -2189,6 +2230,10 @@ private fun LocalVibeApp() {
                         audioProgressMap = emptyMap(),
                         favoriteAudioUris = visibleFavoriteAudioUris,
                         recentAudioUris = visibleRecentAudioUris,
+                        hasHiddenAudioSongs = hiddenAudioUris.isNotEmpty(),
+                        hasHiddenAudioFolders = hiddenAudioFolderKeys.isNotEmpty(),
+                        audioSortMode = audioSortMode,
+                        audioSortAscending = audioSortAscending,
                         permissionDeniedMessage = if (audioPermissionDenied) {
                             "没有媒体权限，无法自动扫描音乐。你仍然可以手动添加文件夹。"
                         } else {
@@ -2211,6 +2256,9 @@ private fun LocalVibeApp() {
                             if (controller != null) {
                                 if (controller.isPlaying) controller.pause() else controller.play()
                             }
+                        },
+                        onToggleFavoriteAudio = { file ->
+                            toggleFavoriteAudio(file)
                         },
                         onRemoveFavoriteAudio = { file ->
                             removeFavoriteAudio(file)
@@ -2241,10 +2289,38 @@ private fun LocalVibeApp() {
                             permanentlyDeleteMedia(files)
                         },
                         onRemoveAudioFolder = { item ->
-                            removeMediaFromList(item.files)
+                            coroutineScope.launch {
+                                hideAudioFolder(item.folder)
+                            }
                         },
                         onDeleteAudioFolder = { item ->
                             permanentlyDeleteMedia(item.files)
+                        },
+                        onRestoreHiddenAudioSongs = {
+                            coroutineScope.launch {
+                                restoreHiddenAudioSongs()
+                            }
+                        },
+                        onRestoreHiddenAudioFolders = {
+                            coroutineScope.launch {
+                                restoreHiddenAudioFolders()
+                            }
+                        },
+                        onAudioSortModeChange = { mode ->
+                            audioSortMode = mode
+                            val nextAscending = if (mode == AudioSortMode.Default) false else audioSortAscending
+                            audioSortAscending = nextAscending
+                            coroutineScope.launch {
+                                appStateStore.saveAudioSortModeName(mode.name)
+                                appStateStore.saveAudioSortAscending(nextAscending)
+                            }
+                        },
+                        onToggleAudioSortDirection = {
+                            val nextAscending = !audioSortAscending
+                            audioSortAscending = nextAscending
+                            coroutineScope.launch {
+                                appStateStore.saveAudioSortAscending(nextAscending)
+                            }
                         },
                         onRescanAudio = {
                             autoScanVideoAndAudio(force = true, showCompletionToast = true)
@@ -2556,6 +2632,10 @@ private fun LocalVibeApp() {
                             audioProgressMap = emptyMap(),
                             favoriteAudioUris = visibleFavoriteAudioUris,
                             recentAudioUris = visibleRecentAudioUris,
+                            hasHiddenAudioSongs = hiddenAudioUris.isNotEmpty(),
+                            hasHiddenAudioFolders = hiddenAudioFolderKeys.isNotEmpty(),
+                            audioSortMode = audioSortMode,
+                            audioSortAscending = audioSortAscending,
                             permissionDeniedMessage = if (audioPermissionDenied) {
                                 "没有媒体权限，无法自动扫描音乐。你仍然可以手动添加文件夹。"
                             } else {
@@ -2578,6 +2658,9 @@ private fun LocalVibeApp() {
                                 if (!playOrResumeAudio(currentFile)) {
                                     Toast.makeText(context, "暂无可播放音乐", Toast.LENGTH_SHORT).show()
                                 }
+                            },
+                            onToggleFavoriteAudio = { file ->
+                                toggleFavoriteAudio(file)
                             },
                             onRemoveFavoriteAudio = { file ->
                                 removeFavoriteAudio(file)
@@ -2608,10 +2691,38 @@ private fun LocalVibeApp() {
                                 permanentlyDeleteMedia(files)
                             },
                             onRemoveAudioFolder = { item ->
-                                removeMediaFromList(item.files)
+                                coroutineScope.launch {
+                                    hideAudioFolder(item.folder)
+                                }
                             },
                             onDeleteAudioFolder = { item ->
                                 permanentlyDeleteMedia(item.files)
+                            },
+                            onRestoreHiddenAudioSongs = {
+                                coroutineScope.launch {
+                                    restoreHiddenAudioSongs()
+                                }
+                            },
+                            onRestoreHiddenAudioFolders = {
+                                coroutineScope.launch {
+                                    restoreHiddenAudioFolders()
+                                }
+                            },
+                            onAudioSortModeChange = { mode ->
+                                audioSortMode = mode
+                                val nextAscending = if (mode == AudioSortMode.Default) false else audioSortAscending
+                                audioSortAscending = nextAscending
+                                coroutineScope.launch {
+                                    appStateStore.saveAudioSortModeName(mode.name)
+                                    appStateStore.saveAudioSortAscending(nextAscending)
+                                }
+                            },
+                            onToggleAudioSortDirection = {
+                                val nextAscending = !audioSortAscending
+                                audioSortAscending = nextAscending
+                                coroutineScope.launch {
+                                    appStateStore.saveAudioSortAscending(nextAscending)
+                                }
                             },
                             onRescanAudio = {
                                 autoScanVideoAndAudio(force = true, showCompletionToast = true)
@@ -3099,6 +3210,11 @@ private fun LocalMediaFile.normalizedUri(): String = uri.trim()
 private fun String?.toAudioPlayMode(): AudioPlayMode {
     val value = this?.trim().orEmpty()
     return AudioPlayMode.values().firstOrNull { it.name == value } ?: AudioPlayMode.NORMAL
+}
+
+private fun String?.toAudioSortMode(): AudioSortMode {
+    val value = this?.trim().orEmpty()
+    return AudioSortMode.values().firstOrNull { it.name == value } ?: AudioSortMode.Default
 }
 
 private fun PersistedBookProgress.progressPercent(): Int {

@@ -13,18 +13,22 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -59,6 +63,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,6 +74,14 @@ import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.feature.library.MediaFolderGroupUiModel
 import kotlinx.coroutines.launch
 
+enum class AudioSortMode(val label: String) {
+    Default("默认排序"),
+    Name("按名称排序"),
+    Size("按大小排序"),
+    Duration("按时长排序"),
+    ModifiedTime("按修改时间排序")
+}
+
 @Composable
 fun AudioLibraryScreen(
     audioFiles: List<LocalMediaFile>,
@@ -76,6 +89,10 @@ fun AudioLibraryScreen(
     audioProgressMap: Map<String, Long>,
     favoriteAudioUris: Set<String>,
     recentAudioUris: List<String>,
+    hasHiddenAudioSongs: Boolean,
+    hasHiddenAudioFolders: Boolean,
+    audioSortMode: AudioSortMode,
+    audioSortAscending: Boolean,
     permissionDeniedMessage: String?,
     currentAudioUri: String?,
     librarySection: AudioLibrarySection,
@@ -85,6 +102,7 @@ fun AudioLibraryScreen(
     onAddFolder: () -> Unit,
     onOpenAudio: (LocalMediaFile, List<LocalMediaFile>) -> Unit,
     onToggleCurrentAudioPlayback: () -> Unit,
+    onToggleFavoriteAudio: (LocalMediaFile) -> Unit,
     onRemoveFavoriteAudio: (LocalMediaFile) -> Unit,
     onQueueScopeChanged: (List<LocalMediaFile>) -> Unit,
     onPlayAll: (List<LocalMediaFile>) -> Unit,
@@ -95,6 +113,10 @@ fun AudioLibraryScreen(
     onDeleteAudios: (List<LocalMediaFile>) -> Unit,
     onRemoveAudioFolder: (MediaFolderGroupUiModel) -> Unit,
     onDeleteAudioFolder: (MediaFolderGroupUiModel) -> Unit,
+    onRestoreHiddenAudioSongs: () -> Unit,
+    onRestoreHiddenAudioFolders: () -> Unit,
+    onAudioSortModeChange: (AudioSortMode) -> Unit,
+    onToggleAudioSortDirection: () -> Unit,
     onRescanAudio: () -> Unit,
     onBackToDesktop: () -> Unit,
     modifier: Modifier = Modifier
@@ -116,8 +138,10 @@ fun AudioLibraryScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    val sortedSongs = remember(audioFiles) {
-        audioFiles.distinctBy { it.uri }.sortedBy { it.displayTitle().lowercase() }
+    val sortedSongs = remember(audioFiles, audioSortMode, audioSortAscending) {
+        audioFiles
+            .distinctBy { it.uri }
+            .sortedForAudioLibrary(audioSortMode, audioSortAscending)
     }
     val normalizedFavoriteUris = remember(favoriteAudioUris) {
         favoriteAudioUris.map { it.trim() }.filter { it.isNotBlank() }.toSet()
@@ -129,12 +153,20 @@ fun AudioLibraryScreen(
         val byUri = sortedSongs.associateBy { it.uri.trim() }
         recentAudioUris.mapNotNull { byUri[it.trim()] }.distinctBy { it.uri.trim() }
     }
-    val sectionSongs = remember(sortedSongs, favoriteSongs, recentSongs, librarySection, selectedAudioFolder) {
+    val sectionSongs = remember(
+        sortedSongs,
+        favoriteSongs,
+        recentSongs,
+        librarySection,
+        selectedAudioFolder,
+        audioSortMode,
+        audioSortAscending
+    ) {
         when {
             selectedAudioFolder != null -> selectedAudioFolder.files
                 .filter { it.type == LocalMediaType.AUDIO }
                 .distinctBy { it.uri }
-                .sortedBy { it.displayTitle().lowercase() }
+                .sortedForAudioLibrary(audioSortMode, audioSortAscending)
             librarySection == AudioLibrarySection.Favorites -> favoriteSongs
             librarySection == AudioLibrarySection.Recent -> recentSongs
             else -> sortedSongs
@@ -212,6 +244,10 @@ fun AudioLibraryScreen(
             isSearching = isSearching,
             searchKeyword = searchKeyword,
             showFolders = showFolders,
+            hasHiddenAudioSongs = hasHiddenAudioSongs,
+            hasHiddenAudioFolders = hasHiddenAudioFolders,
+            audioSortMode = audioSortMode,
+            audioSortAscending = audioSortAscending,
             onSearchKeywordChange = { searchKeyword = it },
             onToggleSearch = {
                 if (isSearching) {
@@ -229,6 +265,10 @@ fun AudioLibraryScreen(
                 }
             },
             onRescanAudio = onRescanAudio,
+            onRestoreHiddenAudioSongs = onRestoreHiddenAudioSongs,
+            onRestoreHiddenAudioFolders = onRestoreHiddenAudioFolders,
+            onAudioSortModeChange = onAudioSortModeChange,
+            onToggleAudioSortDirection = onToggleAudioSortDirection,
             onStartMultiSelect = {
                 onLibrarySectionChange(AudioLibrarySection.AllSongs)
                 isFolderMultiSelectMode = false
@@ -293,14 +333,14 @@ fun AudioLibraryScreen(
                     librarySection == AudioLibrarySection.Folders -> "音乐文件夹"
                     librarySection == AudioLibrarySection.Favorites -> "我喜欢"
                     librarySection == AudioLibrarySection.Recent -> "最近播放"
-                    else -> "全部歌曲"
+                    else -> "主页"
                 },
                 count = if (showFolders) "${audioFolders.size} 个" else "共 ${shownSongs.size} 首歌曲",
                 actionText = when {
                     selectedAudioFolder != null -> "返回音乐文件夹"
                     librarySection == AudioLibrarySection.Folders -> null
                     librarySection == AudioLibrarySection.AllSongs -> "定位到当前播放位置"
-                    else -> "返回全部歌曲"
+                    else -> "返回主页"
                 },
                 actionEnabled = when {
                     selectedAudioFolder != null -> true
@@ -393,7 +433,7 @@ fun AudioLibraryScreen(
             if (isFolderMultiSelectMode && showFolders) {
                 AudioMultiSelectBar(
                     selectedCount = selectedFolderKeys.size,
-                    removeText = "从列表移除",
+                    removeText = "隐藏",
                     onCancel = {
                         isFolderMultiSelectMode = false
                         selectedFolderKeys = emptySet()
@@ -494,6 +534,7 @@ fun AudioLibraryScreen(
                             file = song,
                             progressMs = audioProgressMap[song.uri] ?: 0L,
                             isCurrent = song.uri == currentAudioUri,
+                            isFavorite = song.uri.trim() in normalizedFavoriteUris,
                             isSelectionMode = isMultiSelectMode,
                             isSelected = song.uri in selectedSongUris,
                             onToggleSelected = {
@@ -501,6 +542,18 @@ fun AudioLibraryScreen(
                             },
                             onRemove = { onRemoveAudio(song) },
                             onDelete = { onDeleteAudio(song) },
+                            onToggleFavorite = {
+                                onToggleFavoriteAudio(song)
+                                Toast.makeText(
+                                    context,
+                                    if (song.uri.trim() in normalizedFavoriteUris) {
+                                        "已取消喜欢"
+                                    } else {
+                                        "已加入我喜欢"
+                                    },
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
                             onRemoveFavorite = if (librarySection == AudioLibrarySection.Favorites) {
                                 { onRemoveFavoriteAudio(song) }
                             } else {
@@ -590,15 +643,50 @@ fun AudioLibraryScreen(
 }
 
 @Composable
+private fun AudioSortMenuItems(
+    audioSortMode: AudioSortMode,
+    audioSortAscending: Boolean,
+    onAudioSortModeChange: (AudioSortMode) -> Unit,
+    onToggleAudioSortDirection: () -> Unit,
+    onDismissMenu: () -> Unit
+) {
+    AudioSortMode.values().forEach { mode ->
+        if (mode == AudioSortMode.ModifiedTime) return@forEach
+        DropdownMenuItem(
+            text = { Text(mode.label + if (mode == audioSortMode) " ✓" else "") },
+            onClick = {
+                onDismissMenu()
+                onAudioSortModeChange(mode)
+            }
+        )
+    }
+    DropdownMenuItem(
+        text = { Text(if (audioSortAscending) "切换降序" else "切换升序") },
+        onClick = {
+            onDismissMenu()
+            onToggleAudioSortDirection()
+        }
+    )
+}
+
+@Composable
 private fun MusicHomeHeader(
     isSearching: Boolean,
     searchKeyword: String,
     showFolders: Boolean,
+    hasHiddenAudioSongs: Boolean,
+    hasHiddenAudioFolders: Boolean,
+    audioSortMode: AudioSortMode,
+    audioSortAscending: Boolean,
     onSearchKeywordChange: (String) -> Unit,
     onToggleSearch: () -> Unit,
     onAddFolder: () -> Unit,
     onShuffleAll: () -> Unit,
     onRescanAudio: () -> Unit,
+    onRestoreHiddenAudioSongs: () -> Unit,
+    onRestoreHiddenAudioFolders: () -> Unit,
+    onAudioSortModeChange: (AudioSortMode) -> Unit,
+    onToggleAudioSortDirection: () -> Unit,
     onStartMultiSelect: () -> Unit,
     onStartFolderMultiSelect: () -> Unit
 ) {
@@ -711,6 +799,13 @@ private fun MusicHomeHeader(
                                 onShuffleAll()
                             }
                         )
+                        AudioSortMenuItems(
+                            audioSortMode = audioSortMode,
+                            audioSortAscending = audioSortAscending,
+                            onAudioSortModeChange = onAudioSortModeChange,
+                            onToggleAudioSortDirection = onToggleAudioSortDirection,
+                            onDismissMenu = { expanded = false }
+                        )
                         DropdownMenuItem(
                             text = { Text(if (showFolders) "多选管理" else "多选") },
                             onClick = {
@@ -729,6 +824,24 @@ private fun MusicHomeHeader(
                                 onRescanAudio()
                             }
                         )
+                        if (hasHiddenAudioSongs) {
+                            DropdownMenuItem(
+                                text = { Text("恢复隐藏歌曲") },
+                                onClick = {
+                                    expanded = false
+                                    onRestoreHiddenAudioSongs()
+                                }
+                            )
+                        }
+                        if (hasHiddenAudioFolders) {
+                            DropdownMenuItem(
+                                text = { Text("恢复隐藏音乐文件夹") },
+                                onClick = {
+                                    expanded = false
+                                    onRestoreHiddenAudioFolders()
+                                }
+                            )
+                        }
                     }
                 }
             } else {
@@ -767,6 +880,13 @@ private fun MusicHomeHeader(
                                     onShuffleAll()
                                 }
                             )
+                            AudioSortMenuItems(
+                                audioSortMode = audioSortMode,
+                                audioSortAscending = audioSortAscending,
+                                onAudioSortModeChange = onAudioSortModeChange,
+                                onToggleAudioSortDirection = onToggleAudioSortDirection,
+                                onDismissMenu = { expanded = false }
+                            )
                             DropdownMenuItem(
                                 text = { Text(if (showFolders) "多选管理" else "多选") },
                                 onClick = {
@@ -785,6 +905,24 @@ private fun MusicHomeHeader(
                                     onRescanAudio()
                                 }
                             )
+                            if (hasHiddenAudioSongs) {
+                                DropdownMenuItem(
+                                    text = { Text("恢复隐藏歌曲") },
+                                    onClick = {
+                                        expanded = false
+                                        onRestoreHiddenAudioSongs()
+                                    }
+                                )
+                            }
+                            if (hasHiddenAudioFolders) {
+                                DropdownMenuItem(
+                                    text = { Text("恢复隐藏音乐文件夹") },
+                                    onClick = {
+                                        expanded = false
+                                        onRestoreHiddenAudioFolders()
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -910,7 +1048,7 @@ private fun MusicEntryCards(
             icon = "♥",
             title = "我喜欢",
             subtitle = "$likedCount 首歌曲",
-            accent = Color(0xFFFF9AE6),
+            accent = FavoritePink,
             onClick = onLikedClick
         )
         MusicEntryCard(
@@ -1035,11 +1173,13 @@ private fun MusicSongRow(
     file: LocalMediaFile,
     progressMs: Long,
     isCurrent: Boolean,
+    isFavorite: Boolean,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onToggleSelected: () -> Unit,
     onRemove: () -> Unit,
     onDelete: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onRemoveFavorite: (() -> Unit)?,
     onClick: () -> Unit
 ) {
@@ -1129,18 +1269,47 @@ private fun MusicSongRow(
                     )
                 }
             }
-            Text(
-                text = file.durationText(),
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.66f),
-                maxLines = 1
-            )
-            if (!isSelectionMode) {
-                SongMoreMenu(
-                    onRemoveFavorite = onRemoveFavorite,
-                    onRemove = onRemove,
-                    onDelete = onDelete
+            if (isSelectionMode) {
+                Text(
+                    modifier = Modifier.width(88.dp),
+                    text = file.durationText(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.66f),
+                    maxLines = 1,
+                    textAlign = TextAlign.End
                 )
+            } else {
+                Row(
+                    modifier = Modifier.width(88.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            contentDescription = if (isFavorite) "取消喜欢" else "加入我喜欢",
+                            tint = if (isFavorite) FavoritePink else Color.White.copy(alpha = 0.58f),
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(
+                        modifier = Modifier.width(38.dp),
+                        text = file.durationText(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.66f),
+                        maxLines = 1,
+                        textAlign = TextAlign.End
+                    )
+                    SongMoreMenu(
+                        onRemoveFavorite = onRemoveFavorite,
+                        onRemove = onRemove,
+                        onDelete = onDelete
+                    )
+                }
             }
         }
     }
@@ -1189,11 +1358,12 @@ private fun SongMoreMenu(
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     Box {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.size(34.dp)) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(24.dp)) {
             Icon(
                 Icons.Filled.MoreVert,
                 contentDescription = "更多",
-                tint = Color.White.copy(alpha = 0.82f)
+                tint = Color.White.copy(alpha = 0.82f),
+                modifier = Modifier.size(20.dp)
             )
         }
         DropdownMenu(
@@ -1211,7 +1381,7 @@ private fun SongMoreMenu(
                 )
             }
             DropdownMenuItem(
-                text = { Text("从列表隐藏") },
+                text = { Text("隐藏") },
                 onClick = {
                     expanded = false
                     onRemove()
@@ -1326,7 +1496,7 @@ private fun MusicFolderRow(
                             shape = RoundedCornerShape(14.dp)
                         ) {
                             DropdownMenuItem(
-                                text = { Text("从列表移除") },
+                                text = { Text("隐藏") },
                                 onClick = {
                                     expanded = false
                                     onRemove()
@@ -1402,6 +1572,42 @@ private fun LocalMediaFile.durationText(): String {
     return durationMs?.takeIf { it > 0L }?.let(::formatDuration) ?: "--:--"
 }
 
+private fun List<LocalMediaFile>.sortedForAudioLibrary(
+    mode: AudioSortMode,
+    ascending: Boolean
+): List<LocalMediaFile> {
+    if (mode == AudioSortMode.Default || mode == AudioSortMode.ModifiedTime) {
+        val withModifiedTime = filter { (it.modifiedAt ?: 0L) > 0L }
+        val withoutModifiedTime = filterNot { (it.modifiedAt ?: 0L) > 0L }
+        val sortedWithModifiedTime = if (ascending) {
+            withModifiedTime.sortedBy { it.modifiedAt ?: Long.MAX_VALUE }
+        } else {
+            withModifiedTime.sortedByDescending { it.modifiedAt ?: Long.MIN_VALUE }
+        }
+        return sortedWithModifiedTime + withoutModifiedTime.sortedBy { it.displayTitle().lowercase() }
+    }
+
+    val comparator = when (mode) {
+        AudioSortMode.Name -> compareBy<LocalMediaFile> { it.displayTitle().lowercase() }
+            .thenBy { it.name.lowercase() }
+
+        AudioSortMode.Size -> compareBy<LocalMediaFile> { it.size }
+            .thenBy { it.displayTitle().lowercase() }
+
+        AudioSortMode.Duration -> compareBy<LocalMediaFile> { it.durationMs ?: Long.MAX_VALUE }
+            .thenBy { it.displayTitle().lowercase() }
+
+        AudioSortMode.Default,
+        AudioSortMode.ModifiedTime -> compareBy { it.displayTitle().lowercase() }
+    }
+
+    return if (ascending) {
+        sortedWith(comparator)
+    } else {
+        sortedWith(comparator.reversed())
+    }
+}
+
 private fun Set<String>.toggle(value: String): Set<String> {
     return if (value in this) this - value else this + value
 }
@@ -1420,3 +1626,4 @@ enum class AudioLibrarySection {
 private val MusicBackground = Color(0xFF090A16)
 private val MusicSurface = Color(0xFF15162A)
 private val MusicMuted = Color(0xFFAAA3BF)
+private val FavoritePink = Color(0xFFFF9AE6)

@@ -1,6 +1,7 @@
 package com.shenghui.localvibe.core.datastore
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -164,6 +165,29 @@ class AppStateStore(private val context: Context) {
     suspend fun clearHiddenAudioUris() {
         context.appStateDataStore.edit { prefs ->
             prefs.remove(HiddenAudioUrisKey)
+        }
+    }
+
+    suspend fun loadHiddenAudioFolderKeys(): Set<String> {
+        val json = context.appStateDataStore.data.first()[HiddenAudioFolderKeysKey].orEmpty()
+        if (json.isBlank()) return emptySet()
+        return decodeAudioUriSet(json)
+    }
+
+    suspend fun hideAudioFolderKeys(folderKeys: Collection<String>) {
+        val normalizedKeys = folderKeys.map { it.trim() }.filter { it.isNotBlank() }
+        if (normalizedKeys.isEmpty()) return
+        context.appStateDataStore.edit { prefs ->
+            val next = decodeAudioUriSet(prefs[HiddenAudioFolderKeysKey].orEmpty())
+                .plus(normalizedKeys)
+                .toSet()
+            prefs[HiddenAudioFolderKeysKey] = encodeAudioUriSet(next)
+        }
+    }
+
+    suspend fun clearHiddenAudioFolderKeys() {
+        context.appStateDataStore.edit { prefs ->
+            prefs.remove(HiddenAudioFolderKeysKey)
         }
     }
 
@@ -423,6 +447,14 @@ class AppStateStore(private val context: Context) {
         return context.appStateDataStore.data.first()[AudioPlayModeKey]
     }
 
+    suspend fun loadAudioSortModeName(): String? {
+        return context.appStateDataStore.data.first()[AudioSortModeKey]
+    }
+
+    suspend fun loadAudioSortAscending(): Boolean {
+        return context.appStateDataStore.data.first()[AudioSortAscendingKey] ?: false
+    }
+
     suspend fun loadLastMainTabRoute(): String? {
         return context.appStateDataStore.data.first()[LastMainTabRouteKey]
     }
@@ -464,6 +496,22 @@ class AppStateStore(private val context: Context) {
             } else {
                 prefs[AudioPlayModeKey] = modeName
             }
+        }
+    }
+
+    suspend fun saveAudioSortModeName(modeName: String?) {
+        context.appStateDataStore.edit { prefs ->
+            if (modeName.isNullOrBlank()) {
+                prefs.remove(AudioSortModeKey)
+            } else {
+                prefs[AudioSortModeKey] = modeName
+            }
+        }
+    }
+
+    suspend fun saveAudioSortAscending(ascending: Boolean) {
+        context.appStateDataStore.edit { prefs ->
+            prefs[AudioSortAscendingKey] = ascending
         }
     }
 
@@ -845,6 +893,7 @@ class AppStateStore(private val context: Context) {
         val BookFilesKey = stringPreferencesKey("book_files_json")
         val BookProgressKey = stringPreferencesKey("book_progress_json")
         val HiddenAudioUrisKey = stringPreferencesKey("hidden_audio_uris_json")
+        val HiddenAudioFolderKeysKey = stringPreferencesKey("hidden_audio_folder_keys_json")
         val FavoriteAudioUrisKey = stringPreferencesKey("favorite_audio_uris_json")
         val RecentAudioRecordsKey = stringPreferencesKey("recent_audio_records_json")
         val HiddenVideoUrisKey = stringPreferencesKey("hidden_video_uris_json")
@@ -856,6 +905,8 @@ class AppStateStore(private val context: Context) {
         val RecentAudioUriKey = stringPreferencesKey("recent_audio_uri")
         val LastAudioUriKey = stringPreferencesKey("last_audio_uri")
         val AudioPlayModeKey = stringPreferencesKey("audio_play_mode")
+        val AudioSortModeKey = stringPreferencesKey("audio_sort_mode")
+        val AudioSortAscendingKey = booleanPreferencesKey("audio_sort_ascending")
         val LastMainTabRouteKey = stringPreferencesKey("last_main_tab_route")
         const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
         const val MAX_VIDEO_PLAYBACK_SPEED = 5f

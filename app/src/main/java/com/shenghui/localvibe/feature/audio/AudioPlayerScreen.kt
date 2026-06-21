@@ -1134,7 +1134,7 @@ private fun PlayerTopBar(
                     expanded = false
                     onShare()
                 }
-                AudioTopMenuItem("从列表移除") {
+                AudioTopMenuItem("隐藏") {
                     expanded = false
                     onRemove()
                 }
