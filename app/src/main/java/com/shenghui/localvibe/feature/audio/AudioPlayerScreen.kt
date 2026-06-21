@@ -346,6 +346,9 @@ private fun ServiceAudioPlayer(
     var sleepTimerMinutes by rememberSaveable { mutableStateOf<Int?>(null) }
     var sleepTimerMode by rememberSaveable { mutableStateOf(AudioSleepTimerMode.Off) }
     var sleepTimerNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var abPointAms by rememberSaveable { mutableLongStateOf(-1L) }
+    var abPointBms by rememberSaveable { mutableLongStateOf(-1L) }
+    var lastAbSeekAtMs by remember { mutableLongStateOf(0L) }
     var draftSleepHours by rememberSaveable { mutableStateOf(0) }
     var draftSleepMinutes by rememberSaveable { mutableStateOf(30) }
     var draftStopAfterCurrent by rememberSaveable { mutableStateOf(false) }
@@ -356,6 +359,43 @@ private fun ServiceAudioPlayer(
     var equalizerSupported by remember { mutableStateOf(true) }
     val sleepRemainingMs = (sleepTimerEndAtMs - sleepTimerNowMs).coerceAtLeast(0L)
     val sleepTimerActive = sleepTimerMode != AudioSleepTimerMode.Off
+    val abHasA = abPointAms >= 0L
+    val abLoopActive = abPointAms >= 0L && abPointBms > abPointAms
+    val clearAbRepeat = {
+        abPointAms = -1L
+        abPointBms = -1L
+        lastAbSeekAtMs = 0L
+    }
+    val handleAbRepeatClick = {
+        val currentMs = player.currentPosition.coerceAtLeast(0L)
+        when {
+            !abHasA -> {
+                abPointAms = currentMs
+                abPointBms = -1L
+                Toast.makeText(context, "已设置 A 点", Toast.LENGTH_SHORT).show()
+            }
+            !abLoopActive -> {
+                when {
+                    currentMs <= abPointAms -> {
+                        abPointBms = -1L
+                        Toast.makeText(context, "B 点必须晚于 A 点", Toast.LENGTH_SHORT).show()
+                    }
+                    currentMs - abPointAms < MinAbRepeatDurationMs -> {
+                        abPointBms = -1L
+                        Toast.makeText(context, "A-B 间隔太短", Toast.LENGTH_SHORT).show()
+                    }
+                    else -> {
+                        abPointBms = currentMs
+                        Toast.makeText(context, "已开启 A-B 循环", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            else -> {
+                clearAbRepeat()
+                Toast.makeText(context, "已关闭 A-B 循环", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     val openSleepTimerSheet = {
         val minutes = when {
             sleepTimerEndAtMs > System.currentTimeMillis() -> {
@@ -386,6 +426,28 @@ private fun ServiceAudioPlayer(
     LaunchedEffect(currentPositionMs, isDraggingProgress) {
         if (!isDraggingProgress) {
             displayPositionMs = currentPositionMs
+        }
+    }
+
+    LaunchedEffect(mediaFile.uri) {
+        clearAbRepeat()
+    }
+
+    LaunchedEffect(abPointAms, abPointBms, isPlaying, mediaFile.uri, player) {
+        if (!abLoopActive || !isPlaying) return@LaunchedEffect
+        while (true) {
+            val now = System.currentTimeMillis()
+            val positionMs = player.currentPosition.coerceAtLeast(0L)
+            if (positionMs >= abPointBms - AbRepeatSeekThresholdMs &&
+                now - lastAbSeekAtMs >= AbRepeatSeekDebounceMs
+            ) {
+                lastAbSeekAtMs = now
+                player.seekTo(abPointAms)
+                if (isPlaying) {
+                    player.play()
+                }
+            }
+            delay(250L)
         }
     }
 
@@ -593,7 +655,10 @@ private fun ServiceAudioPlayer(
                 SmallIconAction(
                     label = "上一曲",
                     icon = { Icon(Icons.Filled.SkipPrevious, contentDescription = null) },
-                    onClick = onPrevious,
+                    onClick = {
+                        clearAbRepeat()
+                        onPrevious()
+                    },
                     iconSize = 38.dp
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -621,7 +686,10 @@ private fun ServiceAudioPlayer(
                 SmallIconAction(
                     label = "下一曲",
                     icon = { Icon(Icons.Filled.SkipNext, contentDescription = null) },
-                    onClick = onNext,
+                    onClick = {
+                        clearAbRepeat()
+                        onNext()
+                    },
                     iconSize = 38.dp
                 )
                 SmallIconAction(
@@ -642,9 +710,16 @@ private fun ServiceAudioPlayer(
                     onClick = { showEqualizer = true }
                 )
                 SmallIconAction(
-                    label = "A-B",
-                    icon = { Text("A-B", color = AudioTextPrimary.copy(alpha = 0.86f), fontSize = 12.sp) },
-                    onClick = { Toast.makeText(context, "A-B 循环后续实现", Toast.LENGTH_SHORT).show() }
+                    label = abRepeatLabel(abPointAms, abPointBms),
+                    icon = {
+                        Text(
+                            text = if (abHasA && !abLoopActive) "A-" else "A-B",
+                            color = if (abHasA) AudioPurpleLight else AudioTextPrimary.copy(alpha = 0.86f),
+                            fontSize = 12.sp
+                        )
+                    },
+                    onClick = handleAbRepeatClick,
+                    active = abHasA
                 )
                 SmallIconAction(
                     label = sleepTimerButtonLabel(sleepTimerMode, sleepRemainingMs),
@@ -678,6 +753,7 @@ private fun ServiceAudioPlayer(
             onDismiss = { showQueue = false },
             onSelect = {
                 showQueue = false
+                clearAbRepeat()
                 onSelectAudio(it)
             }
         )
@@ -1805,6 +1881,9 @@ private enum class AudioSleepTimerMode {
 
 private const val MaxSleepTimerHours = 24
 private const val DefaultSleepTimerMinutes = 30
+private const val MinAbRepeatDurationMs = 1_000L
+private const val AbRepeatSeekThresholdMs = 100L
+private const val AbRepeatSeekDebounceMs = 500L
 
 private fun Int.stepIn(range: IntRange, delta: Int, loop: Boolean): Int {
     if (!loop) {
@@ -1817,6 +1896,14 @@ private fun Int.stepIn(range: IntRange, delta: Int, loop: Boolean): Int {
 
 private fun Int.floorMod(divisor: Int): Int {
     return ((this % divisor) + divisor) % divisor
+}
+
+private fun abRepeatLabel(aPointMs: Long, bPointMs: Long): String {
+    return when {
+        aPointMs < 0L -> "A-B"
+        bPointMs > aPointMs -> "循环中"
+        else -> "已设 A"
+    }
 }
 
 private fun sleepTimerButtonLabel(mode: AudioSleepTimerMode, remainingMs: Long): String {
