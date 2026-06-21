@@ -366,10 +366,30 @@ private fun ServiceAudioPlayer(
         abPointBms = -1L
         lastAbSeekAtMs = 0L
     }
+    val isTrackEndSleepMode = { mode: AudioSleepTimerMode ->
+        mode == AudioSleepTimerMode.StopAfterCurrentTrack ||
+            mode == AudioSleepTimerMode.CountdownThenFinishTrack ||
+            mode == AudioSleepTimerMode.PendingPauseAfterCurrentTrack
+    }
+    val clearTrackEndSleepState = {
+        if (isTrackEndSleepMode(sleepTimerMode)) {
+            sleepTimerEndAtMs = 0L
+            sleepTimerMinutes = null
+            sleepTimerMode = AudioSleepTimerMode.Off
+            sleepTimerNowMs = System.currentTimeMillis()
+            draftStopAfterCurrent = false
+            draftFinishTrackAfterTimer = false
+        }
+    }
+    val clearManualTrackScopedState = {
+        clearAbRepeat()
+        clearTrackEndSleepState()
+    }
     val handleAbRepeatClick = {
         val currentMs = player.currentPosition.coerceAtLeast(0L)
         when {
             !abHasA -> {
+                clearTrackEndSleepState()
                 abPointAms = currentMs
                 abPointBms = -1L
                 Toast.makeText(context, "已设置 A 点", Toast.LENGTH_SHORT).show()
@@ -385,6 +405,7 @@ private fun ServiceAudioPlayer(
                         Toast.makeText(context, "A-B 间隔太短", Toast.LENGTH_SHORT).show()
                     }
                     else -> {
+                        clearTrackEndSleepState()
                         abPointBms = currentMs
                         Toast.makeText(context, "已开启 A-B 循环", Toast.LENGTH_SHORT).show()
                     }
@@ -430,7 +451,7 @@ private fun ServiceAudioPlayer(
     }
 
     LaunchedEffect(mediaFile.uri) {
-        clearAbRepeat()
+        clearManualTrackScopedState()
     }
 
     LaunchedEffect(abPointAms, abPointBms, isPlaying, mediaFile.uri, player) {
@@ -656,7 +677,7 @@ private fun ServiceAudioPlayer(
                     label = "上一曲",
                     icon = { Icon(Icons.Filled.SkipPrevious, contentDescription = null) },
                     onClick = {
-                        clearAbRepeat()
+                        clearManualTrackScopedState()
                         onPrevious()
                     },
                     iconSize = 38.dp
@@ -687,7 +708,7 @@ private fun ServiceAudioPlayer(
                     label = "下一曲",
                     icon = { Icon(Icons.Filled.SkipNext, contentDescription = null) },
                     onClick = {
-                        clearAbRepeat()
+                        clearManualTrackScopedState()
                         onNext()
                     },
                     iconSize = 38.dp
@@ -753,7 +774,7 @@ private fun ServiceAudioPlayer(
             onDismiss = { showQueue = false },
             onSelect = {
                 showQueue = false
-                clearAbRepeat()
+                clearManualTrackScopedState()
                 onSelectAudio(it)
             }
         )
@@ -805,6 +826,10 @@ private fun ServiceAudioPlayer(
             },
             onConfirm = {
                 if (draftStopAfterCurrent) {
+                    if (abHasA) {
+                        clearAbRepeat()
+                        Toast.makeText(context, "已关闭 A-B，避免影响定时暂停", Toast.LENGTH_SHORT).show()
+                    }
                     sleepTimerEndAtMs = 0L
                     sleepTimerMinutes = null
                     sleepTimerMode = AudioSleepTimerMode.StopAfterCurrentTrack
@@ -822,6 +847,10 @@ private fun ServiceAudioPlayer(
                 sleepTimerMinutes = totalMinutes
                 sleepTimerEndAtMs = now + totalMinutes * 60_000L
                 sleepTimerNowMs = now
+                if (draftFinishTrackAfterTimer && abHasA) {
+                    clearAbRepeat()
+                    Toast.makeText(context, "已关闭 A-B，避免影响定时暂停", Toast.LENGTH_SHORT).show()
+                }
                 sleepTimerMode = if (draftFinishTrackAfterTimer) {
                     AudioSleepTimerMode.CountdownThenFinishTrack
                 } else {
