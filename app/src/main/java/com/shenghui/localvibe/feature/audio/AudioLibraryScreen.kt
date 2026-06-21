@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import com.shenghui.localvibe.core.media.formatDuration
 import com.shenghui.localvibe.core.media.formatFileSize
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import com.shenghui.localvibe.core.scanner.LocalMediaType
 import com.shenghui.localvibe.feature.library.MediaFolderGroupUiModel
 import kotlinx.coroutines.launch
 
@@ -76,11 +78,16 @@ fun AudioLibraryScreen(
     recentAudioUris: List<String>,
     permissionDeniedMessage: String?,
     currentAudioUri: String?,
+    librarySection: AudioLibrarySection,
+    selectedAudioFolderKey: String?,
+    onLibrarySectionChange: (AudioLibrarySection) -> Unit,
+    onSelectedAudioFolderKeyChange: (String?) -> Unit,
     onAddFolder: () -> Unit,
-    onOpenFolder: (MediaFolderGroupUiModel) -> Unit,
     onOpenAudio: (LocalMediaFile, List<LocalMediaFile>) -> Unit,
     onToggleCurrentAudioPlayback: () -> Unit,
     onRemoveFavoriteAudio: (LocalMediaFile) -> Unit,
+    onQueueScopeChanged: (List<LocalMediaFile>) -> Unit,
+    onPlayAll: (List<LocalMediaFile>) -> Unit,
     onShuffleAll: (List<LocalMediaFile>) -> Unit,
     onRemoveAudio: (LocalMediaFile) -> Unit,
     onDeleteAudio: (LocalMediaFile) -> Unit,
@@ -102,8 +109,10 @@ fun AudioLibraryScreen(
     var selectedFolderKeys by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var showFolderBatchDeleteConfirm by remember { mutableStateOf(false) }
-    var librarySection by rememberSaveable { mutableStateOf(AudioLibrarySection.AllSongs) }
-    val showFolders = librarySection == AudioLibrarySection.Folders
+    val selectedAudioFolder = remember(audioFolders, selectedAudioFolderKey) {
+        selectedAudioFolderKey?.let { key -> audioFolders.firstOrNull { it.selectionKey() == key } }
+    }
+    val showFolders = librarySection == AudioLibrarySection.Folders && selectedAudioFolder == null
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -120,10 +129,14 @@ fun AudioLibraryScreen(
         val byUri = sortedSongs.associateBy { it.uri.trim() }
         recentAudioUris.mapNotNull { byUri[it.trim()] }.distinctBy { it.uri.trim() }
     }
-    val sectionSongs = remember(sortedSongs, favoriteSongs, recentSongs, librarySection) {
-        when (librarySection) {
-            AudioLibrarySection.Favorites -> favoriteSongs
-            AudioLibrarySection.Recent -> recentSongs
+    val sectionSongs = remember(sortedSongs, favoriteSongs, recentSongs, librarySection, selectedAudioFolder) {
+        when {
+            selectedAudioFolder != null -> selectedAudioFolder.files
+                .filter { it.type == LocalMediaType.AUDIO }
+                .distinctBy { it.uri }
+                .sortedBy { it.displayTitle().lowercase() }
+            librarySection == AudioLibrarySection.Favorites -> favoriteSongs
+            librarySection == AudioLibrarySection.Recent -> recentSongs
             else -> sortedSongs
         }
     }
@@ -147,6 +160,15 @@ fun AudioLibraryScreen(
         focusManager.clearFocus()
     }
 
+    LaunchedEffect(librarySection, selectedAudioFolderKey, sectionSongs) {
+        val shouldScopeQueue = selectedAudioFolder != null ||
+            librarySection == AudioLibrarySection.Favorites ||
+            librarySection == AudioLibrarySection.Recent
+        if (shouldScopeQueue && sectionSongs.isNotEmpty()) {
+            onQueueScopeChanged(sectionSongs)
+        }
+    }
+
     BackHandler {
         when {
             isSearching -> closeSearch()
@@ -158,10 +180,15 @@ fun AudioLibraryScreen(
                 isFolderMultiSelectMode = false
                 selectedFolderKeys = emptySet()
             }
+            selectedAudioFolder != null -> {
+                onSelectedAudioFolderKeyChange(null)
+                selectedSongUris = emptySet()
+            }
             librarySection != AudioLibrarySection.AllSongs -> {
-                librarySection = AudioLibrarySection.AllSongs
+                onLibrarySectionChange(AudioLibrarySection.AllSongs)
                 selectedSongUris = emptySet()
                 selectedFolderKeys = emptySet()
+                onSelectedAudioFolderKeyChange(null)
             }
             else -> onBackToDesktop()
         }
@@ -204,14 +231,14 @@ fun AudioLibraryScreen(
             },
             onRescanAudio = onRescanAudio,
             onStartMultiSelect = {
-                librarySection = AudioLibrarySection.AllSongs
+                onLibrarySectionChange(AudioLibrarySection.AllSongs)
                 isFolderMultiSelectMode = false
                 selectedFolderKeys = emptySet()
                 isMultiSelectMode = true
                 selectedSongUris = emptySet()
             },
             onStartFolderMultiSelect = {
-                librarySection = AudioLibrarySection.Folders
+                onLibrarySectionChange(AudioLibrarySection.Folders)
                 isMultiSelectMode = false
                 selectedSongUris = emptySet()
                 isFolderMultiSelectMode = true
@@ -231,55 +258,72 @@ fun AudioLibraryScreen(
                 recentCount = recentlyPlayedCount,
                 playlistCount = audioFolders.size,
                 onLikedClick = {
-                    librarySection = AudioLibrarySection.Favorites
+                    onLibrarySectionChange(AudioLibrarySection.Favorites)
                     isMultiSelectMode = false
                     selectedSongUris = emptySet()
                     isFolderMultiSelectMode = false
                     selectedFolderKeys = emptySet()
+                    onSelectedAudioFolderKeyChange(null)
                 },
                 onRecentClick = {
-                    librarySection = AudioLibrarySection.Recent
+                    onLibrarySectionChange(AudioLibrarySection.Recent)
                     isMultiSelectMode = false
                     selectedSongUris = emptySet()
                     isFolderMultiSelectMode = false
                     selectedFolderKeys = emptySet()
+                    onSelectedAudioFolderKeyChange(null)
                 },
                 onPlaylistClick = {
                     if (audioFolders.isEmpty()) {
                         Toast.makeText(context, "暂无音乐文件夹", Toast.LENGTH_SHORT).show()
                     } else {
-                        librarySection = if (showFolders) AudioLibrarySection.AllSongs else AudioLibrarySection.Folders
+                        onLibrarySectionChange(
+                            if (showFolders) AudioLibrarySection.AllSongs else AudioLibrarySection.Folders
+                        )
                         isMultiSelectMode = false
                         selectedSongUris = emptySet()
                         isFolderMultiSelectMode = false
                         selectedFolderKeys = emptySet()
+                        onSelectedAudioFolderKeyChange(null)
                     }
                 }
             )
             SectionHeader(
-                title = when (librarySection) {
-                    AudioLibrarySection.Folders -> "音乐文件夹"
-                    AudioLibrarySection.Favorites -> "我喜欢"
-                    AudioLibrarySection.Recent -> "最近播放"
-                    AudioLibrarySection.AllSongs -> "全部歌曲"
+                title = when {
+                    selectedAudioFolder != null -> "音乐文件夹-${selectedAudioFolder.folder.name.ifBlank { selectedAudioFolder.folder.id }}"
+                    librarySection == AudioLibrarySection.Folders -> "音乐文件夹"
+                    librarySection == AudioLibrarySection.Favorites -> "我喜欢"
+                    librarySection == AudioLibrarySection.Recent -> "最近播放"
+                    else -> "全部歌曲"
                 },
                 count = if (showFolders) "${audioFolders.size} 个" else "共 ${shownSongs.size} 首歌曲",
-                actionText = when (librarySection) {
-                    AudioLibrarySection.Folders -> null
-                    AudioLibrarySection.AllSongs -> "定位到当前播放位置"
+                actionText = when {
+                    selectedAudioFolder != null -> "返回音乐文件夹"
+                    librarySection == AudioLibrarySection.Folders -> null
+                    librarySection == AudioLibrarySection.AllSongs -> "定位到当前播放位置"
                     else -> "返回全部歌曲"
                 },
-                actionEnabled = when (librarySection) {
-                    AudioLibrarySection.AllSongs -> !currentAudioUri.isNullOrBlank()
-                    AudioLibrarySection.Folders -> false
+                actionEnabled = when {
+                    selectedAudioFolder != null -> true
+                    librarySection == AudioLibrarySection.AllSongs -> !currentAudioUri.isNullOrBlank()
+                    librarySection == AudioLibrarySection.Folders -> false
                     else -> true
                 },
                 onActionClick = {
-                    if (librarySection != AudioLibrarySection.AllSongs) {
-                        librarySection = AudioLibrarySection.AllSongs
-                        isMultiSelectMode = false
-                        selectedSongUris = emptySet()
-                    } else {
+                    when {
+                        selectedAudioFolder != null -> {
+                            onSelectedAudioFolderKeyChange(null)
+                            isMultiSelectMode = false
+                            selectedSongUris = emptySet()
+                        }
+
+                        librarySection != AudioLibrarySection.AllSongs -> {
+                            onLibrarySectionChange(AudioLibrarySection.AllSongs)
+                            isMultiSelectMode = false
+                            selectedSongUris = emptySet()
+                        }
+
+                        else -> {
                         val currentIndex = if (showFolders) {
                             -1
                         } else {
@@ -292,9 +336,33 @@ fun AudioLibraryScreen(
                         } else {
                             Toast.makeText(context, "当前播放歌曲不在当前列表中", Toast.LENGTH_SHORT).show()
                         }
+                        }
                     }
                 }
             )
+            if (
+                !isMultiSelectMode &&
+                (selectedAudioFolder != null ||
+                    librarySection == AudioLibrarySection.Favorites ||
+                    librarySection == AudioLibrarySection.Recent)
+            ) {
+                AudioPlayAllActions(
+                    onPlayAll = {
+                        if (shownSongs.isEmpty()) {
+                            Toast.makeText(context, "暂无可播放歌曲", Toast.LENGTH_SHORT).show()
+                        } else {
+                            onPlayAll(shownSongs)
+                        }
+                    },
+                    onShuffleAll = {
+                        if (shownSongs.isEmpty()) {
+                            Toast.makeText(context, "暂无可播放歌曲", Toast.LENGTH_SHORT).show()
+                        } else {
+                            onShuffleAll(shownSongs)
+                        }
+                    }
+                )
+            }
             if (isMultiSelectMode && !showFolders) {
                 AudioMultiSelectBar(
                     selectedCount = selectedSongUris.size,
@@ -396,7 +464,9 @@ fun AudioLibraryScreen(
                                     selectedFolderKeys = selectedFolderKeys.toggle(item.selectionKey())
                                 } else {
                                     if (isSearching) closeSearch()
-                                    onOpenFolder(item)
+                                    onSelectedAudioFolderKeyChange(item.selectionKey())
+                                    isMultiSelectMode = false
+                                    selectedSongUris = emptySet()
                                 }
                             },
                             onToggleSelected = {
@@ -710,6 +780,53 @@ private fun MusicHomeHeader(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AudioPlayAllActions(
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        AudioActionChip(
+            text = "播放全部",
+            onClick = onPlayAll
+        )
+        AudioActionChip(
+            text = "随机播放",
+            onClick = onShuffleAll
+        )
+    }
+}
+
+@Composable
+private fun AudioActionChip(
+    text: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15162A).copy(alpha = 0.92f))
+            .border(
+                width = 1.dp,
+                color = Color(0xFF8B5CFF).copy(alpha = 0.26f),
+                shape = RoundedCornerShape(999.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = Color(0xFFE7DCFF),
+            maxLines = 1
+        )
     }
 }
 
@@ -1283,7 +1400,7 @@ private fun MediaFolderGroupUiModel.selectionKey(): String {
     return "${folder.id}:${source}"
 }
 
-private enum class AudioLibrarySection {
+enum class AudioLibrarySection {
     AllSongs,
     Favorites,
     Recent,

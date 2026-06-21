@@ -107,6 +107,7 @@ import com.shenghui.localvibe.core.ui.RotatingMusicThumb
 import com.shenghui.localvibe.core.ui.theme.LocalVibeTheme
 import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
+import com.shenghui.localvibe.feature.audio.AudioLibrarySection
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
 import com.shenghui.localvibe.feature.folder.FolderScreen
@@ -181,6 +182,8 @@ private fun LocalVibeApp() {
     var currentAudioIndex by remember { mutableStateOf(0) }
     var audioPlayMode by remember { mutableStateOf(AudioPlayMode.NORMAL) }
     var audioShuffleHistory by remember { mutableStateOf<List<String>>(emptyList()) }
+    var audioLibrarySection by rememberSaveable { mutableStateOf(AudioLibrarySection.AllSongs) }
+    var selectedAudioFolderKey by rememberSaveable { mutableStateOf<String?>(null) }
     var videoQueue by remember { mutableStateOf<List<LocalMediaFile>>(emptyList()) }
     var currentVideoIndex by remember { mutableStateOf(0) }
     var selectedVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -459,6 +462,39 @@ private fun LocalVibeApp() {
         )
         controller.prepare()
         controller.play()
+    }
+
+    fun applyAudioQueueScope(queue: List<LocalMediaFile>): Boolean {
+        val nextQueue = queue.filterVisibleAudios().distinctBy { it.normalizedUri() }
+        if (nextQueue.isEmpty()) return false
+        val currentUri = musicController?.currentMediaItem?.mediaId
+            ?: musicCurrentUri
+            ?: selectedAudioUri
+        if (currentUri.isNullOrBlank()) {
+            audioQueue = nextQueue
+            currentAudioIndex = 0
+            return true
+        }
+        val currentIndex = nextQueue.indexOfFirst {
+            it.uri == currentUri || it.normalizedUri() == currentUri
+        }
+        if (currentIndex < 0) return false
+        audioQueue = nextQueue
+        currentAudioIndex = currentIndex
+        selectedAudioUri = nextQueue[currentIndex].uri
+        selectedMediaFile = nextQueue[currentIndex]
+        return true
+    }
+
+    fun playAllAudioWithoutInterrupt(queue: List<LocalMediaFile>) {
+        if (applyAudioQueueScope(queue)) {
+            Toast.makeText(context, "已切换到当前列表队列", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val firstFile = queue.filterVisibleAudios().firstOrNull()
+        if (firstFile != null) {
+            playAudioQueue(queue, firstFile)
+        }
     }
 
     fun playOrResumeAudio(preferred: LocalMediaFile? = null): Boolean {
@@ -2159,14 +2195,13 @@ private fun LocalVibeApp() {
                             null
                         },
                         currentAudioUri = musicCurrentUri,
+                        librarySection = audioLibrarySection,
+                        selectedAudioFolderKey = selectedAudioFolderKey,
+                        onLibrarySectionChange = { audioLibrarySection = it },
+                        onSelectedAudioFolderKeyChange = { selectedAudioFolderKey = it },
                         onAddFolder = {
                             currentAddTargetType = LocalMediaType.AUDIO
                             openDocumentTreeLauncher.launch(null)
-                        },
-                        onOpenFolder = { item ->
-                            currentFolder = item.folder
-                            currentFolderTargetType = LocalMediaType.AUDIO
-                            navController.navigate(LocalVibeRoute.Folder)
                         },
                         onOpenAudio = { file, queue ->
                             playAudioQueue(queue, file)
@@ -2180,12 +2215,17 @@ private fun LocalVibeApp() {
                         onRemoveFavoriteAudio = { file ->
                             removeFavoriteAudio(file)
                         },
+                        onQueueScopeChanged = { queue ->
+                            applyAudioQueueScope(queue)
+                        },
+                        onPlayAll = { queue ->
+                            playAllAudioWithoutInterrupt(queue)
+                        },
                         onShuffleAll = { queue ->
                             val shuffledQueue = queue.shuffled()
                             val firstFile = shuffledQueue.firstOrNull()
                             if (firstFile != null) {
                                 playAudioQueue(shuffledQueue, firstFile, shuffle = true)
-                                navController.navigate(LocalVibeRoute.AudioPlayer)
                             }
                         },
                         onRemoveAudio = { file ->
@@ -2522,14 +2562,13 @@ private fun LocalVibeApp() {
                                 null
                             },
                             currentAudioUri = musicCurrentUri,
+                            librarySection = audioLibrarySection,
+                            selectedAudioFolderKey = selectedAudioFolderKey,
+                            onLibrarySectionChange = { audioLibrarySection = it },
+                            onSelectedAudioFolderKeyChange = { selectedAudioFolderKey = it },
                             onAddFolder = {
                                 currentAddTargetType = LocalMediaType.AUDIO
                                 openDocumentTreeLauncher.launch(null)
-                            },
-                            onOpenFolder = { item ->
-                                currentFolder = item.folder
-                                currentFolderTargetType = LocalMediaType.AUDIO
-                                navController.navigate(LocalVibeRoute.Folder)
                             },
                             onOpenAudio = { file, queue ->
                                 playAudioQueue(queue, file)
@@ -2542,6 +2581,12 @@ private fun LocalVibeApp() {
                             },
                             onRemoveFavoriteAudio = { file ->
                                 removeFavoriteAudio(file)
+                            },
+                            onQueueScopeChanged = { queue ->
+                                applyAudioQueueScope(queue)
+                            },
+                            onPlayAll = { queue ->
+                                playAllAudioWithoutInterrupt(queue)
                             },
                             onShuffleAll = { queue ->
                                 val shuffledQueue = queue.shuffled()
@@ -2596,20 +2641,11 @@ private fun LocalVibeApp() {
                         currentIndex = resolvedAudioIndex,
                         playMode = audioPlayMode,
                         onPlayModeChanged = { mode ->
-                            val currentFile = resolvedAudioFile ?: fallbackCurrentAudioFile()
                             audioPlayMode = mode
                             coroutineScope.launch {
                                 appStateStore.saveAudioPlayModeName(mode.name)
                             }
-                            if (mode == AudioPlayMode.SHUFFLE) {
-                                audioShuffleHistory = emptyList()
-                                val shuffledQueue = reshuffleAudioQueueKeepingCurrent(currentFile)
-                                if (currentFile != null && shuffledQueue.size > 1) {
-                                    playAudioQueue(shuffledQueue, currentFile)
-                                }
-                            } else {
-                                audioShuffleHistory = emptyList()
-                            }
+                            audioShuffleHistory = emptyList()
                             applyAudioPlayMode(musicController, mode)
                         },
                         onSelectAudio = { index ->
