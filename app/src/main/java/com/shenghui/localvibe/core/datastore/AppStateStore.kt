@@ -415,6 +415,14 @@ class AppStateStore(private val context: Context) {
         return context.appStateDataStore.data.first()[RecentAudioUriKey]
     }
 
+    suspend fun loadLastAudioUri(): String? {
+        return context.appStateDataStore.data.first()[LastAudioUriKey]
+    }
+
+    suspend fun loadAudioPlayModeName(): String? {
+        return context.appStateDataStore.data.first()[AudioPlayModeKey]
+    }
+
     suspend fun loadLastMainTabRoute(): String? {
         return context.appStateDataStore.data.first()[LastMainTabRouteKey]
     }
@@ -435,6 +443,26 @@ class AppStateStore(private val context: Context) {
                 prefs.remove(RecentAudioUriKey)
             } else {
                 prefs[RecentAudioUriKey] = uri
+            }
+        }
+    }
+
+    suspend fun saveLastAudioUri(uri: String?) {
+        context.appStateDataStore.edit { prefs ->
+            if (uri.isNullOrBlank()) {
+                prefs.remove(LastAudioUriKey)
+            } else {
+                prefs[LastAudioUriKey] = uri
+            }
+        }
+    }
+
+    suspend fun saveAudioPlayModeName(modeName: String?) {
+        context.appStateDataStore.edit { prefs ->
+            if (modeName.isNullOrBlank()) {
+                prefs.remove(AudioPlayModeKey)
+            } else {
+                prefs[AudioPlayModeKey] = modeName
             }
         }
     }
@@ -826,6 +854,8 @@ class AppStateStore(private val context: Context) {
         val VideoFolderPlaybackSpeedKey = stringPreferencesKey("video_folder_playback_speed_json")
         val RecentVideoUriKey = stringPreferencesKey("recent_video_uri")
         val RecentAudioUriKey = stringPreferencesKey("recent_audio_uri")
+        val LastAudioUriKey = stringPreferencesKey("last_audio_uri")
+        val AudioPlayModeKey = stringPreferencesKey("audio_play_mode")
         val LastMainTabRouteKey = stringPreferencesKey("last_main_tab_route")
         const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
         const val MAX_VIDEO_PLAYBACK_SPEED = 5f

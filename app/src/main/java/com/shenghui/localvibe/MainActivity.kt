@@ -189,6 +189,7 @@ private fun LocalVibeApp() {
     var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
     var recentVideoUri by remember { mutableStateOf<String?>(null) }
     var recentAudioUri by remember { mutableStateOf<String?>(null) }
+    var lastAudioUri by remember { mutableStateOf<String?>(null) }
     var musicController by remember { mutableStateOf<MediaController?>(null) }
     var musicCurrentUri by remember { mutableStateOf<String?>(null) }
     var musicCurrentPositionMs by remember { mutableStateOf(0L) }
@@ -324,6 +325,30 @@ private fun LocalVibeApp() {
         return file?.let { listOf(it) }.orEmpty()
     }
 
+    fun restoreAudioQueueFromScannedFilesIfNeeded() {
+        val scannedQueue = allVisibleAudioFiles()
+        if (scannedQueue.isEmpty()) return
+        val currentQueueUris = audioQueue
+            .map { it.normalizedUri() }
+            .filter { it.isNotBlank() }
+            .toSet()
+        val scannedQueueUris = scannedQueue
+            .map { it.normalizedUri() }
+            .filter { it.isNotBlank() }
+            .toSet()
+        val shouldRestoreQueue = audioQueue.isEmpty() || currentQueueUris.none { it in scannedQueueUris }
+        if (!shouldRestoreQueue) return
+        val currentUri = selectedAudioUri ?: lastAudioUri ?: recentAudioUri ?: musicCurrentUri
+        val nextIndex = scannedQueue.indexOfFirst {
+            it.uri == currentUri || it.normalizedUri() == currentUri
+        }.takeIf { it >= 0 } ?: 0
+        audioQueue = scannedQueue
+        currentAudioIndex = nextIndex
+        if (selectedAudioUri.isNullOrBlank() && currentUri != null) {
+            selectedAudioUri = scannedQueue.getOrNull(nextIndex)?.uri
+        }
+    }
+
     fun reshuffleAudioQueueKeepingCurrent(currentFile: LocalMediaFile?): List<LocalMediaFile> {
         val queue = audioPlaybackQueueFor(currentFile)
         val current = currentFile ?: return queue.shuffled(Random.Default)
@@ -347,6 +372,7 @@ private fun LocalVibeApp() {
             ?: findAudioFileByUri(musicCurrentUri)
             ?: selectedMediaFile?.takeIf { it.type == LocalMediaType.AUDIO }
             ?: findAudioFileByUri(selectedAudioUri)
+            ?: findAudioFileByUri(lastAudioUri)
             ?: findAudioFileByUri(recentAudioUri)
     }
 
@@ -357,8 +383,10 @@ private fun LocalVibeApp() {
             .plus(audioRecentRecords.filterNot { it.uri.trim() == uri })
             .take(100)
         audioRecentRecords = next
+        lastAudioUri = uri
         recentAudioUri = uri
         coroutineScope.launch {
+            appStateStore.saveLastAudioUri(uri)
             appStateStore.saveRecentAudioUri(uri)
             appStateStore.saveAudioRecentRecords(next)
         }
@@ -419,6 +447,9 @@ private fun LocalVibeApp() {
         if (shuffle) {
             audioPlayMode = AudioPlayMode.SHUFFLE
             audioShuffleHistory = emptyList()
+            coroutineScope.launch {
+                appStateStore.saveAudioPlayModeName(AudioPlayMode.SHUFFLE.name)
+            }
         }
         applyAudioPlayMode(controller, audioPlayMode)
         controller.setMediaItems(
@@ -556,7 +587,9 @@ private fun LocalVibeApp() {
             selectedMediaFile = selectedMediaFile?.takeIf { it.type != LocalMediaType.AUDIO }
             selectedAudioUri = null
             recentAudioUri = null
+            lastAudioUri = null
             coroutineScope.launch {
+                appStateStore.saveLastAudioUri(null)
                 appStateStore.saveRecentAudioUri(null)
             }
             return
@@ -572,6 +605,7 @@ private fun LocalVibeApp() {
         selectedMediaFile = nextFile
         selectedAudioUri = nextFile.uri
         recentAudioUri = nextFile.uri
+        lastAudioUri = nextFile.uri
         controller.setMediaItems(
             audioQueue.map { it.toAudioMediaItem() },
             nextIndex,
@@ -584,6 +618,7 @@ private fun LocalVibeApp() {
             controller.play()
         }
         coroutineScope.launch {
+            appStateStore.saveLastAudioUri(lastAudioUri)
             appStateStore.saveRecentAudioUri(recentAudioUri)
         }
     }
@@ -684,6 +719,9 @@ private fun LocalVibeApp() {
                 }
                 if (recentAudioUri?.trim() == file.normalizedUri()) {
                     recentAudioUri = null
+                }
+                if (lastAudioUri?.trim() == file.normalizedUri()) {
+                    lastAudioUri = null
                 }
             }
 
@@ -1262,6 +1300,7 @@ private fun LocalVibeApp() {
                         scannedFilesByFolder[typedFolderKey(LocalMediaType.AUDIO, result.folder.id)] =
                             result.files
                     }
+                    restoreAudioQueueFromScannedFilesIfNeeded()
                     if (showCompletionToast && folders.isEmpty()) {
                         Toast.makeText(context, "没有扫描到音乐文件", Toast.LENGTH_SHORT).show()
                     }
@@ -1593,7 +1632,10 @@ private fun LocalVibeApp() {
             }
         }
         recentVideoUri = appStateStore.loadRecentVideoUri()
-        recentAudioUri = appStateStore.loadRecentAudioUri()
+        val persistedRecentAudioUri = appStateStore.loadRecentAudioUri()
+        recentAudioUri = persistedRecentAudioUri
+        lastAudioUri = appStateStore.loadLastAudioUri() ?: persistedRecentAudioUri
+        audioPlayMode = appStateStore.loadAudioPlayModeName().toAudioPlayMode()
         favoriteAudioUris = appStateStore.loadFavoriteAudioUris()
         audioRecentRecords = appStateStore.loadAudioRecentRecords()
             .ifEmpty {
@@ -2533,6 +2575,15 @@ private fun LocalVibeApp() {
                             modifier = contentModifier
                         )
                     }
+                    val resolvedAudioQueue = audioPlaybackQueueFor(resolvedAudioFile)
+                    val resolvedAudioIndex = resolvedAudioFile?.let { file ->
+                        resolvedAudioQueue.indexOfFirst {
+                            it.uri == file.uri || it.normalizedUri() == file.normalizedUri()
+                        }.takeIf { it >= 0 }
+                    } ?: currentAudioIndex.coerceIn(
+                        0,
+                        resolvedAudioQueue.lastIndex.coerceAtLeast(0)
+                    )
                     AudioPlayerScreen(
                         mediaFile = resolvedAudioFile,
                         player = musicController,
@@ -2541,12 +2592,15 @@ private fun LocalVibeApp() {
                         isPlaying = musicIsPlaying,
                         isFavorite = resolvedAudioFile?.normalizedUri() in favoriteAudioUris,
                         audioSessionId = MusicPlaybackService.currentAudioSessionId,
-                        queue = audioQueue,
-                        currentIndex = currentAudioIndex,
+                        queue = resolvedAudioQueue,
+                        currentIndex = resolvedAudioIndex,
                         playMode = audioPlayMode,
                         onPlayModeChanged = { mode ->
                             val currentFile = resolvedAudioFile ?: fallbackCurrentAudioFile()
                             audioPlayMode = mode
+                            coroutineScope.launch {
+                                appStateStore.saveAudioPlayModeName(mode.name)
+                            }
                             if (mode == AudioPlayMode.SHUFFLE) {
                                 audioShuffleHistory = emptyList()
                                 val shuffledQueue = reshuffleAudioQueueKeepingCurrent(currentFile)
@@ -2559,8 +2613,9 @@ private fun LocalVibeApp() {
                             applyAudioPlayMode(musicController, mode)
                         },
                         onSelectAudio = { index ->
-                            val nextFile = audioQueue.getOrNull(index) ?: return@AudioPlayerScreen
-                            playAudioQueue(audioQueue, nextFile)
+                            val nextFile = resolvedAudioQueue.getOrNull(index)
+                                ?: return@AudioPlayerScreen
+                            playAudioQueue(resolvedAudioQueue, nextFile)
                         },
                         onPlayPause = {
                             if (!playOrResumeAudio(resolvedAudioFile)) {
@@ -2995,6 +3050,11 @@ private fun VideoVisibilityRecordUiModel.toLocalVideoFile(): LocalMediaFile {
 }
 
 private fun LocalMediaFile.normalizedUri(): String = uri.trim()
+
+private fun String?.toAudioPlayMode(): AudioPlayMode {
+    val value = this?.trim().orEmpty()
+    return AudioPlayMode.values().firstOrNull { it.name == value } ?: AudioPlayMode.NORMAL
+}
 
 private fun PersistedBookProgress.progressPercent(): Int {
     if (totalParagraphs <= 0) return 0

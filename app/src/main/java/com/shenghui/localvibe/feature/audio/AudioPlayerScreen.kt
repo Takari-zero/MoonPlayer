@@ -19,6 +19,9 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
@@ -59,8 +63,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -1089,6 +1091,7 @@ private fun SmallIconAction(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QueueDialog(
     queue: List<LocalMediaFile>,
@@ -1096,40 +1099,161 @@ private fun QueueDialog(
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit
 ) {
-    AlertDialog(
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val listState = rememberLazyListState()
+    val targetIndex = currentIndex.takeIf { it in queue.indices }
+    LaunchedEffect(queue.size, targetIndex) {
+        if (targetIndex != null) {
+            listState.scrollToItem((targetIndex - 3).coerceAtLeast(0))
+        }
+    }
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("播放列表") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                queue.take(30).forEachIndexed { index, file ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(index) },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (index == currentIndex) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainer
-                            }
-                        )
-                    ) {
-                        Text(
-                            text = file.displayTitle(),
-                            modifier = Modifier.padding(12.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+        sheetState = sheetState,
+        containerColor = Color(0xFF161321),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .size(width = 38.dp, height = 4.dp)
+                    .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(99.dp))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.76f)
+                .navigationBarsPadding()
+                .padding(start = 22.dp, end = 22.dp, bottom = 16.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+            ) {
+                Column(modifier = Modifier.align(Alignment.CenterStart)) {
+                    Text(
+                        text = "播放队列",
+                        color = AudioTextPrimary,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        text = "当前队列 · ${queue.size} 首",
+                        color = AudioTextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "关闭",
+                        tint = AudioTextPrimary.copy(alpha = 0.82f)
+                    )
+                }
+            }
+            Text(
+                text = "队列",
+                color = AudioTextSecondary,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            if (queue.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "暂无播放队列",
+                        color = AudioTextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    itemsIndexed(
+                        items = queue,
+                        key = { _, file -> file.normalizedQueueKey() }
+                    ) { index, file ->
+                        QueueSheetItem(
+                            file = file,
+                            selected = index == currentIndex,
+                            onClick = { onSelect(index) }
                         )
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
-            }
         }
-    )
+    }
+}
+
+@Composable
+private fun QueueSheetItem(
+    file: LocalMediaFile,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) AudioPurple.copy(alpha = 0.18f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(42.dp)
+                .clip(RoundedCornerShape(99.dp))
+                .background(if (selected) AudioPurpleLight else Color.Transparent)
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp, end = 12.dp)
+        ) {
+            Text(
+                text = file.displayTitle(),
+                color = if (selected) AudioPurpleLight else AudioTextPrimary.copy(alpha = 0.88f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = file.queueSubtitle(),
+                color = AudioTextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+        Text(
+            text = file.queueDurationText(),
+            color = AudioTextSecondary,
+            fontSize = 12.sp,
+            maxLines = 1
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1515,6 +1639,21 @@ private fun EqualizerDialog(
 
 private fun LocalMediaFile.displayTitle(): String {
     return name.substringBeforeLast('.', name)
+}
+
+private fun LocalMediaFile.queueSubtitle(): String {
+    return listOfNotNull(
+        extension.ifBlank { "Mp3" }.uppercase().takeIf { it.isNotBlank() },
+        parentFolderName?.takeIf { it.isNotBlank() }
+    ).joinToString(" · ").ifBlank { "本地音乐" }
+}
+
+private fun LocalMediaFile.queueDurationText(): String {
+    return durationMs?.takeIf { it > 0L }?.let(::formatDuration) ?: "--:--"
+}
+
+private fun LocalMediaFile.normalizedQueueKey(): String {
+    return uri.trim().ifBlank { id.ifBlank { name } }
 }
 
 private fun AudioPlayMode.icon(): androidx.compose.ui.graphics.vector.ImageVector {
