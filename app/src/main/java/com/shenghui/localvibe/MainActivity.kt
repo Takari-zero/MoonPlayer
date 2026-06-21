@@ -2636,7 +2636,16 @@ private fun LocalVibeApp() {
                             musicController?.seekTo(positionMs)
                         },
                         onToggleFavorite = {
+                            val uri = resolvedAudioFile?.normalizedUri().orEmpty()
+                            val willFavorite = uri.isNotBlank() && uri !in favoriteAudioUris
                             toggleFavoriteAudio(resolvedAudioFile)
+                            if (uri.isNotBlank()) {
+                                Toast.makeText(
+                                    context,
+                                    if (willFavorite) "已加入我喜欢" else "已取消喜欢",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         },
                         onBack = { navController.popBackStack() },
                         onRemoveCurrent = { file -> removeMediaFromList(file) },
