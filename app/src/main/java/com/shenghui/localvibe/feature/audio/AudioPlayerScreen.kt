@@ -757,7 +757,8 @@ private fun ServiceAudioPlayer(
                         )
                     },
                     onClick = onToggleFavorite,
-                    active = isFavorite
+                    active = isFavorite,
+                    activeTint = Color(0xFFFF9AE6)
                 )
                 SmallIconAction(
                     label = "歌词",
@@ -1174,9 +1175,10 @@ private fun SmallIconAction(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     active: Boolean = false,
+    activeTint: Color = AudioPurpleLight,
     iconSize: androidx.compose.ui.unit.Dp = 28.dp
 ) {
-    val tint = if (active) AudioPurpleLight else AudioTextPrimary.copy(alpha = 0.86f)
+    val tint = if (active) activeTint else AudioTextPrimary.copy(alpha = 0.86f)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
