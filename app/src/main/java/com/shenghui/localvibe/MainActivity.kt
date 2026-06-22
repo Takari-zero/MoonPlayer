@@ -6,9 +6,12 @@ import android.app.RecoverableSecurityException
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
@@ -177,6 +180,7 @@ private fun LocalVibeApp() {
     var currentFolderTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
     var currentAddTargetType by remember { mutableStateOf<LocalMediaType?>(null) }
     var lastAutoScanAt by remember { mutableStateOf(0L) }
+    var lastVideoMediaStoreRefreshAt by remember { mutableStateOf(0L) }
     var videoPermissionDenied by remember { mutableStateOf(false) }
     var audioPermissionDenied by remember { mutableStateOf(false) }
     var selectedMediaFile by remember { mutableStateOf<LocalMediaFile?>(null) }
@@ -1475,6 +1479,95 @@ private fun LocalVibeApp() {
         }
     }
 
+    fun refreshVideoLibraryFromMediaStore(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastVideoMediaStoreRefreshAt < VIDEO_MEDIASTORE_REFRESH_DEBOUNCE_MS) {
+            return
+        }
+        lastVideoMediaStoreRefreshAt = now
+        val videoPermission = LocalMediaType.VIDEO.mediaReadPermission()
+        if (videoPermission != null && !hasPermission(context, videoPermission)) {
+            videoPermissionDenied = true
+            isVideoInitialScanComplete = true
+            isVideoAutoScanning = false
+            return
+        }
+        videoPermissionDenied = false
+        runAutoScan(LocalMediaType.VIDEO)
+    }
+
+    fun applyIncrementalVideoScan(result: com.shenghui.localvibe.core.scanner.ScannedMediaFolder): Boolean {
+        val folderId = result.folder.id.trim()
+        if (folderId.isBlank()) return false
+        if (folderId in hiddenVideoFolderIds) return true
+        val newFiles = result.files.filterVisibleVideos()
+        if (newFiles.isEmpty()) return false
+        val folderKey = typedFolderKey(LocalMediaType.VIDEO, folderId)
+        val mergedFiles = (newFiles + scannedFilesByFolder[folderKey].orEmpty())
+            .filter { it.type == LocalMediaType.VIDEO }
+            .distinctBy { it.normalizedUri() }
+            .sortedWith(
+                compareByDescending<LocalMediaFile> { it.modifiedAt ?: 0L }
+                    .thenBy { it.name.lowercase() }
+            )
+        scannedFilesByFolder[folderKey] = mergedFiles
+
+        val updatedFolder = result.folder.copy(
+            videoCount = mergedFiles.count { it.type == LocalMediaType.VIDEO },
+            isScanning = false
+        )
+        videoFolders.upsertFolder(folderId) {
+            val existing = videoFolders.firstOrNull { it.id == folderId }
+            updatedFolder.copy(
+                name = updatedFolder.name.ifBlank { existing?.name.orEmpty() },
+                uri = updatedFolder.uri.ifBlank { existing?.uri.orEmpty() }
+            )
+        }
+        if (currentFolderTargetType == LocalMediaType.VIDEO && currentFolder?.id?.trim() == folderId) {
+            currentFolder = currentFolder?.copy(
+                name = updatedFolder.name.ifBlank { currentFolder?.name.orEmpty() },
+                uri = updatedFolder.uri.ifBlank { currentFolder?.uri.orEmpty() },
+                videoCount = updatedFolder.videoCount,
+                isScanning = false
+            ) ?: updatedFolder
+        }
+        prewarmVideoThumbnails(newFiles)
+        isVideoInitialScanComplete = true
+        isVideoAutoScanning = false
+        return true
+    }
+
+    fun refreshVideoLibraryFromMediaStoreChanges(changedUris: List<Uri>) {
+        val uniqueUris = changedUris.distinctBy { it.toString() }
+        if (uniqueUris.isEmpty()) {
+            refreshVideoLibraryFromMediaStore(force = true)
+            return
+        }
+        val videoPermission = LocalMediaType.VIDEO.mediaReadPermission()
+        if (videoPermission != null && !hasPermission(context, videoPermission)) {
+            videoPermissionDenied = true
+            isVideoInitialScanComplete = true
+            isVideoAutoScanning = false
+            return
+        }
+        videoPermissionDenied = false
+        coroutineScope.launch {
+            val scannedFolders = withContext(Dispatchers.IO) {
+                uniqueUris.mapNotNull { uri ->
+                    MediaStoreScanner.scanVideo(context.applicationContext, uri)
+                }
+            }
+            if (scannedFolders.isEmpty()) {
+                refreshVideoLibraryFromMediaStore(force = true)
+                return@launch
+            }
+            scannedFolders.forEach { result ->
+                applyIncrementalVideoScan(result)
+            }
+            lastVideoMediaStoreRefreshAt = System.currentTimeMillis()
+        }
+    }
+
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -1853,12 +1946,49 @@ private fun LocalVibeApp() {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                refreshVideoLibraryFromMediaStore(force = true)
                 autoScanVideoAndAudio()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    DisposableEffect(context, isVideoVisibilityReady) {
+        val handler = Handler(Looper.getMainLooper())
+        val pendingVideoUris = linkedSetOf<Uri>()
+        val refreshRunnable = Runnable {
+            if (isVideoVisibilityReady) {
+                val changedUris = pendingVideoUris.toList()
+                pendingVideoUris.clear()
+                refreshVideoLibraryFromMediaStoreChanges(changedUris)
+            }
+        }
+        val observer = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                handler.removeCallbacks(refreshRunnable)
+                handler.postDelayed(refreshRunnable, VIDEO_MEDIASTORE_REFRESH_DEBOUNCE_MS)
+            }
+
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                uri?.let { pendingVideoUris.add(it) }
+                onChange(selfChange)
+            }
+
+            override fun onChange(selfChange: Boolean, uris: Collection<Uri>, flags: Int) {
+                pendingVideoUris.addAll(uris)
+                onChange(selfChange)
+            }
+        }
+        context.contentResolver.registerContentObserver(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            true,
+            observer
+        )
+        onDispose {
+            handler.removeCallbacks(refreshRunnable)
+            context.contentResolver.unregisterContentObserver(observer)
         }
     }
     DisposableEffect(Unit) {
@@ -3120,6 +3250,7 @@ private enum class FolderVideoDeleteMode {
 }
 
 private const val AUTO_SCAN_THROTTLE_MS = 10_000L
+private const val VIDEO_MEDIASTORE_REFRESH_DEBOUNCE_MS = 1_200L
 private const val BOOK_LOG_TAG = "LocalVibeBooks"
 private const val VIDEO_LOG_TAG = "LocalVibeVideo"
 

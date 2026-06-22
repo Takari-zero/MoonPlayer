@@ -3,6 +3,7 @@ package com.shenghui.localvibe.core.scanner
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import com.shenghui.localvibe.feature.home.model.MediaFolderUiModel
 
@@ -20,6 +21,91 @@ object MediaStoreScanner {
             folderPrefix = "auto:video",
             fallbackFolderName = "视频"
         )
+    }
+
+    fun scanVideo(context: Context, uri: Uri): ScannedMediaFolder? {
+        val mediaId = runCatching { ContentUris.parseId(uri) }.getOrNull() ?: return null
+        val collectionUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val itemUri = ContentUris.withAppendedId(collectionUri, mediaId)
+        val projection = buildList {
+            add(MediaStore.MediaColumns._ID)
+            add(MediaStore.MediaColumns.DISPLAY_NAME)
+            add(MediaStore.MediaColumns.SIZE)
+            add(MediaStore.MediaColumns.DATE_MODIFIED)
+            add(MediaStore.MediaColumns.RELATIVE_PATH)
+            add(MediaStore.MediaColumns.DATA)
+            add(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+            add(MediaStore.Video.Media.BUCKET_ID)
+            add(MediaStore.Video.Media.DURATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(MediaStore.MediaColumns.IS_PENDING)
+            }
+        }.toTypedArray()
+
+        return runCatching {
+            context.contentResolver.query(itemUri, projection, null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val dateModifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                val relativePathColumn = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                val dataColumn = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                val bucketNameColumn = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                val durationColumn = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+                val pendingColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    cursor.getColumnIndex(MediaStore.MediaColumns.IS_PENDING)
+                } else {
+                    -1
+                }
+
+                val isPending = pendingColumn >= 0 && cursor.getInt(pendingColumn) == 1
+                val size = cursor.getLong(sizeColumn)
+                if (isPending || size <= 0L) return@use null
+
+                val name = cursor.getString(nameColumn).orEmpty()
+                val modifiedAt = cursor.getLong(dateModifiedColumn).takeIf { it > 0 }?.times(1000)
+                val relativePath = if (relativePathColumn >= 0) cursor.getString(relativePathColumn).orEmpty() else ""
+                val dataPath = if (dataColumn >= 0) cursor.getString(dataColumn).orEmpty() else ""
+                val bucketDisplayName = if (bucketNameColumn >= 0) cursor.getString(bucketNameColumn).orEmpty() else ""
+                val durationMs = if (durationColumn >= 0) cursor.getLong(durationColumn).takeIf { it > 0 } else null
+                val rawFolderKey = relativePath.toFolderKey()
+                    .ifBlank { dataPath.toParentFolderKey() }
+                    .ifBlank { "视频" }
+                val folderKey = rawFolderKey.toCanonicalFolderKey().ifBlank { rawFolderKey }
+                val folderName = resolveFolderDisplayName(
+                    bucketDisplayName = bucketDisplayName,
+                    relativePath = relativePath,
+                    dataPath = dataPath,
+                    fallbackFolderName = "视频",
+                    preferSpecificVideoFolderName = true
+                )
+                val folderId = "auto:video:$folderKey"
+                val file = LocalMediaFile(
+                    id = itemUri.toString(),
+                    name = name.ifBlank { "未命名文件" },
+                    uri = itemUri.toString(),
+                    type = LocalMediaType.VIDEO,
+                    extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase(),
+                    size = size,
+                    parentFolderName = folderName,
+                    modifiedAt = modifiedAt,
+                    durationMs = durationMs
+                )
+                ScannedMediaFolder(
+                    folder = MediaFolderUiModel(
+                        id = folderId,
+                        name = folderName,
+                        uri = folderId,
+                        videoCount = 1,
+                        audioCount = 0,
+                        bookCount = 0,
+                        isScanning = false
+                    ),
+                    files = listOf(file)
+                )
+            }
+        }.getOrNull()
     }
 
     fun scanAudios(context: Context): List<ScannedMediaFolder> {
