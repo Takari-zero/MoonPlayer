@@ -553,13 +553,10 @@ private fun ServiceAudioPlayer(
         PlayerTopBar(
             title = mediaFile.displayTitle(),
             onBack = onBack,
-            onSongInfo = { Toast.makeText(context, "歌曲信息后续实现", Toast.LENGTH_SHORT).show() },
             onShowQueue = { showQueue = true },
             onShowEqualizer = { showEqualizer = true },
-            onShare = { Toast.makeText(context, "分享功能后续实现", Toast.LENGTH_SHORT).show() },
             onRemove = { onRemoveCurrent(mediaFile) },
-            onDelete = { showDeleteConfirm = true },
-            onMore = { Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show() }
+            onDelete = { showDeleteConfirm = true }
         )
 
         Column(
@@ -759,11 +756,6 @@ private fun ServiceAudioPlayer(
                     onClick = onToggleFavorite,
                     active = isFavorite,
                     activeTint = Color(0xFFFF9AE6)
-                )
-                SmallIconAction(
-                    label = "歌词",
-                    icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
-                    onClick = { Toast.makeText(context, "歌词后续实现", Toast.LENGTH_SHORT).show() }
                 )
             }
         }
@@ -1090,13 +1082,10 @@ private fun AudioProgressSlider(
 private fun PlayerTopBar(
     title: String,
     onBack: () -> Unit,
-    onSongInfo: () -> Unit,
     onShowQueue: () -> Unit,
     onShowEqualizer: () -> Unit,
-    onShare: () -> Unit,
     onRemove: () -> Unit,
-    onDelete: () -> Unit,
-    onMore: () -> Unit
+    onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
@@ -1118,10 +1107,6 @@ private fun PlayerTopBar(
                 containerColor = AudioPanelColor,
                 shape = RoundedCornerShape(18.dp)
             ) {
-                AudioTopMenuItem("歌曲信息") {
-                    expanded = false
-                    onSongInfo()
-                }
                 AudioTopMenuItem("播放列表") {
                     expanded = false
                     onShowQueue()
@@ -1130,10 +1115,6 @@ private fun PlayerTopBar(
                     expanded = false
                     onShowEqualizer()
                 }
-                AudioTopMenuItem("分享") {
-                    expanded = false
-                    onShare()
-                }
                 AudioTopMenuItem("隐藏") {
                     expanded = false
                     onRemove()
@@ -1141,10 +1122,6 @@ private fun PlayerTopBar(
                 AudioTopMenuItem("永久删除文件", danger = true) {
                     expanded = false
                     onDelete()
-                }
-                AudioTopMenuItem("更多功能") {
-                    expanded = false
-                    onMore()
                 }
             }
         }
