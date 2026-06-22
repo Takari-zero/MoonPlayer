@@ -21,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -29,7 +28,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -280,11 +278,6 @@ fun BookListenScreen(
                             "无法打开语音设置"
                         )
                         "重新检测 TTS" -> restartTtsCheck()
-                        "目录" -> Toast.makeText(context, "章节目录后续实现", Toast.LENGTH_SHORT).show()
-                        "跳转段落" -> Toast.makeText(context, "跳转段落功能后续实现", Toast.LENGTH_SHORT).show()
-                        "字号设置" -> Toast.makeText(context, "字号设置功能后续实现", Toast.LENGTH_SHORT).show()
-                        "夜间模式" -> Toast.makeText(context, "夜间模式后续实现", Toast.LENGTH_SHORT).show()
-                        else -> Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -357,12 +350,6 @@ fun BookListenScreen(
                         },
                         onSpeechRateChange = { speechRate = it },
                         onPitchChange = { pitch = it },
-                        onTimer = {
-                            Toast.makeText(context, "定时功能后续实现", Toast.LENGTH_SHORT).show()
-                        },
-                        onCatalog = {
-                            Toast.makeText(context, "章节目录后续实现", Toast.LENGTH_SHORT).show()
-                        },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -412,12 +399,7 @@ private fun BookListenTopBar(
             ) {
                 listOf(
                     "语音设置",
-                    "重新检测 TTS",
-                    "目录",
-                    "跳转段落",
-                    "字号设置",
-                    "夜间模式",
-                    "更多功能"
+                    "重新检测 TTS"
                 ).forEach { item ->
                     DropdownMenuItem(
                         text = { Text(item, color = Color.White.copy(alpha = 0.92f)) },
@@ -489,8 +471,6 @@ private fun BookListenContent(
     onSeekParagraph: (Int) -> Unit,
     onSpeechRateChange: (Float) -> Unit,
     onPitchChange: (Float) -> Unit,
-    onTimer: () -> Unit,
-    onCatalog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -586,10 +566,8 @@ private fun BookListenContent(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            ListenIconButton("语速", { Icon(Icons.Filled.Speed, null) }, {})
-            ListenIconButton("音调", { Icon(Icons.Filled.GraphicEq, null) }, {})
-            ListenIconButton("定时", { Icon(Icons.Filled.Timer, null) }, onTimer)
-            ListenIconButton("目录", { Icon(Icons.Filled.List, null) }, onCatalog)
+            ListenIconLabel("语速", { Icon(Icons.Filled.Speed, null) })
+            ListenIconLabel("音调", { Icon(Icons.Filled.GraphicEq, null) })
         }
 
         Column(
@@ -660,6 +638,26 @@ private fun ListenIconButton(
         ) {
             androidx.compose.runtime.CompositionLocalProvider(
                 androidx.compose.material3.LocalContentColor provides Color.White.copy(alpha = 0.88f)
+            ) {
+                icon()
+            }
+        }
+        Text(label, color = Color.White.copy(alpha = 0.68f), fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+@Composable
+private fun ListenIconLabel(
+    label: String,
+    icon: @Composable () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier.size(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides Color.White.copy(alpha = 0.72f)
             ) {
                 icon()
             }

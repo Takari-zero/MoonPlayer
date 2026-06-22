@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -131,13 +130,6 @@ fun BookLibraryScreen(
                     }
                 },
                 onImportBookFile = onImportBookFile,
-                onRescanBooks = onRescanBooks,
-                onManage = {
-                    Toast.makeText(context, "管理功能后续实现", Toast.LENGTH_SHORT).show()
-                },
-                onMore = {
-                    Toast.makeText(context, "更多功能后续实现", Toast.LENGTH_SHORT).show()
-                },
                 onStartMultiSelect = {
                     isMultiSelectMode = true
                     selectedBookUris = emptySet()
@@ -252,9 +244,6 @@ private fun BookHeader(
     selectedCount: Int,
     onToggleSearch: () -> Unit,
     onImportBookFile: () -> Unit,
-    onRescanBooks: () -> Unit,
-    onManage: () -> Unit,
-    onMore: () -> Unit,
     onStartMultiSelect: () -> Unit,
     onCancelMultiSelect: () -> Unit,
     onSelectAll: () -> Unit,
@@ -333,11 +322,6 @@ private fun BookHeader(
                     contentDescription = "导入文档",
                     onClick = onImportBookFile
                 )
-                BookHeaderIconButton(
-                    icon = Icons.Filled.Refresh,
-                    contentDescription = "重新扫描",
-                    onClick = onRescanBooks
-                )
                 Box {
                     BookHeaderIconButton(
                         icon = Icons.Filled.MoreVert,
@@ -350,24 +334,10 @@ private fun BookHeader(
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         DropdownMenuItem(
-                            text = { Text("管理") },
-                            onClick = {
-                                expanded = false
-                                onManage()
-                            }
-                        )
-                        DropdownMenuItem(
                             text = { Text("多选删除") },
                             onClick = {
                                 expanded = false
                                 onStartMultiSelect()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("更多功能后续实现") },
-                            onClick = {
-                                expanded = false
-                                onMore()
                             }
                         )
                     }
