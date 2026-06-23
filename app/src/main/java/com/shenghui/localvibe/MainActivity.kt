@@ -2210,12 +2210,16 @@ private fun LocalVibeApp() {
             navController.navigate(LocalVibeRoute.AudioPlayer)
         }
         fun navigateToMainTab(route: String) {
+            if (route != LocalVibeRoute.VideoLibrary) {
+                currentFolder = null
+                currentFolderTargetType = null
+            }
             navController.navigate(route) {
                 popUpTo(navController.graph.findStartDestination().id) {
-                    saveState = true
+                    saveState = route == LocalVibeRoute.VideoLibrary
                 }
                 launchSingleTop = true
-                restoreState = true
+                restoreState = route == LocalVibeRoute.VideoLibrary
             }
         }
         val backStackEntry by navController.currentBackStackEntryAsState()
