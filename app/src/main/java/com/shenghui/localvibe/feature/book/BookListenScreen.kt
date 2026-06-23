@@ -5,6 +5,7 @@ import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,6 +71,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -82,6 +85,7 @@ import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.tts.BookTtsController
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun BookListenScreen(
@@ -1008,6 +1012,7 @@ private fun ChapterCatalogBottomSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
     val initialChapterIndex = remember(chapters, currentChapter) {
         currentChapter?.let { chapter ->
             chapters.indexOfFirst { it.paragraphIndex == chapter.paragraphIndex }.takeIf { it >= 0 }
@@ -1098,21 +1103,39 @@ private fun ChapterCatalogBottomSheet(
             if (chapters.isEmpty()) {
                 ChapterEmptyState(onRefresh = onRefresh)
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    state = listState,
-                    contentPadding = PaddingValues(bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    itemsIndexed(
-                        items = chapters,
-                        key = { _, chapter -> chapter.paragraphIndex }
-                    ) { _, chapter ->
-                        ChapterRow(
-                            chapter = chapter,
-                            isCurrent = chapter == currentChapter,
-                            currentParagraphIndex = currentParagraphIndex,
-                            onClick = { onChapterClick(chapter) }
+                val showFastScroller = chapters.size >= 20
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(end = if (showFastScroller) 24.dp else 0.dp),
+                        state = listState,
+                        contentPadding = PaddingValues(bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        itemsIndexed(
+                            items = chapters,
+                            key = { _, chapter -> chapter.paragraphIndex }
+                        ) { _, chapter ->
+                            ChapterRow(
+                                chapter = chapter,
+                                isCurrent = chapter == currentChapter,
+                                onClick = { onChapterClick(chapter) }
+                            )
+                        }
+                    }
+                    if (showFastScroller) {
+                        ChapterFastScroller(
+                            itemCount = chapters.size,
+                            currentIndex = listState.firstVisibleItemIndex,
+                            onScrollToIndex = { targetIndex ->
+                                scrollScope.launch {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .fillMaxHeight()
                         )
                     }
                 }
@@ -1157,48 +1180,81 @@ private fun ChapterEmptyState(
 private fun ChapterRow(
     chapter: BookChapter,
     isCurrent: Boolean,
-    currentParagraphIndex: Int,
     onClick: () -> Unit
 ) {
     val background = if (isCurrent) Color(0xFF24263A) else Color.Transparent
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .height(52.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(background)
-            .clickable(onClick = onClick)
-            .padding(vertical = 15.dp),
+            .clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
                 .width(3.dp)
-                .height(38.dp)
+                .height(36.dp)
                 .background(if (isCurrent) Color(0xFFB58DFF) else Color.Transparent)
         )
         Text(
             text = chapter.title,
             modifier = Modifier
-                .weight(1f)
-                .padding(start = 20.dp, end = 12.dp),
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 12.dp),
             color = Color.White.copy(alpha = if (isCurrent) 0.94f else 0.68f),
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.sp),
             fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Text(
-            text = if (isCurrent) {
-                "当前 · 第 ${currentParagraphIndex + 1} 段"
-            } else {
-                "第 ${chapter.paragraphIndex + 1} 段"
+    }
+}
+
+
+@Composable
+private fun ChapterFastScroller(
+    itemCount: Int,
+    currentIndex: Int,
+    onScrollToIndex: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var trackHeightPx by remember { mutableIntStateOf(1) }
+    val scrollProgress = if (itemCount <= 1) {
+        0f
+    } else {
+        (currentIndex.toFloat() / (itemCount - 1).toFloat()).coerceIn(0f, 1f)
+    }
+
+    fun scrollToOffset(y: Float) {
+        val progress = (y / trackHeightPx.toFloat()).coerceIn(0f, 1f)
+        val targetIndex = (progress * (itemCount - 1)).roundToInt().coerceIn(0, itemCount - 1)
+        onScrollToIndex(targetIndex)
+    }
+
+    Column(
+        modifier = modifier
+            .width(26.dp)
+            .padding(vertical = 10.dp)
+            .onSizeChanged { size -> trackHeightPx = size.height.coerceAtLeast(1) }
+            .pointerInput(itemCount) {
+                detectVerticalDragGestures(
+                    onDragStart = { offset -> scrollToOffset(offset.y) },
+                    onVerticalDrag = { change, _ -> scrollToOffset(change.position.y) }
+                )
             },
-            modifier = Modifier.padding(end = 16.dp),
-            color = if (isCurrent) Color(0xFFD7C4FF) else Color.White.copy(alpha = 0.46f),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(modifier = Modifier.weight(scrollProgress.coerceAtLeast(0.001f)))
+        Box(
+            modifier = Modifier
+                .width(6.dp)
+                .height(44.dp)
+                .clip(RoundedCornerShape(99.dp))
+                .background(Color(0xFF8B5CFF).copy(alpha = 0.72f))
         )
+        Spacer(modifier = Modifier.weight((1f - scrollProgress).coerceAtLeast(0.001f)))
     }
 }
 
