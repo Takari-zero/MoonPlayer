@@ -1,10 +1,13 @@
 package com.shenghui.localvibe.feature.book
 
+import android.content.Context
 import android.content.Intent
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -65,6 +69,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,9 +79,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shenghui.localvibe.core.book.BookChapter
@@ -84,7 +91,9 @@ import com.shenghui.localvibe.core.book.BookChapterDetector
 import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.tts.BookTtsController
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
@@ -98,8 +107,17 @@ fun BookListenScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val initialReadStateCache = remember(bookFile?.uri) {
+        loadBookReadStateCache(context.applicationContext, bookFile?.uri)
+    }
+    var cachedReadState by remember(bookFile?.uri) { mutableStateOf(initialReadStateCache) }
     var paragraphs by remember(bookFile?.uri) { mutableStateOf(emptyList<String>()) }
-    var currentParagraphIndex by remember(bookFile?.uri) { mutableIntStateOf(initialParagraphIndex.coerceAtLeast(0)) }
+    var currentParagraphIndex by remember(bookFile?.uri) {
+        mutableIntStateOf((initialReadStateCache?.lastParagraphIndex ?: initialParagraphIndex).coerceAtLeast(0))
+    }
+    var currentSentenceIndexInParagraph by remember(bookFile?.uri) {
+        mutableIntStateOf(initialReadStateCache?.lastSentenceIndexInParagraph ?: 0)
+    }
     var isLoading by remember(bookFile?.uri) { mutableStateOf(bookFile != null) }
     var loadError by remember(bookFile?.uri) { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -110,6 +128,14 @@ fun BookListenScreen(
     var ttsRetryKey by remember { mutableIntStateOf(0) }
     var chapterRefreshKey by remember { mutableIntStateOf(0) }
     var showChapterSheet by remember { mutableStateOf(false) }
+    var readerFontSizeSp by rememberSaveable(bookFile?.uri) { mutableStateOf(22f) }
+    var playbackModeName by rememberSaveable(bookFile?.uri) {
+        mutableStateOf(BookPlaybackMode.SEQUENTIAL.name)
+    }
+    val playbackMode = remember(playbackModeName) {
+        runCatching { BookPlaybackMode.valueOf(playbackModeName) }
+            .getOrDefault(BookPlaybackMode.SEQUENTIAL)
+    }
     val chapters = remember(paragraphs, chapterRefreshKey) {
         BookChapterDetector.detect(paragraphs)
     }
@@ -121,6 +147,10 @@ fun BookListenScreen(
     val latestBookFile by rememberUpdatedState(bookFile)
     val latestSpeechRate by rememberUpdatedState(speechRate)
     val latestPitch by rememberUpdatedState(pitch)
+    val latestPlaybackMode by rememberUpdatedState(playbackMode)
+    val latestChapters by rememberUpdatedState(chapters)
+    val latestCurrentParagraphIndex by rememberUpdatedState(currentParagraphIndex)
+    val latestCurrentSentenceIndexInParagraph by rememberUpdatedState(currentSentenceIndexInParagraph)
 
     fun saveProgress(index: Int, total: Int = paragraphs.size) {
         val file = bookFile ?: return
@@ -159,14 +189,79 @@ fun BookListenScreen(
                 val file = latestBookFile ?: return@BookTtsController
                 val list = latestParagraphs
                 if (!latestIsPlaying || list.isEmpty()) return@BookTtsController
-                if (currentParagraphIndex < list.lastIndex) {
-                    val nextIndex = currentParagraphIndex + 1
-                    currentParagraphIndex = nextIndex
-                    onProgressChanged(file.uri, nextIndex, list.size)
-                    ttsController?.speak(list[nextIndex], latestSpeechRate, latestPitch)
-                } else {
-                    isPlaying = false
-                    onProgressChanged(file.uri, list.lastIndex, list.size)
+
+                fun paragraphSentences(index: Int): List<String> {
+                    return splitParagraphIntoSentences(list[index]).ifEmpty { listOf(list[index]) }
+                }
+
+                fun playPosition(paragraphIndex: Int, sentenceIndex: Int) {
+                    val safeParagraphIndex = paragraphIndex.coerceIn(0, list.lastIndex)
+                    val sentences = paragraphSentences(safeParagraphIndex)
+                    val safeSentenceIndex = sentenceIndex.coerceIn(0, sentences.lastIndex)
+                    currentParagraphIndex = safeParagraphIndex
+                    currentSentenceIndexInParagraph = safeSentenceIndex
+                    onProgressChanged(file.uri, safeParagraphIndex, list.size)
+                    ttsController?.speak(sentences[safeSentenceIndex], latestSpeechRate, latestPitch)
+                }
+
+                fun playNextSequentialFrom(paragraphIndex: Int, sentenceIndex: Int) {
+                    val sentences = paragraphSentences(paragraphIndex)
+                    if (sentenceIndex < sentences.lastIndex) {
+                        playPosition(paragraphIndex, sentenceIndex + 1)
+                    } else if (paragraphIndex < list.lastIndex) {
+                        playPosition(paragraphIndex + 1, 0)
+                    } else {
+                        isPlaying = false
+                        onProgressChanged(file.uri, list.lastIndex, list.size)
+                    }
+                }
+
+                when (latestPlaybackMode) {
+                    BookPlaybackMode.SEQUENTIAL -> playNextSequentialFrom(
+                        latestCurrentParagraphIndex,
+                        latestCurrentSentenceIndexInParagraph
+                    )
+                    BookPlaybackMode.SINGLE_PARAGRAPH -> {
+                        val sentences = paragraphSentences(latestCurrentParagraphIndex)
+                        val nextSentenceIndex =
+                            if (latestCurrentSentenceIndexInParagraph < sentences.lastIndex) {
+                                latestCurrentSentenceIndexInParagraph + 1
+                            } else {
+                                0
+                            }
+                        playPosition(latestCurrentParagraphIndex, nextSentenceIndex)
+                    }
+                    BookPlaybackMode.CHAPTER_LOOP -> {
+                        val chapterList = latestChapters
+                        val chapterIndex = chapterList.indexOfLast { it.paragraphIndex <= latestCurrentParagraphIndex }
+                        val chapterStart = chapterList.getOrNull(chapterIndex)?.paragraphIndex
+                        if (chapterStart == null) {
+                            playNextSequentialFrom(
+                                latestCurrentParagraphIndex,
+                                latestCurrentSentenceIndexInParagraph
+                            )
+                        } else {
+                            val chapterEndExclusive = chapterList
+                                .getOrNull(chapterIndex + 1)
+                                ?.paragraphIndex
+                                ?.coerceIn(0, list.size)
+                                ?: list.size
+                            val sentences = paragraphSentences(latestCurrentParagraphIndex)
+                            if (latestCurrentSentenceIndexInParagraph < sentences.lastIndex) {
+                                playPosition(
+                                    latestCurrentParagraphIndex,
+                                    latestCurrentSentenceIndexInParagraph + 1
+                                )
+                            } else {
+                                val nextIndex = latestCurrentParagraphIndex + 1
+                                if (nextIndex < chapterEndExclusive) {
+                                    playPosition(nextIndex, 0)
+                                } else {
+                                    playPosition(chapterStart, 0)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         )
@@ -203,7 +298,7 @@ fun BookListenScreen(
         }
     }
 
-    fun speakCurrentParagraph() {
+    fun speakCurrentSentence() {
         val file = bookFile
         if (file == null) {
             Toast.makeText(context, "未选择小说文件", Toast.LENGTH_SHORT).show()
@@ -218,9 +313,12 @@ fun BookListenScreen(
             return
         }
         val index = currentParagraphIndex.coerceIn(0, paragraphs.lastIndex)
+        val sentences = splitParagraphIntoSentences(paragraphs[index]).ifEmpty { listOf(paragraphs[index]) }
+        val sentenceIndex = currentSentenceIndexInParagraph.coerceIn(0, sentences.lastIndex)
         currentParagraphIndex = index
+        currentSentenceIndexInParagraph = sentenceIndex
         onBeforeSpeak()
-        val started = ttsController?.speak(paragraphs[index], speechRate, pitch) == true
+        val started = ttsController?.speak(sentences[sentenceIndex], speechRate, pitch) == true
         if (started) {
             isPlaying = true
             saveProgress(index)
@@ -239,6 +337,7 @@ fun BookListenScreen(
     fun stopReading() {
         ttsController?.stop()
         currentParagraphIndex = 0
+        currentSentenceIndexInParagraph = 0
         isPlaying = false
         saveProgress(0)
     }
@@ -248,10 +347,24 @@ fun BookListenScreen(
         val nextIndex = index.coerceIn(0, paragraphs.lastIndex)
         ttsController?.stop()
         currentParagraphIndex = nextIndex
+        currentSentenceIndexInParagraph = 0
         saveProgress(nextIndex)
         if (autoPlay) {
             isPlaying = false
-            speakCurrentParagraph()
+            speakCurrentSentence()
+        }
+    }
+
+    fun jumpToSentence(sentence: ReaderSentence, autoPlay: Boolean = isPlaying) {
+        if (paragraphs.isEmpty()) return
+        val nextIndex = sentence.paragraphIndex.coerceIn(0, paragraphs.lastIndex)
+        ttsController?.stop()
+        currentParagraphIndex = nextIndex
+        currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph.coerceAtLeast(0)
+        saveProgress(nextIndex)
+        if (autoPlay) {
+            isPlaying = false
+            speakCurrentSentence()
         }
     }
 
@@ -266,14 +379,17 @@ fun BookListenScreen(
         loadError = null
         isPlaying = false
         ttsController?.stop()
-        val result = TxtBookReader.readParagraphs(context.applicationContext, bookFile.uri)
+        val result = withContext(Dispatchers.IO) {
+            TxtBookReader.readParagraphs(context.applicationContext, bookFile.uri)
+        }
         result
             .onSuccess { loaded ->
                 paragraphs = loaded
-                currentParagraphIndex = initialParagraphIndex.coerceIn(
+                currentParagraphIndex = currentParagraphIndex.coerceIn(
                     0,
                     (loaded.size - 1).coerceAtLeast(0)
                 )
+                currentSentenceIndexInParagraph = currentSentenceIndexInParagraph.coerceAtLeast(0)
                 if (loaded.isEmpty()) {
                     loadError = "小说内容为空"
                 }
@@ -288,11 +404,7 @@ fun BookListenScreen(
 
     LaunchedEffect(speechRate, pitch) {
         if (isPlaying && paragraphs.isNotEmpty()) {
-            ttsController?.speak(
-                paragraphs[currentParagraphIndex.coerceIn(0, paragraphs.lastIndex)],
-                speechRate,
-                pitch
-            )
+            speakCurrentSentence()
         }
     }
 
@@ -328,6 +440,84 @@ fun BookListenScreen(
             )
 
             when {
+                isLoading && cachedReadState?.cachedVisibleText.orEmpty().isNotEmpty() -> {
+                    val cachedState = cachedReadState
+                    val cachedSentences = remember(cachedState) {
+                        cachedState?.cachedVisibleText
+                            .orEmpty()
+                            .filter { it.isNotBlank() }
+                            .mapIndexed { index, text ->
+                                ReaderSentence(
+                                    text = text,
+                                    paragraphIndex = cachedState?.lastParagraphIndex ?: 0,
+                                    sentenceIndexInParagraph = index,
+                                    chapterSentenceIndex = index
+                                )
+                            }
+                    }
+                    val cachedIndex = cachedState
+                        ?.lastChapterSentenceIndex
+                        ?.coerceIn(0, (cachedSentences.size - 1).coerceAtLeast(0))
+                        ?: 0
+                    BookListenContent(
+                        chapterTitle = cachedState?.lastChapterTitle.orEmpty().ifBlank { "正在恢复上次阅读" },
+                        chapterSentences = cachedSentences,
+                        currentChapterSentenceIndex = cachedIndex,
+                        listenedTimeLabel = estimateSentenceTimeLabel(cachedSentences, 0, cachedIndex, speechRate),
+                        remainingTimeLabel = estimateSentenceTimeLabel(
+                            cachedSentences,
+                            cachedIndex,
+                            cachedSentences.size,
+                            speechRate
+                        ),
+                        isPlaying = false,
+                        isTtsReady = isTtsReady,
+                        ttsError = ttsError,
+                        speechRate = speechRate,
+                        pitch = pitch,
+                        readerFontSizeSp = readerFontSizeSp,
+                        onPlayPause = { Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show() },
+                        onStop = { },
+                        onPrevious = { },
+                        onNext = { },
+                        onSeekSentence = { sentenceIndex ->
+                            cachedSentences.getOrNull(sentenceIndex)?.let { sentence ->
+                                currentParagraphIndex = sentence.paragraphIndex
+                                currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                            }
+                        },
+                        onSentenceClick = { sentence ->
+                            currentParagraphIndex = sentence.paragraphIndex
+                            currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                        },
+                        onSpeechRateChange = { speechRate = it },
+                        onPitchChange = { pitch = it },
+                        onReaderFontSizeChange = { readerFontSizeSp = it },
+                        onOpenCatalog = { Toast.makeText(context, "正在恢复目录", Toast.LENGTH_SHORT).show() },
+                        playbackModeLabel = playbackMode.label,
+                        onTogglePlaybackMode = {
+                            val nextMode = playbackMode.next()
+                            playbackModeName = nextMode.name
+                            Toast.makeText(context, "已切换为${nextMode.label}", Toast.LENGTH_SHORT).show()
+                        },
+                        onInstallVoiceData = {
+                            openIntentSafely(
+                                Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
+                                "无法打开语音数据安装页面"
+                            )
+                        },
+                        onOpenVoiceSettings = {
+                            openIntentSafely(
+                                Intent("com.android.settings.TTS_SETTINGS")
+                                    .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+                                "无法打开语音设置"
+                            )
+                        },
+                        onRetryTts = { restartTtsCheck() },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
                 isLoading -> {
                     Box(
                         modifier = Modifier
@@ -339,7 +529,7 @@ fun BookListenScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = Color(0xFF4D8DFF))
                             Text(
-                                text = "正在读取小说...",
+                                text = "正在恢复上次阅读...",
                                 color = Color.White.copy(alpha = 0.72f),
                                 modifier = Modifier.padding(top = 14.dp)
                             )
@@ -370,26 +560,88 @@ fun BookListenScreen(
                         paragraphs.size,
                         chapters
                     ).coerceAtLeast(chapterStartIndex + 1)
-                    val visibleChapterParagraphs = paragraphs
-                        .asSequence()
-                        .drop(currentParagraphIndex.coerceIn(0, paragraphs.lastIndex))
-                        .filter { it.isNotBlank() }
-                        .take(12)
-                        .toList()
+                    val chapterTitle = when {
+                        chapters.isEmpty() -> "正文"
+                        currentChapter == null -> "开头"
+                        else -> currentChapter.title
+                    }
+                    val chapterSentences = remember(
+                        paragraphs,
+                        chapterStartIndex,
+                        chapterEndExclusive,
+                        currentChapter?.title
+                    ) {
+                        buildReaderSentences(
+                            paragraphs = paragraphs,
+                            startIndex = chapterStartIndex,
+                            endExclusive = chapterEndExclusive.coerceAtMost(paragraphs.size),
+                            chapterTitle = currentChapter?.title
+                        )
+                    }
+                    val currentChapterSentenceIndex = chapterSentences
+                        .indexOfFirst {
+                            it.paragraphIndex == currentParagraphIndex &&
+                                it.sentenceIndexInParagraph == currentSentenceIndexInParagraph
+                        }
+                        .let { exactIndex ->
+                            if (exactIndex >= 0) {
+                                exactIndex
+                            } else {
+                                chapterSentences.indexOfFirst { it.paragraphIndex == currentParagraphIndex }
+                            }
+                        }
+                        .let { fallbackIndex -> fallbackIndex.coerceAtLeast(0) }
+                        .coerceAtMost((chapterSentences.size - 1).coerceAtLeast(0))
+                    val listenedTimeLabel = estimateSentenceTimeLabel(
+                        sentences = chapterSentences,
+                        fromIndex = 0,
+                        toIndex = currentChapterSentenceIndex,
+                        speechRate = speechRate
+                    )
+                    val remainingTimeLabel = estimateSentenceTimeLabel(
+                        sentences = chapterSentences,
+                        fromIndex = currentChapterSentenceIndex,
+                        toIndex = chapterSentences.size,
+                        speechRate = speechRate
+                    )
+                    LaunchedEffect(
+                        bookFile?.uri,
+                        chapterTitle,
+                        currentParagraphIndex,
+                        currentSentenceIndexInParagraph,
+                        currentChapterSentenceIndex,
+                        chapterSentences
+                    ) {
+                        val state = BookReadStateCache(
+                            bookUri = bookFile?.uri.orEmpty(),
+                            bookTitle = bookFile?.displayTitle().orEmpty(),
+                            lastParagraphIndex = currentParagraphIndex,
+                            lastSentenceIndexInParagraph = currentSentenceIndexInParagraph,
+                            lastChapterSentenceIndex = currentChapterSentenceIndex,
+                            lastChapterTitle = chapterTitle,
+                            cachedVisibleText = chapterSentences
+                                .drop(currentChapterSentenceIndex)
+                                .take(24)
+                                .map { it.text },
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        cachedReadState = state
+                        saveBookReadStateCache(context.applicationContext, state)
+                    }
                     BookListenContent(
-                        chapterTitle = currentChapter?.title ?: "正文",
-                        visibleParagraphs = visibleChapterParagraphs,
-                        currentParagraphIndex = currentParagraphIndex,
-                        totalParagraphs = paragraphs.size,
-                        chapterStartIndex = chapterStartIndex,
-                        chapterEndExclusive = chapterEndExclusive,
+                        chapterTitle = chapterTitle,
+                        chapterSentences = chapterSentences,
+                        currentChapterSentenceIndex = currentChapterSentenceIndex,
+                        listenedTimeLabel = listenedTimeLabel,
+                        remainingTimeLabel = remainingTimeLabel,
                         isPlaying = isPlaying,
                         isTtsReady = isTtsReady,
                         ttsError = ttsError,
                         speechRate = speechRate,
                         pitch = pitch,
+                        readerFontSizeSp = readerFontSizeSp,
                         onPlayPause = {
-                            if (isPlaying) pauseReading() else speakCurrentParagraph()
+                            if (isPlaying) pauseReading() else speakCurrentSentence()
                         },
                         onStop = { stopReading() },
                         onPrevious = {
@@ -398,12 +650,24 @@ fun BookListenScreen(
                         onNext = {
                             jumpToParagraph(currentParagraphIndex + 1)
                         },
-                        onSeekParagraph = { index ->
-                            jumpToParagraph(index)
+                        onSeekSentence = { sentenceIndex ->
+                            chapterSentences.getOrNull(sentenceIndex)?.let { sentence ->
+                                jumpToSentence(sentence)
+                            }
+                        },
+                        onSentenceClick = { sentence ->
+                            jumpToSentence(sentence)
                         },
                         onSpeechRateChange = { speechRate = it },
                         onPitchChange = { pitch = it },
+                        onReaderFontSizeChange = { readerFontSizeSp = it },
                         onOpenCatalog = { showChapterSheet = true },
+                        playbackModeLabel = playbackMode.label,
+                        onTogglePlaybackMode = {
+                            val nextMode = playbackMode.next()
+                            playbackModeName = nextMode.name
+                            Toast.makeText(context, "已切换为${nextMode.label}", Toast.LENGTH_SHORT).show()
+                        },
                         onInstallVoiceData = {
                             openIntentSafely(
                                 Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
@@ -504,33 +768,48 @@ private fun BookListenTopBar(
 @Composable
 private fun BookListenContent(
     chapterTitle: String,
-    visibleParagraphs: List<String>,
-    currentParagraphIndex: Int,
-    totalParagraphs: Int,
-    chapterStartIndex: Int,
-    chapterEndExclusive: Int,
+    chapterSentences: List<ReaderSentence>,
+    currentChapterSentenceIndex: Int,
+    listenedTimeLabel: String,
+    remainingTimeLabel: String,
     isPlaying: Boolean,
     isTtsReady: Boolean,
     ttsError: String?,
     speechRate: Float,
     pitch: Float,
+    readerFontSizeSp: Float,
     onPlayPause: () -> Unit,
     onStop: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onSeekParagraph: (Int) -> Unit,
+    onSeekSentence: (Int) -> Unit,
+    onSentenceClick: (ReaderSentence) -> Unit,
     onSpeechRateChange: (Float) -> Unit,
     onPitchChange: (Float) -> Unit,
+    onReaderFontSizeChange: (Float) -> Unit,
     onOpenCatalog: () -> Unit,
+    playbackModeLabel: String,
+    onTogglePlaybackMode: () -> Unit,
     onInstallVoiceData: () -> Unit,
     onOpenVoiceSettings: () -> Unit,
     onRetryTts: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showVoiceControls by remember { mutableStateOf(false) }
+    var showFontSizeControls by remember { mutableStateOf(false) }
     val context = LocalContext.current
     fun showDevelopingToast() {
         Toast.makeText(context, "功能开发中", Toast.LENGTH_SHORT).show()
+    }
+    val sentenceListState = rememberLazyListState()
+    val seekEndIndex = (chapterSentences.size - 1).coerceAtLeast(0)
+    val sliderEndIndex = seekEndIndex.coerceAtLeast(1)
+    val seekValue = currentChapterSentenceIndex.coerceIn(0, seekEndIndex).toFloat()
+
+    LaunchedEffect(currentChapterSentenceIndex, chapterSentences.size) {
+        if (chapterSentences.isNotEmpty()) {
+            sentenceListState.animateScrollToItem((currentChapterSentenceIndex - 1).coerceAtLeast(0))
+        }
     }
 
     Column(
@@ -559,46 +838,59 @@ private fun BookListenContent(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Box(
+                LazyColumn(
+                    state = sentenceListState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp)
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        if (visibleParagraphs.isEmpty()) {
+                    item {
+                        Text(
+                            text = chapterTitle,
+                            color = Color.White.copy(alpha = 0.98f),
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontSize = (readerFontSizeSp + 2f).sp,
+                                lineHeight = (readerFontSizeSp * 1.55f + 2f).sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                    if (chapterSentences.isEmpty()) {
+                        item {
                             Text(
                                 text = "暂无正文",
                                 color = Color.White.copy(alpha = 0.62f),
                                 style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 22.sp,
-                                    lineHeight = 36.sp,
+                                    fontSize = readerFontSizeSp.sp,
+                                    lineHeight = (readerFontSizeSp * 1.6f).sp,
                                     fontWeight = FontWeight.Medium
                                 )
                             )
-                        } else {
-                            visibleParagraphs.forEachIndexed { index, item ->
+                        }
+                    } else {
+                        itemsIndexed(chapterSentences) { index, sentence ->
+                            val isCurrentSentence = index == currentChapterSentenceIndex
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSentenceClick(sentence) }
+                                    .padding(horizontal = 4.dp, vertical = 3.dp)
+                            ) {
                                 Text(
-                                    text = item,
-                                    color = Color.White.copy(alpha = if (index == 0) 0.98f else 0.9f),
+                                    text = sentence.text,
+                                    color = if (isCurrentSentence) Color(0xFFF2E8FF) else Color.White.copy(alpha = 0.9f),
                                     style = MaterialTheme.typography.bodyLarge.copy(
-                                        fontSize = if (index == 0) 23.sp else 22.sp,
-                                        lineHeight = if (index == 0) 37.sp else 36.sp,
-                                        fontWeight = if (index == 0) FontWeight.SemiBold else FontWeight.Medium
+                                        fontSize = readerFontSizeSp.sp,
+                                        lineHeight = (readerFontSizeSp * 1.6f).sp,
+                                        fontWeight = if (isCurrentSentence) FontWeight.SemiBold else FontWeight.Medium
                                     )
                                 )
                             }
                         }
                     }
                 }
-                Text(
-                    modifier = Modifier.height(0.dp),
-                    text = "$chapterTitle · 本章 ${currentParagraphIndex - chapterStartIndex + 1} / ${(chapterEndExclusive - chapterStartIndex).coerceAtLeast(1)} 段",
-                    color = Color.White.copy(alpha = 0.44f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
 
@@ -621,37 +913,23 @@ private fun BookListenContent(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "第 ${currentParagraphIndex + 1} 段",
+                        "已听 $listenedTimeLabel",
                         color = Color.White.copy(alpha = 0.52f),
                         style = MaterialTheme.typography.labelSmall
                     )
                     Text(
-                        "共 ${totalParagraphs.coerceAtLeast(1)} 段",
+                        "剩余 $remainingTimeLabel",
                         color = Color.White.copy(alpha = 0.52f),
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
-                Slider(
-                    modifier = Modifier.height(16.dp),
-                    value = currentParagraphIndex.toFloat(),
-                    onValueChange = { onSeekParagraph(it.toInt()) },
-                    valueRange = 0f..(totalParagraphs - 1)
-                        .coerceAtLeast(0)
-                        .toFloat(),
-                    steps = 0,
-                    thumb = {
-                        Box(
-                            modifier = Modifier
-                                .size(15.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFD2C0FF))
-                        )
-                    },
-                    colors = SliderDefaults.colors(
-                        activeTrackColor = Color(0xFF8B5CFF),
-                        inactiveTrackColor = Color(0xFF332A45),
-                        thumbColor = Color(0xFFD2C0FF)
-                    )
+                ReaderChapterProgressBar(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp),
+                    value = seekValue,
+                    maxValue = sliderEndIndex.toFloat(),
+                    onValueChange = { onSeekSentence(it.roundToInt().coerceIn(0, seekEndIndex)) }
                 )
             }
 
@@ -660,7 +938,7 @@ private fun BookListenContent(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ReaderControlButton("模式切换", onClick = ::showDevelopingToast) {
+                ReaderControlButton(playbackModeLabel, onClick = onTogglePlaybackMode) {
                     Text("⇄", color = Color(0xFFC3B0FF), fontSize = 22.sp, fontWeight = FontWeight.Medium)
                 }
                 ReaderControlButton("上一段", onPrevious) {
@@ -723,9 +1001,9 @@ private fun BookListenContent(
                     modifier = Modifier.weight(1f)
                 )
                 ReaderActionButton(
-                    label = "更多",
-                    icon = { Text("…", fontSize = 22.sp, color = Color.White.copy(alpha = 0.52f)) },
-                    onClick = ::showDevelopingToast,
+                    label = "字号",
+                    icon = { Text("A", fontSize = 20.sp, color = Color.White.copy(alpha = 0.52f), fontWeight = FontWeight.SemiBold) },
+                    onClick = { showFontSizeControls = true },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -740,6 +1018,111 @@ private fun BookListenContent(
             onSpeechRateChange = onSpeechRateChange,
             onPitchChange = onPitchChange,
             onDismiss = { showVoiceControls = false }
+        )
+    }
+
+    if (showFontSizeControls) {
+        FontSizeBottomSheetV3(
+            fontSizeSp = readerFontSizeSp,
+            onFontSizeChange = onReaderFontSizeChange,
+            onDismiss = { showFontSizeControls = false }
+        )
+    }
+}
+
+@Composable
+private fun ReaderChapterProgressBar(
+    value: Float,
+    maxValue: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ThinMoonSlider(
+        value = value,
+        valueRange = 0f..maxValue.coerceAtLeast(1f),
+        onValueChange = onValueChange,
+        modifier = modifier,
+        trackHeight = 3.dp,
+        thumbSize = 11.dp
+    )
+}
+
+@Composable
+private fun ThinMoonSlider(
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    activeColor: Color = Color(0xFF8B5CFF),
+    inactiveColor: Color = Color(0xFF332A45),
+    thumbColor: Color = Color(0xFFE7DCFF),
+    trackHeight: androidx.compose.ui.unit.Dp = 3.dp,
+    thumbSize: androidx.compose.ui.unit.Dp = 11.dp,
+    touchHeight: androidx.compose.ui.unit.Dp = 32.dp
+) {
+    val density = LocalDensity.current
+    var trackWidthPx by remember { mutableIntStateOf(1) }
+    val rangeSize = (valueRange.endInclusive - valueRange.start).coerceAtLeast(0.0001f)
+    val progress = ((value - valueRange.start) / rangeSize).coerceIn(0f, 1f)
+    val thumbSizePx = with(density) { thumbSize.roundToPx() }
+
+    fun updateFromX(x: Float) {
+        val usableWidth = (trackWidthPx - thumbSizePx).coerceAtLeast(1)
+        val nextProgress = ((x - thumbSizePx / 2f) / usableWidth.toFloat()).coerceIn(0f, 1f)
+        onValueChange(valueRange.start + nextProgress * rangeSize)
+    }
+
+    Box(
+        modifier = modifier
+            .height(touchHeight)
+            .onSizeChanged { size -> trackWidthPx = size.width.coerceAtLeast(1) }
+            .then(
+                if (enabled) {
+                    Modifier
+                        .pointerInput(valueRange.start, valueRange.endInclusive) {
+                            detectTapGestures { offset -> updateFromX(offset.x) }
+                        }
+                        .pointerInput(valueRange.start, valueRange.endInclusive) {
+                            detectDragGestures(
+                                onDragStart = { offset -> updateFromX(offset.x) },
+                                onDrag = { change, _ ->
+                                    updateFromX(change.position.x)
+                                    change.consume()
+                                }
+                            )
+                        }
+                } else {
+                    Modifier
+                }
+            ),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .clip(RoundedCornerShape(99.dp))
+                .background(inactiveColor)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progress)
+                .height(trackHeight)
+                .clip(RoundedCornerShape(99.dp))
+                .background(activeColor)
+        )
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = ((trackWidthPx - thumbSizePx).coerceAtLeast(0) * progress).roundToInt(),
+                        y = 0
+                    )
+                }
+                .size(thumbSize)
+                .clip(CircleShape)
+                .background(thumbColor)
         )
     }
 }
@@ -889,6 +1272,328 @@ private fun VoiceSettingsBottomSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun FontSizeBottomSheet(
+    fontSizeSp: Float,
+    onFontSizeChange: (Float) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color(0xFF171222),
+        scrimColor = Color.Black.copy(alpha = 0.34f),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp)
+                    .width(42.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.White.copy(alpha = 0.22f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        text = "字号",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "${fontSizeSp.roundToInt()}sp",
+                        color = Color(0xFFC3B0FF),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("关闭", color = Color(0xFFC3B0FF))
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TextButton(
+                    onClick = { onFontSizeChange((fontSizeSp - 1f).coerceIn(16f, 30f)) }
+                ) {
+                    Text("减小", color = Color.White.copy(alpha = 0.78f))
+                }
+                Slider(
+                    modifier = Modifier.weight(1f),
+                    value = fontSizeSp,
+                    onValueChange = { onFontSizeChange(it.coerceIn(16f, 30f)) },
+                    valueRange = 16f..30f,
+                    steps = 13,
+                    thumb = {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFD2C0FF))
+                        )
+                    },
+                    colors = SliderDefaults.colors(
+                        activeTrackColor = Color(0xFF8B5CFF),
+                        inactiveTrackColor = Color(0xFF2A2638),
+                        thumbColor = Color(0xFFD2C0FF)
+                    )
+                )
+                TextButton(
+                    onClick = { onFontSizeChange((fontSizeSp + 1f).coerceIn(16f, 30f)) }
+                ) {
+                    Text("增大", color = Color.White.copy(alpha = 0.78f))
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun FontSizeBottomSheetV2(
+    fontSizeSp: Float,
+    onFontSizeChange: (Float) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val roundedFontSize = fontSizeSp.roundToInt()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color(0xFF15101F),
+        scrimColor = Color.Black.copy(alpha = 0.34f),
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp)
+                    .width(40.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.White.copy(alpha = 0.18f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(top = 8.dp, bottom = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "字号",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+                    fontWeight = FontWeight.SemiBold
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.06f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "关闭",
+                        tint = Color.White.copy(alpha = 0.78f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = "${roundedFontSize}sp",
+                color = Color(0xFFF2E8FF),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp),
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                FontSizeAdjustButton(
+                    label = "A-",
+                    onClick = { onFontSizeChange((fontSizeSp - 1f).coerceIn(16f, 30f)) }
+                )
+                Slider(
+                    modifier = Modifier.weight(1f),
+                    value = roundedFontSize.toFloat(),
+                    onValueChange = {
+                        onFontSizeChange(it.roundToInt().toFloat().coerceIn(16f, 30f))
+                    },
+                    valueRange = 16f..30f,
+                    steps = 13,
+                    thumb = {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFD2C0FF))
+                        )
+                    },
+                    colors = SliderDefaults.colors(
+                        activeTrackColor = Color(0xFF8B5CFF),
+                        inactiveTrackColor = Color(0xFF2A2638),
+                        thumbColor = Color(0xFFD2C0FF)
+                    )
+                )
+                FontSizeAdjustButton(
+                    label = "A+",
+                    onClick = { onFontSizeChange((fontSizeSp + 1f).coerceIn(16f, 30f)) }
+                )
+            }
+
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun FontSizeBottomSheetV3(
+    fontSizeSp: Float,
+    onFontSizeChange: (Float) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val roundedFontSize = fontSizeSp.roundToInt()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color(0xFF15101F),
+        scrimColor = Color.Black.copy(alpha = 0.34f),
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp)
+                    .width(40.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.White.copy(alpha = 0.18f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(top = 8.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "字号",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
+                    fontWeight = FontWeight.SemiBold
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.06f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "关闭",
+                        tint = Color.White.copy(alpha = 0.78f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = "${roundedFontSize}sp",
+                color = Color(0xFFF2E8FF),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp),
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                FontSizeAdjustButton(
+                    label = "A-",
+                    onClick = { onFontSizeChange((fontSizeSp - 1f).coerceIn(16f, 30f)) }
+                )
+                ThinMoonSlider(
+                    modifier = Modifier.weight(1f),
+                    value = roundedFontSize.toFloat(),
+                    valueRange = 16f..30f,
+                    onValueChange = {
+                        onFontSizeChange(it.roundToInt().toFloat().coerceIn(16f, 30f))
+                    },
+                    inactiveColor = Color(0xFF2A2638),
+                    thumbColor = Color(0xFFE7DCFF),
+                    trackHeight = 3.dp,
+                    thumbSize = 11.dp
+                )
+                FontSizeAdjustButton(
+                    label = "A+",
+                    onClick = { onFontSizeChange((fontSizeSp + 1f).coerceIn(16f, 30f)) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FontSizeAdjustButton(
+    label: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.075f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFFCDBEFF),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -1260,4 +1965,180 @@ private fun ChapterFastScroller(
 
 private fun LocalMediaFile.displayTitle(): String {
     return name.substringBeforeLast('.', name)
+}
+
+private data class ReaderSentence(
+    val text: String,
+    val paragraphIndex: Int,
+    val sentenceIndexInParagraph: Int,
+    val chapterSentenceIndex: Int
+)
+
+private data class BookReadStateCache(
+    val bookUri: String,
+    val bookTitle: String,
+    val lastParagraphIndex: Int,
+    val lastSentenceIndexInParagraph: Int,
+    val lastChapterSentenceIndex: Int,
+    val lastChapterTitle: String,
+    val cachedVisibleText: List<String>,
+    val updatedAt: Long
+)
+
+private const val BOOK_READ_CACHE_PREFS = "book_read_state_cache"
+private const val BOOK_READ_CACHE_SEPARATOR = "\u001E"
+
+private fun bookReadCachePrefix(bookUri: String): String {
+    return "book_${bookUri.hashCode()}_"
+}
+
+private fun loadBookReadStateCache(context: Context, bookUri: String?): BookReadStateCache? {
+    if (bookUri.isNullOrBlank()) return null
+    val prefs = context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE)
+    val prefix = bookReadCachePrefix(bookUri)
+    val storedUri = prefs.getString(prefix + "uri", null) ?: return null
+    if (storedUri != bookUri) return null
+    val cachedText = prefs
+        .getString(prefix + "text", null)
+        ?.split(BOOK_READ_CACHE_SEPARATOR)
+        ?.filter { it.isNotBlank() }
+        .orEmpty()
+    return BookReadStateCache(
+        bookUri = storedUri,
+        bookTitle = prefs.getString(prefix + "title", null).orEmpty(),
+        lastParagraphIndex = prefs.getInt(prefix + "paragraph", 0),
+        lastSentenceIndexInParagraph = prefs.getInt(prefix + "sentence", 0),
+        lastChapterSentenceIndex = prefs.getInt(prefix + "chapter_sentence", 0),
+        lastChapterTitle = prefs.getString(prefix + "chapter_title", null).orEmpty(),
+        cachedVisibleText = cachedText,
+        updatedAt = prefs.getLong(prefix + "updated_at", 0L)
+    )
+}
+
+private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) {
+    if (state.bookUri.isBlank()) return
+    val prefix = bookReadCachePrefix(state.bookUri)
+    context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(prefix + "uri", state.bookUri)
+        .putString(prefix + "title", state.bookTitle)
+        .putInt(prefix + "paragraph", state.lastParagraphIndex.coerceAtLeast(0))
+        .putInt(prefix + "sentence", state.lastSentenceIndexInParagraph.coerceAtLeast(0))
+        .putInt(prefix + "chapter_sentence", state.lastChapterSentenceIndex.coerceAtLeast(0))
+        .putString(prefix + "chapter_title", state.lastChapterTitle)
+        .putString(prefix + "text", state.cachedVisibleText.joinToString(BOOK_READ_CACHE_SEPARATOR))
+        .putLong(prefix + "updated_at", state.updatedAt)
+        .apply()
+}
+
+private fun buildReaderSentences(
+    paragraphs: List<String>,
+    startIndex: Int,
+    endExclusive: Int,
+    chapterTitle: String?
+): List<ReaderSentence> {
+    if (paragraphs.isEmpty()) return emptyList()
+    val safeStart = startIndex.coerceIn(0, paragraphs.size)
+    val safeEnd = endExclusive.coerceIn(safeStart, paragraphs.size)
+    val title = chapterTitle?.trim().orEmpty()
+    val result = mutableListOf<ReaderSentence>()
+    for (paragraphIndex in safeStart until safeEnd) {
+        val paragraph = paragraphs[paragraphIndex].trim()
+        if (paragraph.isBlank()) continue
+        if (paragraphIndex == safeStart && title.isNotBlank() && paragraph == title) continue
+        splitParagraphIntoSentences(paragraph).forEachIndexed { sentenceIndex, sentence ->
+            if (sentence.isNotBlank()) {
+                result += ReaderSentence(
+                    text = sentence,
+                    paragraphIndex = paragraphIndex,
+                    sentenceIndexInParagraph = sentenceIndex,
+                    chapterSentenceIndex = result.size
+                )
+            }
+        }
+    }
+    return result
+}
+
+private fun splitParagraphIntoSentences(paragraph: String): List<String> {
+    val trimmed = paragraph.trim()
+    if (trimmed.isBlank()) return emptyList()
+    val result = mutableListOf<String>()
+    val builder = StringBuilder()
+    trimmed.forEach { char ->
+        builder.append(char)
+        if (char in sentenceBreakChars) {
+            val sentence = builder.toString().trim()
+            if (sentence.isNotBlank()) result += sentence
+            builder.clear()
+        }
+    }
+    val tail = builder.toString().trim()
+    if (tail.isNotBlank()) result += tail
+    return result
+}
+
+private val sentenceBreakChars = setOf(
+    '。', '！', '？', '；', '!', '?', ';', '…'
+)
+
+private fun estimateSentenceTimeLabel(
+    sentences: List<ReaderSentence>,
+    fromIndex: Int,
+    toIndex: Int,
+    speechRate: Float
+): String {
+    if (sentences.isEmpty()) return "00:00"
+    val start = fromIndex.coerceIn(0, sentences.size)
+    val end = toIndex.coerceIn(start, sentences.size)
+    val chars = sentences
+        .subList(start, end)
+        .sumOf { sentence -> sentence.text.count { !it.isWhitespace() } }
+    val safeSpeechRate = if (speechRate > 0f) speechRate else 1f
+    val effectiveRate = (300f * safeSpeechRate).coerceAtLeast(60f)
+    val seconds = ((chars * 60f) / effectiveRate).roundToInt().coerceAtLeast(0)
+    return formatDuration(seconds)
+}
+
+private fun estimateChapterTimeLabel(
+    paragraphs: List<String>,
+    fromIndex: Int,
+    toIndex: Int,
+    speechRate: Float
+): String {
+    if (paragraphs.isEmpty()) return "00:00"
+    val start = fromIndex.coerceIn(0, paragraphs.size)
+    val end = toIndex.coerceIn(start, paragraphs.size)
+    val chars = paragraphs
+        .subList(start, end)
+        .sumOf { paragraph -> paragraph.count { !it.isWhitespace() } }
+    val safeSpeechRate = if (speechRate > 0f) speechRate else 1f
+    val effectiveRate = (300f * safeSpeechRate).coerceAtLeast(60f)
+    val seconds = ((chars * 60f) / effectiveRate).roundToInt().coerceAtLeast(0)
+    return formatDuration(seconds)
+}
+
+private fun formatDuration(totalSeconds: Int): String {
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
+    }
+}
+
+private enum class BookPlaybackMode(val label: String) {
+    SEQUENTIAL("顺序播放"),
+    SINGLE_PARAGRAPH("单段循环"),
+    CHAPTER_LOOP("本章循环");
+
+    fun next(): BookPlaybackMode {
+        return when (this) {
+            SEQUENTIAL -> SINGLE_PARAGRAPH
+            SINGLE_PARAGRAPH -> CHAPTER_LOOP
+            CHAPTER_LOOP -> SEQUENTIAL
+        }
+    }
 }
