@@ -1,7 +1,10 @@
-package com.shenghui.localvibe.feature.book
+﻿package com.shenghui.localvibe.feature.book
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -91,7 +94,9 @@ import com.shenghui.localvibe.core.book.BookChapterDetector
 import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.tts.BookTtsController
+import com.shenghui.localvibe.core.tts.BookTtsVoice
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -118,23 +123,50 @@ fun BookListenScreen(
     var currentSentenceIndexInParagraph by remember(bookFile?.uri) {
         mutableIntStateOf(initialReadStateCache?.lastSentenceIndexInParagraph ?: 0)
     }
+    var currentReadingTargetName by rememberSaveable(bookFile?.uri) {
+        mutableStateOf(initialReadStateCache?.lastReadingTargetName ?: BookReadingTarget.SENTENCE.name)
+    }
     var isLoading by remember(bookFile?.uri) { mutableStateOf(bookFile != null) }
     var loadError by remember(bookFile?.uri) { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var isTtsReady by remember { mutableStateOf(false) }
+    var isTtsChecking by remember { mutableStateOf(true) }
     var speechRate by remember { mutableFloatStateOf(1.0f) }
     var pitch by remember { mutableFloatStateOf(1.0f) }
     var ttsError by remember { mutableStateOf<String?>(null) }
     var ttsRetryKey by remember { mutableIntStateOf(0) }
     var chapterRefreshKey by remember { mutableIntStateOf(0) }
     var showChapterSheet by remember { mutableStateOf(false) }
-    var readerFontSizeSp by rememberSaveable(bookFile?.uri) { mutableStateOf(22f) }
+    var showVoicePackageSheet by remember { mutableStateOf(false) }
+    var ttsVoices by remember { mutableStateOf(emptyList<BookTtsVoice>()) }
+    var selectedVoiceName by rememberSaveable { mutableStateOf<String?>(null) }
+    var voiceDataInstallUnavailable by remember { mutableStateOf(false) }
+    var readerFontSizeSp by rememberSaveable(bookFile?.uri) { mutableStateOf(18f) }
     var playbackModeName by rememberSaveable(bookFile?.uri) {
         mutableStateOf(BookPlaybackMode.SEQUENTIAL.name)
+    }
+    var showSleepTimerSheet by remember { mutableStateOf(false) }
+    var sleepTimerEnabled by rememberSaveable(bookFile?.uri) { mutableStateOf(false) }
+    var sleepTimerEndAtMillis by rememberSaveable(bookFile?.uri) { mutableStateOf<Long?>(null) }
+    var sleepTimerHours by rememberSaveable(bookFile?.uri) { mutableIntStateOf(0) }
+    var sleepTimerMinutes by rememberSaveable(bookFile?.uri) { mutableIntStateOf(30) }
+    var sleepTimerStopModeName by rememberSaveable(bookFile?.uri) {
+        mutableStateOf(SleepTimerStopMode.IMMEDIATE.name)
+    }
+    var pendingStopAfterChapter by rememberSaveable(bookFile?.uri) { mutableStateOf(false) }
+    var pendingStopChapterIndex by rememberSaveable(bookFile?.uri) { mutableIntStateOf(-1) }
+    var sleepTimerRemainingMillis by rememberSaveable(bookFile?.uri) { mutableStateOf(0L) }
+    val sleepTimerStopMode = remember(sleepTimerStopModeName) {
+        runCatching { SleepTimerStopMode.valueOf(sleepTimerStopModeName) }
+            .getOrDefault(SleepTimerStopMode.IMMEDIATE)
     }
     val playbackMode = remember(playbackModeName) {
         runCatching { BookPlaybackMode.valueOf(playbackModeName) }
             .getOrDefault(BookPlaybackMode.SEQUENTIAL)
+    }
+    val currentReadingTarget = remember(currentReadingTargetName) {
+        runCatching { BookReadingTarget.valueOf(currentReadingTargetName) }
+            .getOrDefault(BookReadingTarget.SENTENCE)
     }
     val chapters = remember(paragraphs, chapterRefreshKey) {
         BookChapterDetector.detect(paragraphs)
@@ -148,14 +180,63 @@ fun BookListenScreen(
     val latestSpeechRate by rememberUpdatedState(speechRate)
     val latestPitch by rememberUpdatedState(pitch)
     val latestPlaybackMode by rememberUpdatedState(playbackMode)
+    val latestPendingStopAfterChapter by rememberUpdatedState(pendingStopAfterChapter)
+    val latestPendingStopChapterIndex by rememberUpdatedState(pendingStopChapterIndex)
     val latestChapters by rememberUpdatedState(chapters)
     val latestCurrentParagraphIndex by rememberUpdatedState(currentParagraphIndex)
     val latestCurrentSentenceIndexInParagraph by rememberUpdatedState(currentSentenceIndexInParagraph)
+    val latestCurrentReadingTarget by rememberUpdatedState(currentReadingTarget)
+
+    var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
 
     fun saveProgress(index: Int, total: Int = paragraphs.size) {
         val file = bookFile ?: return
         if (total <= 0) return
         onProgressChanged(file.uri, index.coerceIn(0, total - 1), total)
+    }
+
+    fun clearSleepTimer() {
+        sleepTimerEnabled = false
+        sleepTimerEndAtMillis = null
+        sleepTimerRemainingMillis = 0L
+        pendingStopAfterChapter = false
+        pendingStopChapterIndex = -1
+    }
+
+    fun stopForSleepTimer(showToast: Boolean = true) {
+        ttsController?.stop()
+        isPlaying = false
+        if (paragraphs.isNotEmpty()) {
+            saveProgress(currentParagraphIndex)
+        }
+        clearSleepTimer()
+        if (showToast) {
+            Toast.makeText(context, "定时结束，已停止听书", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun selectedSleepTimerDurationMillis(): Long {
+        return ((sleepTimerHours * 60L) + sleepTimerMinutes) * 60_000L
+    }
+
+    fun startOrUpdateSleepTimer(isUpdate: Boolean) {
+        val durationMillis = selectedSleepTimerDurationMillis()
+        if (durationMillis <= 0L) {
+            Toast.makeText(context, "请选择定时时间", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val now = System.currentTimeMillis()
+        sleepTimerEndAtMillis = now + durationMillis
+        sleepTimerRemainingMillis = durationMillis
+        sleepTimerEnabled = true
+        pendingStopAfterChapter = false
+        pendingStopChapterIndex = -1
+        showSleepTimerSheet = false
+        Toast.makeText(
+            context,
+            if (isUpdate) "已更新定时关闭" else "已开启定时关闭",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     fun chapterStartFor(index: Int, chapterList: List<BookChapter>): Int {
@@ -175,15 +256,29 @@ fun BookListenScreen(
             ?: total
     }
 
-    var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
     DisposableEffect(ttsRetryKey) {
         val controller = BookTtsController(
             context = context,
-            onReady = { isTtsReady = true },
+            onReady = {
+                isTtsReady = true
+                isTtsChecking = false
+                ttsError = null
+                selectedVoiceName?.let { ttsController?.selectVoice(it) }
+                ttsVoices = ttsController?.getAvailableVoices().orEmpty()
+            },
             onError = { message ->
                 ttsError = message
+                isTtsReady = false
+                isTtsChecking = false
                 isPlaying = false
+                ttsVoices = emptyList()
+                if (latestIsPlaying) {
+                    showVoicePackageSheet = true
+                }
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            },
+            onWarning = { message ->
+                ttsError = message
             },
             onDone = {
                 val file = latestBookFile ?: return@BookTtsController
@@ -194,14 +289,97 @@ fun BookListenScreen(
                     return splitParagraphIntoSentences(list[index]).ifEmpty { listOf(list[index]) }
                 }
 
+                fun shouldStopAfterCurrentChapter(): Boolean {
+                    if (latestCurrentReadingTarget == BookReadingTarget.CHAPTER_TITLE) return false
+                    if (!latestPendingStopAfterChapter) return false
+                    val chapterIndex = latestChapters.indexOfLast {
+                        it.paragraphIndex <= latestCurrentParagraphIndex
+                    }
+                    if (chapterIndex != latestPendingStopChapterIndex) return false
+                    val chapterEndExclusive = latestChapters
+                        .getOrNull(chapterIndex + 1)
+                        ?.paragraphIndex
+                        ?.coerceIn(0, list.size)
+                        ?: list.size
+                    val sentences = paragraphSentences(latestCurrentParagraphIndex)
+                    return latestCurrentParagraphIndex >= chapterEndExclusive - 1 &&
+                        latestCurrentSentenceIndexInParagraph >= sentences.lastIndex
+                }
+
+                if (shouldStopAfterCurrentChapter()) {
+                    ttsController?.stop()
+                    isPlaying = false
+                    onProgressChanged(
+                        file.uri,
+                        latestCurrentParagraphIndex.coerceIn(0, list.lastIndex),
+                        list.size
+                    )
+                    clearSleepTimer()
+                    Toast.makeText(context, "本章已播完，已停止听书", Toast.LENGTH_SHORT).show()
+                    return@BookTtsController
+                }
+
                 fun playPosition(paragraphIndex: Int, sentenceIndex: Int) {
                     val safeParagraphIndex = paragraphIndex.coerceIn(0, list.lastIndex)
                     val sentences = paragraphSentences(safeParagraphIndex)
                     val safeSentenceIndex = sentenceIndex.coerceIn(0, sentences.lastIndex)
                     currentParagraphIndex = safeParagraphIndex
                     currentSentenceIndexInParagraph = safeSentenceIndex
+                    currentReadingTargetName = BookReadingTarget.SENTENCE.name
                     onProgressChanged(file.uri, safeParagraphIndex, list.size)
-                    ttsController?.speak(sentences[safeSentenceIndex], latestSpeechRate, latestPitch)
+                    val result = ttsController?.speakSentence(
+                        text = sentences[safeSentenceIndex],
+                        speechRate = latestSpeechRate,
+                        pitch = latestPitch
+                    )
+                    if (result?.success != true) {
+                        isPlaying = false
+                        ttsError = result?.message ?: "speak 调用失败"
+                        showVoicePackageSheet = true
+                        Toast.makeText(context, ttsError, Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                fun firstSentenceInCurrentChapter(): Pair<Int, Int>? {
+                    val chapterIndex = latestChapters.indexOfLast {
+                        it.paragraphIndex <= latestCurrentParagraphIndex
+                    }
+                    val chapter = latestChapters.getOrNull(chapterIndex)
+                    val chapterStart = chapter?.paragraphIndex ?: latestCurrentParagraphIndex
+                    val chapterEndExclusive = latestChapters
+                        .getOrNull(chapterIndex + 1)
+                        ?.paragraphIndex
+                        ?.coerceIn(0, list.size)
+                        ?: list.size
+                    val chapterTitle = chapter?.title?.trim().orEmpty()
+                    for (paragraphIndex in chapterStart until chapterEndExclusive) {
+                        val paragraph = list[paragraphIndex].trim()
+                        if (paragraph.isBlank()) continue
+                        if (paragraphIndex == chapterStart &&
+                            chapterTitle.isNotBlank() &&
+                            paragraph == chapterTitle
+                        ) {
+                            continue
+                        }
+                        val sentences = paragraphSentences(paragraphIndex)
+                        if (sentences.isNotEmpty()) return paragraphIndex to 0
+                    }
+                    return null
+                }
+
+                if (latestCurrentReadingTarget == BookReadingTarget.CHAPTER_TITLE) {
+                    val firstSentence = firstSentenceInCurrentChapter()
+                    if (firstSentence != null) {
+                        playPosition(firstSentence.first, firstSentence.second)
+                    } else {
+                        isPlaying = false
+                        onProgressChanged(
+                            file.uri,
+                            latestCurrentParagraphIndex.coerceIn(0, list.lastIndex),
+                            list.size
+                        )
+                    }
+                    return@BookTtsController
                 }
 
                 fun playNextSequentialFrom(paragraphIndex: Int, sentenceIndex: Int) {
@@ -283,6 +461,7 @@ fun BookListenScreen(
 
     fun restartTtsCheck() {
         isTtsReady = false
+        isTtsChecking = true
         ttsError = null
         ttsController?.shutdown()
         ttsController = null
@@ -298,6 +477,98 @@ fun BookListenScreen(
         }
     }
 
+    fun canHandleIntent(intent: Intent): Boolean {
+        return intent.resolveActivity(context.packageManager) != null
+    }
+
+    fun copySearchKeyword(keyword: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("TTS engine", keyword))
+    }
+
+    fun openVoiceDataInstaller() {
+        val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
+        if (!canHandleIntent(intent)) {
+            voiceDataInstallUnavailable = true
+            showVoicePackageSheet = true
+            Toast.makeText(
+                context,
+                "当前系统不支持直接安装语音数据，请安装可用的 TTS 引擎",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        voiceDataInstallUnavailable = false
+        openIntentSafely(intent, "无法打开语音数据安装页面")
+    }
+
+    fun openSystemVoiceSettings() {
+        openIntentSafely(
+            Intent("com.android.settings.TTS_SETTINGS")
+                .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+            "无法打开语音设置"
+        )
+    }
+
+    fun searchRhVoiceEngine() {
+        val keyword = "RHVoice"
+        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$keyword&c=apps"))
+            .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        runCatching {
+            context.startActivity(marketIntent)
+        }.onFailure {
+            copySearchKeyword(keyword)
+            Toast.makeText(
+                context,
+                "已复制 RHVoice，请到应用商店搜索安装",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    fun selectTtsVoice(voiceName: String?) {
+        if (!isTtsReady) {
+            Toast.makeText(context, "系统语音不可用", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val success = ttsController?.selectVoice(voiceName) == true
+        if (success) {
+            selectedVoiceName = voiceName
+            Toast.makeText(
+                context,
+                if (voiceName == null) "已使用默认声线" else "已选择系统声线",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            Toast.makeText(context, "该声线不可用", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun previewSystemVoice() {
+        if (isPlaying) {
+            Toast.makeText(context, "请先暂停听书再试听", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!isTtsReady) {
+            showVoicePackageSheet = true
+            Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val result = ttsController?.speakSentence(
+            text = "这是一段系统语音试听。",
+            speechRate = speechRate,
+            pitch = pitch,
+            utteranceId = "book-tts-preview"
+        )
+        if (result?.success == true) {
+            Toast.makeText(context, "正在试听系统语音", Toast.LENGTH_SHORT).show()
+        } else {
+            ttsError = result?.message ?: "试听失败"
+            showVoicePackageSheet = true
+            Toast.makeText(context, ttsError, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun speakCurrentSentence() {
         val file = bookFile
         if (file == null) {
@@ -305,7 +576,9 @@ fun BookListenScreen(
             return
         }
         if (!isTtsReady) {
-            Toast.makeText(context, ttsError ?: "系统 TTS 正在初始化", Toast.LENGTH_SHORT).show()
+            isPlaying = false
+            showVoicePackageSheet = true
+            Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
             return
         }
         if (paragraphs.isEmpty()) {
@@ -313,18 +586,32 @@ fun BookListenScreen(
             return
         }
         val index = currentParagraphIndex.coerceIn(0, paragraphs.lastIndex)
+        val isChapterTitleTarget = currentReadingTargetName == BookReadingTarget.CHAPTER_TITLE.name
         val sentences = splitParagraphIntoSentences(paragraphs[index]).ifEmpty { listOf(paragraphs[index]) }
         val sentenceIndex = currentSentenceIndexInParagraph.coerceIn(0, sentences.lastIndex)
+        val textToSpeak = if (isChapterTitleTarget) {
+            currentChapter?.title?.takeIf { it.isNotBlank() } ?: paragraphs[index]
+        } else {
+            sentences[sentenceIndex]
+        }
         currentParagraphIndex = index
-        currentSentenceIndexInParagraph = sentenceIndex
+        if (!isChapterTitleTarget) {
+            currentSentenceIndexInParagraph = sentenceIndex
+        }
         onBeforeSpeak()
-        val started = ttsController?.speak(sentences[sentenceIndex], speechRate, pitch) == true
-        if (started) {
+        val result = ttsController?.speakSentence(
+            text = textToSpeak,
+            speechRate = speechRate,
+            pitch = pitch
+        )
+        if (result?.success == true) {
             isPlaying = true
             saveProgress(index)
         } else {
             isPlaying = false
-            Toast.makeText(context, "朗读失败", Toast.LENGTH_SHORT).show()
+            ttsError = result?.message ?: "系统语音不可用，请安装或启用系统语音引擎后重试"
+            showVoicePackageSheet = true
+            Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -338,7 +625,10 @@ fun BookListenScreen(
         ttsController?.stop()
         currentParagraphIndex = 0
         currentSentenceIndexInParagraph = 0
+        currentReadingTargetName = BookReadingTarget.SENTENCE.name
         isPlaying = false
+        pendingStopAfterChapter = false
+        pendingStopChapterIndex = -1
         saveProgress(0)
     }
 
@@ -348,8 +638,39 @@ fun BookListenScreen(
         ttsController?.stop()
         currentParagraphIndex = nextIndex
         currentSentenceIndexInParagraph = 0
+        currentReadingTargetName = BookReadingTarget.SENTENCE.name
         saveProgress(nextIndex)
         if (autoPlay) {
+            isPlaying = false
+            speakCurrentSentence()
+        }
+    }
+
+    fun jumpToChapter(offset: Int) {
+        if (paragraphs.isEmpty() || chapters.isEmpty()) {
+            Toast.makeText(context, "未识别到章节", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val currentIndex = chapters.indexOfLast { it.paragraphIndex <= currentParagraphIndex }
+            .coerceAtLeast(0)
+        val targetIndex = currentIndex + offset
+        if (targetIndex < 0) {
+            Toast.makeText(context, "已经是第一章", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (targetIndex > chapters.lastIndex) {
+            Toast.makeText(context, "已经是最后一章", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val wasPlaying = isPlaying
+        pendingStopAfterChapter = false
+        pendingStopChapterIndex = -1
+        ttsController?.stop()
+        currentParagraphIndex = chapters[targetIndex].paragraphIndex.coerceIn(0, paragraphs.lastIndex)
+        currentSentenceIndexInParagraph = 0
+        currentReadingTargetName = BookReadingTarget.CHAPTER_TITLE.name
+        saveProgress(currentParagraphIndex)
+        if (wasPlaying) {
             isPlaying = false
             speakCurrentSentence()
         }
@@ -361,6 +682,7 @@ fun BookListenScreen(
         ttsController?.stop()
         currentParagraphIndex = nextIndex
         currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph.coerceAtLeast(0)
+        currentReadingTargetName = BookReadingTarget.SENTENCE.name
         saveProgress(nextIndex)
         if (autoPlay) {
             isPlaying = false
@@ -408,6 +730,50 @@ fun BookListenScreen(
         }
     }
 
+    LaunchedEffect(isTtsReady, selectedVoiceName, ttsRetryKey) {
+        if (isTtsReady) {
+            selectedVoiceName?.let { ttsController?.selectVoice(it) }
+            ttsVoices = ttsController?.getAvailableVoices().orEmpty()
+        }
+    }
+
+    LaunchedEffect(sleepTimerEnabled, sleepTimerEndAtMillis, sleepTimerStopMode) {
+        while (sleepTimerEnabled) {
+            val endAt = sleepTimerEndAtMillis
+            if (endAt == null) {
+                clearSleepTimer()
+                break
+            }
+            val remaining = (endAt - System.currentTimeMillis()).coerceAtLeast(0L)
+            sleepTimerRemainingMillis = remaining
+            if (remaining <= 0L) {
+                if (sleepTimerStopMode == SleepTimerStopMode.AFTER_CURRENT_CHAPTER && isPlaying) {
+                    val currentChapterIndex = chapters.indexOfLast {
+                        it.paragraphIndex <= currentParagraphIndex
+                    }
+                    if (currentChapterIndex >= 0) {
+                        pendingStopAfterChapter = true
+                        pendingStopChapterIndex = currentChapterIndex
+                        sleepTimerRemainingMillis = 0L
+                    } else {
+                        stopForSleepTimer(showToast = true)
+                    }
+                } else {
+                    stopForSleepTimer(showToast = isPlaying)
+                }
+                break
+            }
+            delay(1_000L)
+        }
+    }
+
+    fun shouldShowCachedReaderWhileLoading(): Boolean {
+        val state = cachedReadState ?: return false
+        return state.bookUri == bookFile?.uri &&
+            state.cachedVisibleText.isNotEmpty() &&
+            state.updatedAt > 0L
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = Color(0xFF080B12)
@@ -440,29 +806,45 @@ fun BookListenScreen(
             )
 
             when {
-                isLoading && cachedReadState?.cachedVisibleText.orEmpty().isNotEmpty() -> {
+                isLoading &&
+                    shouldShowCachedReaderWhileLoading() &&
+                    cachedReadState?.cachedVisibleText.orEmpty().isNotEmpty() -> {
                     val cachedState = cachedReadState
+                    val cachedTarget = remember(cachedState?.lastReadingTargetName) {
+                        runCatching {
+                            BookReadingTarget.valueOf(
+                                cachedState?.lastReadingTargetName ?: BookReadingTarget.SENTENCE.name
+                            )
+                        }.getOrDefault(BookReadingTarget.SENTENCE)
+                    }
                     val cachedSentences = remember(cachedState) {
-                        cachedState?.cachedVisibleText
+                        val state = cachedState
+                        state?.cachedVisibleText
                             .orEmpty()
                             .filter { it.isNotBlank() }
                             .mapIndexed { index, text ->
                                 ReaderSentence(
                                     text = text,
-                                    paragraphIndex = cachedState?.lastParagraphIndex ?: 0,
-                                    sentenceIndexInParagraph = index,
+                                    paragraphIndex = state?.lastParagraphIndex ?: 0,
+                                    sentenceIndexInParagraph = (state?.lastSentenceIndexInParagraph ?: 0) + index,
                                     chapterSentenceIndex = index
                                 )
                             }
                     }
-                    val cachedIndex = cachedState
-                        ?.lastChapterSentenceIndex
-                        ?.coerceIn(0, (cachedSentences.size - 1).coerceAtLeast(0))
-                        ?: 0
+                    val cachedIndex = 0
                     BookListenContent(
                         chapterTitle = cachedState?.lastChapterTitle.orEmpty().ifBlank { "正在恢复上次阅读" },
                         chapterSentences = cachedSentences,
                         currentChapterSentenceIndex = cachedIndex,
+                        isChapterTitleCurrent = cachedTarget == BookReadingTarget.CHAPTER_TITLE,
+                        currentParagraphIndex = cachedSentences
+                            .getOrNull(cachedIndex)
+                            ?.paragraphIndex
+                            ?: (cachedState?.lastParagraphIndex ?: currentParagraphIndex),
+                        currentSentenceIndexInParagraph = cachedSentences
+                            .getOrNull(cachedIndex)
+                            ?.sentenceIndexInParagraph
+                            ?: currentSentenceIndexInParagraph,
                         listenedTimeLabel = estimateSentenceTimeLabel(cachedSentences, 0, cachedIndex, speechRate),
                         remainingTimeLabel = estimateSentenceTimeLabel(
                             cachedSentences,
@@ -472,40 +854,46 @@ fun BookListenScreen(
                         ),
                         isPlaying = false,
                         isTtsReady = isTtsReady,
+                        isTtsChecking = isTtsChecking,
                         ttsError = ttsError,
+                        currentVoiceName = selectedVoiceName,
                         speechRate = speechRate,
                         pitch = pitch,
                         readerFontSizeSp = readerFontSizeSp,
                         onPlayPause = { Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show() },
                         onStop = { },
-                        onPrevious = { },
-                        onNext = { },
+                        onPrevious = {
+                            Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show()
+                        },
+                        onNext = {
+                            Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show()
+                        },
                         onSeekSentence = { sentenceIndex ->
                             cachedSentences.getOrNull(sentenceIndex)?.let { sentence ->
                                 currentParagraphIndex = sentence.paragraphIndex
                                 currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                                currentReadingTargetName = BookReadingTarget.SENTENCE.name
                             }
                         },
                         onSentenceClick = { sentence ->
                             currentParagraphIndex = sentence.paragraphIndex
                             currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                            currentReadingTargetName = BookReadingTarget.SENTENCE.name
                         },
                         onSpeechRateChange = { speechRate = it },
                         onPitchChange = { pitch = it },
                         onReaderFontSizeChange = { readerFontSizeSp = it },
                         onOpenCatalog = { Toast.makeText(context, "正在恢复目录", Toast.LENGTH_SHORT).show() },
+                        sleepTimerEnabled = sleepTimerEnabled,
+                        onOpenSleepTimer = { showSleepTimerSheet = true },
                         playbackModeLabel = playbackMode.label,
                         onTogglePlaybackMode = {
                             val nextMode = playbackMode.next()
                             playbackModeName = nextMode.name
                             Toast.makeText(context, "已切换为${nextMode.label}", Toast.LENGTH_SHORT).show()
                         },
-                        onInstallVoiceData = {
-                            openIntentSafely(
-                                Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
-                                "无法打开语音数据安装页面"
-                            )
-                        },
+                        onInstallVoiceData = ::openVoiceDataInstaller,
+                        onOpenVoicePackageSettings = { showVoicePackageSheet = true },
                         onOpenVoiceSettings = {
                             openIntentSafely(
                                 Intent("com.android.settings.TTS_SETTINGS")
@@ -618,6 +1006,7 @@ fun BookListenScreen(
                             lastParagraphIndex = currentParagraphIndex,
                             lastSentenceIndexInParagraph = currentSentenceIndexInParagraph,
                             lastChapterSentenceIndex = currentChapterSentenceIndex,
+                            lastReadingTargetName = currentReadingTarget.name,
                             lastChapterTitle = chapterTitle,
                             cachedVisibleText = chapterSentences
                                 .drop(currentChapterSentenceIndex)
@@ -632,11 +1021,16 @@ fun BookListenScreen(
                         chapterTitle = chapterTitle,
                         chapterSentences = chapterSentences,
                         currentChapterSentenceIndex = currentChapterSentenceIndex,
+                        isChapterTitleCurrent = currentReadingTarget == BookReadingTarget.CHAPTER_TITLE,
+                        currentParagraphIndex = currentParagraphIndex,
+                        currentSentenceIndexInParagraph = currentSentenceIndexInParagraph,
                         listenedTimeLabel = listenedTimeLabel,
                         remainingTimeLabel = remainingTimeLabel,
                         isPlaying = isPlaying,
                         isTtsReady = isTtsReady,
+                        isTtsChecking = isTtsChecking,
                         ttsError = ttsError,
+                        currentVoiceName = selectedVoiceName,
                         speechRate = speechRate,
                         pitch = pitch,
                         readerFontSizeSp = readerFontSizeSp,
@@ -645,10 +1039,10 @@ fun BookListenScreen(
                         },
                         onStop = { stopReading() },
                         onPrevious = {
-                            jumpToParagraph(currentParagraphIndex - 1)
+                            jumpToChapter(-1)
                         },
                         onNext = {
-                            jumpToParagraph(currentParagraphIndex + 1)
+                            jumpToChapter(1)
                         },
                         onSeekSentence = { sentenceIndex ->
                             chapterSentences.getOrNull(sentenceIndex)?.let { sentence ->
@@ -662,18 +1056,16 @@ fun BookListenScreen(
                         onPitchChange = { pitch = it },
                         onReaderFontSizeChange = { readerFontSizeSp = it },
                         onOpenCatalog = { showChapterSheet = true },
+                        sleepTimerEnabled = sleepTimerEnabled,
+                        onOpenSleepTimer = { showSleepTimerSheet = true },
                         playbackModeLabel = playbackMode.label,
                         onTogglePlaybackMode = {
                             val nextMode = playbackMode.next()
                             playbackModeName = nextMode.name
                             Toast.makeText(context, "已切换为${nextMode.label}", Toast.LENGTH_SHORT).show()
                         },
-                        onInstallVoiceData = {
-                            openIntentSafely(
-                                Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
-                                "无法打开语音数据安装页面"
-                            )
-                        },
+                        onInstallVoiceData = ::openVoiceDataInstaller,
+                        onOpenVoicePackageSettings = { showVoicePackageSheet = true },
                         onOpenVoiceSettings = {
                             openIntentSafely(
                                 Intent("com.android.settings.TTS_SETTINGS")
@@ -698,8 +1090,74 @@ fun BookListenScreen(
             onRefresh = { chapterRefreshKey += 1 },
             onChapterClick = { chapter ->
                 showChapterSheet = false
-                jumpToParagraph(chapter.paragraphIndex, autoPlay = isPlaying)
+                val targetIndex = chapters.indexOfFirst { it.paragraphIndex == chapter.paragraphIndex }
+                if (targetIndex >= 0) {
+                    val wasPlaying = isPlaying
+                    pendingStopAfterChapter = false
+                    pendingStopChapterIndex = -1
+                    ttsController?.stop()
+                    currentParagraphIndex = chapters[targetIndex].paragraphIndex.coerceIn(0, paragraphs.lastIndex)
+                    currentSentenceIndexInParagraph = 0
+                    currentReadingTargetName = BookReadingTarget.CHAPTER_TITLE.name
+                    saveProgress(currentParagraphIndex)
+                    if (wasPlaying) {
+                        isPlaying = false
+                        speakCurrentSentence()
+                    }
+                }
             }
+        )
+    }
+
+    if (showSleepTimerSheet) {
+        SleepTimerBottomSheet(
+            timerEnabled = sleepTimerEnabled,
+            remainingMillis = sleepTimerRemainingMillis,
+            selectedHours = sleepTimerHours,
+            selectedMinutes = sleepTimerMinutes,
+            stopMode = sleepTimerStopMode,
+            onHoursChange = { sleepTimerHours = it.coerceIn(0, 23) },
+            onMinutesChange = { sleepTimerMinutes = it.coerceIn(0, 59) },
+            onQuickMinutesSelected = { minutes ->
+                sleepTimerHours = (minutes / 60).coerceIn(0, 23)
+                sleepTimerMinutes = (minutes % 60).coerceIn(0, 59)
+            },
+            onStopModeChange = { sleepTimerStopModeName = it.name },
+            onStartOrUpdate = { startOrUpdateSleepTimer(isUpdate = sleepTimerEnabled) },
+            onDisableTimer = {
+                clearSleepTimer()
+                showSleepTimerSheet = false
+                Toast.makeText(context, "已关闭定时", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showSleepTimerSheet = false }
+        )
+    }
+
+    if (showVoicePackageSheet) {
+        VoicePackageSettingsBottomSheet(
+            isTtsReady = isTtsReady,
+            isTtsChecking = isTtsChecking,
+            message = ttsError,
+            speechRate = speechRate,
+            pitch = pitch,
+            voices = ttsVoices,
+            selectedVoiceName = selectedVoiceName,
+            voiceDataInstallUnavailable = voiceDataInstallUnavailable,
+            onDismiss = { showVoicePackageSheet = false },
+            onInstallVoiceData = ::openVoiceDataInstaller,
+            onOpenSystemSettings = ::openSystemVoiceSettings,
+            onRetry = {
+                restartTtsCheck()
+            },
+            onPreview = ::previewSystemVoice,
+            onRefreshVoices = {
+                ttsVoices = ttsController?.getAvailableVoices().orEmpty()
+                if (ttsVoices.isEmpty()) {
+                    Toast.makeText(context, "未读取到系统声线", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onSelectVoice = ::selectTtsVoice,
+            onSearchRhVoice = ::searchRhVoiceEngine
         )
     }
 }
@@ -720,7 +1178,7 @@ private fun BookListenTopBar(
             onClick = onBack,
             modifier = Modifier.align(Alignment.CenterStart)
         ) {
-            Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+            Icon(Icons.Filled.ArrowBack, contentDescription = "杩斿洖", tint = Color.White)
         }
         Column(
             modifier = Modifier
@@ -738,7 +1196,7 @@ private fun BookListenTopBar(
             )
         }
         Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-            IconButton(onClick = { expanded = true }) {
+                IconButton(onClick = { expanded = true }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "更多", tint = Color.White)
             }
             DropdownMenu(
@@ -770,11 +1228,16 @@ private fun BookListenContent(
     chapterTitle: String,
     chapterSentences: List<ReaderSentence>,
     currentChapterSentenceIndex: Int,
+    isChapterTitleCurrent: Boolean,
+    currentParagraphIndex: Int,
+    currentSentenceIndexInParagraph: Int,
     listenedTimeLabel: String,
     remainingTimeLabel: String,
     isPlaying: Boolean,
     isTtsReady: Boolean,
+    isTtsChecking: Boolean,
     ttsError: String?,
+    currentVoiceName: String?,
     speechRate: Float,
     pitch: Float,
     readerFontSizeSp: Float,
@@ -788,9 +1251,12 @@ private fun BookListenContent(
     onPitchChange: (Float) -> Unit,
     onReaderFontSizeChange: (Float) -> Unit,
     onOpenCatalog: () -> Unit,
+    sleepTimerEnabled: Boolean,
+    onOpenSleepTimer: () -> Unit,
     playbackModeLabel: String,
     onTogglePlaybackMode: () -> Unit,
     onInstallVoiceData: () -> Unit,
+    onOpenVoicePackageSettings: () -> Unit,
     onOpenVoiceSettings: () -> Unit,
     onRetryTts: () -> Unit,
     modifier: Modifier = Modifier
@@ -801,14 +1267,25 @@ private fun BookListenContent(
     fun showDevelopingToast() {
         Toast.makeText(context, "功能开发中", Toast.LENGTH_SHORT).show()
     }
-    val sentenceListState = rememberLazyListState()
+    val initialSentenceListIndex = if (isChapterTitleCurrent) {
+        0
+    } else {
+        (currentChapterSentenceIndex - 1).coerceAtLeast(0)
+    }
+    val sentenceListState = rememberLazyListState(initialFirstVisibleItemIndex = initialSentenceListIndex)
     val seekEndIndex = (chapterSentences.size - 1).coerceAtLeast(0)
     val sliderEndIndex = seekEndIndex.coerceAtLeast(1)
-    val seekValue = currentChapterSentenceIndex.coerceIn(0, seekEndIndex).toFloat()
+    val seekValue = if (isChapterTitleCurrent) {
+        0f
+    } else {
+        currentChapterSentenceIndex.coerceIn(0, seekEndIndex).toFloat()
+    }
 
-    LaunchedEffect(currentChapterSentenceIndex, chapterSentences.size) {
-        if (chapterSentences.isNotEmpty()) {
-            sentenceListState.animateScrollToItem((currentChapterSentenceIndex - 1).coerceAtLeast(0))
+    LaunchedEffect(chapterTitle, currentChapterSentenceIndex, chapterSentences.size, isChapterTitleCurrent) {
+        if (isChapterTitleCurrent) {
+            sentenceListState.scrollToItem(0)
+        } else if (chapterSentences.isNotEmpty()) {
+            sentenceListState.scrollToItem((currentChapterSentenceIndex - 1).coerceAtLeast(0))
         }
     }
 
@@ -819,11 +1296,13 @@ private fun BookListenContent(
     ) {
         TtsStatusStrip(
             isTtsReady = isTtsReady,
+            isTtsChecking = isTtsChecking,
             message = ttsError,
+            currentVoiceName = currentVoiceName,
             speechRate = speechRate,
             pitch = pitch,
             onInstallVoiceData = onInstallVoiceData,
-            onOpenVoiceSettings = onOpenVoiceSettings,
+            onOpenVoiceSettings = onOpenVoicePackageSettings,
             onRetry = onRetryTts,
             modifier = Modifier.padding(horizontal = 18.dp)
         )
@@ -849,11 +1328,11 @@ private fun BookListenContent(
                     item {
                         Text(
                             text = chapterTitle,
-                            color = Color.White.copy(alpha = 0.98f),
+                            color = if (isChapterTitleCurrent) Color(0xFFB388FF) else Color.White.copy(alpha = 0.98f),
                             style = MaterialTheme.typography.headlineSmall.copy(
                                 fontSize = (readerFontSizeSp + 2f).sp,
                                 lineHeight = (readerFontSizeSp * 1.55f + 2f).sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = if (isChapterTitleCurrent) FontWeight.Bold else FontWeight.SemiBold
                             )
                         )
                     }
@@ -871,7 +1350,11 @@ private fun BookListenContent(
                         }
                     } else {
                         itemsIndexed(chapterSentences) { index, sentence ->
-                            val isCurrentSentence = index == currentChapterSentenceIndex
+                            val isCurrentSentence =
+                                !isChapterTitleCurrent &&
+                                    ((sentence.paragraphIndex == currentParagraphIndex &&
+                                        sentence.sentenceIndexInParagraph == currentSentenceIndexInParagraph) ||
+                                        index == currentChapterSentenceIndex)
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -880,11 +1363,11 @@ private fun BookListenContent(
                             ) {
                                 Text(
                                     text = sentence.text,
-                                    color = if (isCurrentSentence) Color(0xFFF2E8FF) else Color.White.copy(alpha = 0.9f),
+                                    color = if (isCurrentSentence) Color(0xFFB388FF) else Color.White.copy(alpha = 0.72f),
                                     style = MaterialTheme.typography.bodyLarge.copy(
                                         fontSize = readerFontSizeSp.sp,
                                         lineHeight = (readerFontSizeSp * 1.6f).sp,
-                                        fontWeight = if (isCurrentSentence) FontWeight.SemiBold else FontWeight.Medium
+                                        fontWeight = if (isCurrentSentence) FontWeight.SemiBold else FontWeight.Normal
                                     )
                                 )
                             }
@@ -941,7 +1424,7 @@ private fun BookListenContent(
                 ReaderControlButton(playbackModeLabel, onClick = onTogglePlaybackMode) {
                     Text("⇄", color = Color(0xFFC3B0FF), fontSize = 22.sp, fontWeight = FontWeight.Medium)
                 }
-                ReaderControlButton("上一段", onPrevious) {
+                ReaderControlButton("上一章", onPrevious) {
                     Icon(Icons.Filled.SkipPrevious, contentDescription = null, modifier = Modifier.size(24.dp))
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -970,7 +1453,7 @@ private fun BookListenContent(
                         fontSize = 11.sp
                     )
                 }
-                ReaderControlButton("下一段", onNext) {
+                ReaderControlButton("下一章", onNext) {
                     Icon(Icons.Filled.SkipNext, contentDescription = null, modifier = Modifier.size(24.dp))
                 }
                 ReaderControlButton("播放列表", onClick = onOpenCatalog, weak = true) {
@@ -990,8 +1473,14 @@ private fun BookListenContent(
                 )
                 ReaderActionButton(
                     label = "定时关闭",
-                    icon = { Text("◷", fontSize = 20.sp, color = Color.White.copy(alpha = 0.52f)) },
-                    onClick = ::showDevelopingToast,
+                    icon = {
+                        Text(
+                            "◷",
+                            fontSize = 20.sp,
+                            color = if (sleepTimerEnabled) Color(0xFFC3B0FF) else Color.White.copy(alpha = 0.52f)
+                        )
+                    },
+                    onClick = onOpenSleepTimer,
                     modifier = Modifier.weight(1f)
                 )
                 ReaderActionButton(
@@ -1130,7 +1619,9 @@ private fun ThinMoonSlider(
 @Composable
 private fun TtsStatusStrip(
     isTtsReady: Boolean,
+    isTtsChecking: Boolean,
     message: String?,
+    currentVoiceName: String?,
     speechRate: Float,
     pitch: Float,
     onInstallVoiceData: () -> Unit,
@@ -1138,6 +1629,16 @@ private fun TtsStatusStrip(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val voiceTitle = when {
+        isTtsChecking -> "系统语音检测中"
+        isTtsReady -> "系统语音"
+        else -> "系统语音不可用"
+    }
+    val voiceLabel = currentVoiceName?.takeIf { it.isNotBlank() } ?: "默认声线"
+    val safeSpeechRate = if (speechRate > 0f) speechRate else 1f
+    val speechRateLabel = "语速 ${"%.1f".format(safeSpeechRate)}x"
+    val chipEnabled = isTtsReady && !isTtsChecking
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -1169,20 +1670,19 @@ private fun TtsStatusStrip(
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Text(
-                text = "小佩正在读",
-                color = Color(0xFFCDBEFF),
+                text = voiceTitle,
+                color = if (isTtsReady) Color(0xFFCDBEFF) else Color.White.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ReaderVoiceChip("离线 ▼")
-                ReaderVoiceChip("单人 ▼")
-                ReaderVoiceChip("语速x2.0 ▼")
+                ReaderVoiceChip(voiceLabel, enabled = chipEnabled)
+                ReaderVoiceChip(speechRateLabel, enabled = chipEnabled)
             }
         }
         Text(
-            text = "换主播 ›",
+            text = "语音设置 ›",
             color = Color(0xFFCDBEFF),
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
@@ -1192,16 +1692,19 @@ private fun TtsStatusStrip(
 }
 
 @Composable
-private fun ReaderVoiceChip(text: String) {
+private fun ReaderVoiceChip(
+    text: String,
+    enabled: Boolean = true
+) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = 0.12f))
+            .background(Color.White.copy(alpha = if (enabled) 0.12f else 0.07f))
             .padding(horizontal = 7.dp, vertical = 2.dp)
     ) {
         Text(
             text = text,
-            color = Color.White.copy(alpha = 0.9f),
+            color = Color.White.copy(alpha = if (enabled) 0.9f else 0.58f),
             fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1
@@ -1264,7 +1767,7 @@ private fun VoiceSettingsBottomSheet(
                 onValueChange = onSpeechRateChange
             )
             SettingSlider(
-                title = "音调",
+                title = "闊宠皟",
                 valueText = "${"%.1f".format(pitch)}x",
                 value = pitch,
                 valueRange = 0.7f..1.5f,
@@ -1272,6 +1775,451 @@ private fun VoiceSettingsBottomSheet(
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun VoicePackageSettingsBottomSheet(
+    isTtsReady: Boolean,
+    isTtsChecking: Boolean,
+    message: String?,
+    speechRate: Float,
+    pitch: Float,
+    voices: List<BookTtsVoice>,
+    selectedVoiceName: String?,
+    voiceDataInstallUnavailable: Boolean,
+    onDismiss: () -> Unit,
+    onInstallVoiceData: () -> Unit,
+    onOpenSystemSettings: () -> Unit,
+    onRetry: () -> Unit,
+    onPreview: () -> Unit,
+    onRefreshVoices: () -> Unit,
+    onSelectVoice: (String?) -> Unit,
+    onSearchRhVoice: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color(0xFF15111F),
+        scrimColor = Color.Black.copy(alpha = 0.48f),
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 8.dp, bottom = 2.dp)
+                    .width(46.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.White.copy(alpha = 0.25f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 22.dp)
+                .padding(bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        text = "语音包与语音设置",
+                        color = Color.White,
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "选择系统语音或安装离线语音引擎",
+                        color = Color.White.copy(alpha = 0.54f),
+                        fontSize = 13.sp
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = "关闭", tint = Color.White.copy(alpha = 0.84f))
+                }
+            }
+
+            VoiceStatusCard(
+                isTtsReady = isTtsReady,
+                isTtsChecking = isTtsChecking,
+                message = message,
+                currentVoiceName = selectedVoiceName,
+                speechRate = speechRate,
+                pitch = pitch
+            )
+
+            if (!isTtsReady) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF8258FF).copy(alpha = 0.08f))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = "系统语音不可用",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "当前设备未检测到可用中文声线，请安装或启用支持系统 TTS 的语音引擎后重试。",
+                        color = Color.White.copy(alpha = 0.66f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp
+                    )
+                    if (!message.isNullOrBlank()) {
+                        Text(
+                            text = "失败原因：$message",
+                            color = Color.White.copy(alpha = 0.46f),
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                    if (voiceDataInstallUnavailable) {
+                        Text(
+                            text = "当前系统不支持直接打开语音数据安装页面，可先打开系统语音设置，或到应用商店搜索 RHVoice 等系统 TTS 引擎。",
+                            color = Color(0xFFC3B0FF).copy(alpha = 0.86f),
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                VoiceSheetActionButton("系统语音设置", onOpenSystemSettings, Modifier.weight(1f))
+                VoiceSheetActionButton("重新检测", onRetry, Modifier.weight(1f), emphasized = isTtsReady.not())
+                VoiceSheetActionButton(
+                    text = if (voiceDataInstallUnavailable) "安装数据不可用" else "安装语音数据",
+                    onClick = onInstallVoiceData,
+                    modifier = Modifier.weight(1f),
+                    muted = voiceDataInstallUnavailable
+                )
+            }
+
+            VoiceSheetActionButton(
+                text = "试听",
+                onClick = onPreview,
+                modifier = Modifier.fillMaxWidth(),
+                emphasized = isTtsReady
+            )
+
+            if (!isTtsReady) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF7B55FF).copy(alpha = 0.08f))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = "修复建议",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "1. 先点击“安装语音数据”\n2. 如果无效，点击“系统语音设置”选择可用语音引擎\n3. 回到 App 后点击“重新检测”",
+                        color = Color.White.copy(alpha = 0.62f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "系统声线列表",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "刷新",
+                        color = Color(0xFFC3B0FF),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable(onClick = onRefreshVoices)
+                    )
+                }
+                if (voices.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.04f))
+                            .padding(horizontal = 14.dp, vertical = 14.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text("未找到可用中文声线", color = Color.White.copy(alpha = 0.86f), fontSize = 14.sp)
+                            Text(
+                                "请安装系统语音数据，或在系统语音设置中启用外部离线语音引擎。",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp
+                            )
+                        }
+                    }
+                } else {
+                    VoiceRow(
+                        title = "默认声线",
+                        subtitle = "使用系统当前默认 TextToSpeech 声线",
+                        selected = selectedVoiceName == null,
+                        onClick = { onSelectVoice(null) }
+                    )
+                    voices.take(8).forEach { voice ->
+                        VoiceRow(
+                            title = voice.name,
+                            subtitle = buildString {
+                                append(voice.localeTag)
+                                append(" 路 ")
+                                append(if (voice.isNetworkConnectionRequired) "可能需要网络" else "系统声线")
+                            },
+                            selected = selectedVoiceName == voice.name,
+                            onClick = { onSelectVoice(voice.name) }
+                        )
+                    }
+                    if (voices.size > 8) {
+                        Text(
+                            text = "还有 ${voices.size - 8} 个系统声线，可在系统语音设置中查看。",
+                            color = Color.White.copy(alpha = 0.42f),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "推荐离线语音引擎",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                RecommendedVoiceEngineCard(
+                    title = "系统自带离线语音数据",
+                    description = if (voiceDataInstallUnavailable) {
+                        "当前系统不支持直接安装语音数据，请从系统语音设置或应用商店安装可用引擎。"
+                    } else {
+                        "优先推荐，兼容性最好，可作为系统 TTS 直接使用。"
+                    },
+                    action = if (voiceDataInstallUnavailable) "系统语音设置" else "安装 / 设置",
+                    onClick = if (voiceDataInstallUnavailable) onOpenSystemSettings else onInstallVoiceData
+                )
+                RecommendedVoiceEngineCard(
+                    title = "RHVoice",
+                    description = "开源离线 TTS 引擎，可安装后作为系统语音引擎使用。",
+                    action = "搜索安装",
+                    onClick = onSearchRhVoice
+                )
+                RecommendedVoiceEngineCard(
+                    title = "Sherpa / Piper 离线语音",
+                    description = "后续可作为内置离线语音方案研究，目前暂不内置。",
+                    action = "后续支持",
+                    onClick = { }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceStatusCard(
+    isTtsReady: Boolean,
+    isTtsChecking: Boolean,
+    message: String?,
+    currentVoiceName: String?,
+    speechRate: Float,
+    pitch: Float
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.045f))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF7B55FF).copy(alpha = if (isTtsReady) 0.26f else 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.GraphicEq,
+                contentDescription = null,
+                tint = if (isTtsReady || isTtsChecking) Color(0xFFC3B0FF) else Color.White.copy(alpha = 0.46f),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+            Text(
+                text = when {
+                    isTtsChecking -> "正在检测系统语音"
+                    isTtsReady -> "系统语音可用"
+                    else -> "系统语音不可用"
+                },
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = when {
+                    isTtsChecking -> "请稍候，正在重新初始化系统 TextToSpeech"
+                    isTtsReady -> {
+                        val voiceText = "当前声线：${currentVoiceName ?: "默认声线"}"
+                        message?.takeIf { it.isNotBlank() }?.let { "$voiceText 路 $it" } ?: voiceText
+                    }
+                    else -> "请安装或启用系统语音引擎后重试"
+                },
+                color = Color.White.copy(alpha = 0.58f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = if (!isTtsReady && !isTtsChecking && !message.isNullOrBlank()) {
+                    "失败原因：$message"
+                } else {
+                    "语速：${"%.1f".format(if (speechRate > 0f) speechRate else 1f)}x  路  音调：${"%.1f".format(if (pitch > 0f) pitch else 1f)}x"
+                },
+                color = Color.White.copy(alpha = 0.46f),
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceSheetActionButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    emphasized: Boolean = false,
+    muted: Boolean = false
+) {
+    Box(
+        modifier = modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                when {
+                    muted -> Color.White.copy(alpha = 0.025f)
+                    emphasized -> Color(0xFF8258FF).copy(alpha = 0.82f)
+                    else -> Color.White.copy(alpha = 0.055f)
+                }
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = when {
+                muted -> Color.White.copy(alpha = 0.42f)
+                emphasized -> Color.White
+                else -> Color(0xFFD8D0FF)
+            },
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun VoiceRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) Color(0xFF8258FF).copy(alpha = 0.16f) else Color.White.copy(alpha = 0.035f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(16.dp)
+                .clip(CircleShape)
+                .background(if (selected) Color(0xFFC3B0FF) else Color.White.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF15111F)))
+            }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 13.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                color = Color.White.copy(alpha = 0.46f),
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecommendedVoiceEngineCard(
+    title: String,
+    description: String,
+    action: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.035f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(description, color = Color.White.copy(alpha = 0.48f), fontSize = 11.sp, lineHeight = 16.sp)
+        }
+        Text(
+            text = action,
+            color = Color(0xFFC3B0FF),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clickable(onClick = onClick)
+        )
     }
 }
 
@@ -1335,7 +2283,7 @@ private fun FontSizeBottomSheet(
                 TextButton(
                     onClick = { onFontSizeChange((fontSizeSp - 1f).coerceIn(16f, 30f)) }
                 ) {
-                    Text("减小", color = Color.White.copy(alpha = 0.78f))
+                    Text("鍑忓皬", color = Color.White.copy(alpha = 0.78f))
                 }
                 Slider(
                     modifier = Modifier.weight(1f),
@@ -1360,7 +2308,7 @@ private fun FontSizeBottomSheet(
                 TextButton(
                     onClick = { onFontSizeChange((fontSizeSp + 1f).coerceIn(16f, 30f)) }
                 ) {
-                    Text("增大", color = Color.White.copy(alpha = 0.78f))
+                    Text("澧炲ぇ", color = Color.White.copy(alpha = 0.78f))
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -1705,6 +2653,301 @@ private fun SettingSlider(
         )
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepTimerBottomSheet(
+    timerEnabled: Boolean,
+    remainingMillis: Long,
+    selectedHours: Int,
+    selectedMinutes: Int,
+    stopMode: SleepTimerStopMode,
+    onHoursChange: (Int) -> Unit,
+    onMinutesChange: (Int) -> Unit,
+    onQuickMinutesSelected: (Int) -> Unit,
+    onStopModeChange: (SleepTimerStopMode) -> Unit,
+    onStartOrUpdate: () -> Unit,
+    onDisableTimer: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val selectedTotalMinutes = selectedHours * 60 + selectedMinutes
+    val statusTitle = when {
+        timerEnabled -> "剩余 ${formatSleepTimerDuration(remainingMillis)}"
+        selectedTotalMinutes > 0 -> "已选择 ${formatSleepTimerChoice(selectedHours, selectedMinutes)}"
+        else -> "未开启定时"
+    }
+    val statusSubtitle = if (timerEnabled || selectedTotalMinutes > 0) stopMode.label else null
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color(0xFF15111F),
+        contentColor = Color.White,
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 8.dp, bottom = 3.dp)
+                    .size(width = 48.dp, height = 5.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Color.White.copy(alpha = 0.36f))
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("定时关闭", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text("到时间后自动停止听书", color = Color.White.copy(alpha = 0.56f), fontSize = 13.sp)
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = "关闭", tint = Color.White.copy(alpha = 0.86f))
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (timerEnabled) 62.dp else 54.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.045f))
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF7B55FF).copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("◷", color = Color(0xFFC3B0FF), fontSize = 25.sp)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        statusTitle,
+                        color = Color.White,
+                        fontSize = if (timerEnabled) 23.sp else 17.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (statusSubtitle != null) {
+                        Text(statusSubtitle, color = Color.White.copy(alpha = 0.48f), fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("快捷时间", color = Color.White.copy(alpha = 0.52f), fontSize = 13.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf(0, 15, 30, 45, 60).forEach { minutes ->
+                        SleepTimerPill(
+                            text = if (minutes == 0) "不开启" else "${minutes} 分钟",
+                            selected = selectedTotalMinutes == minutes,
+                            onClick = { onQuickMinutesSelected(minutes) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("自定义时间", color = Color.White.copy(alpha = 0.52f), fontSize = 13.sp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.035f))
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    SleepTimerRoundButton("−") {
+                        if (selectedMinutes > 0) {
+                            onMinutesChange(selectedMinutes - 1)
+                        } else if (selectedHours > 0) {
+                            onHoursChange(selectedHours - 1)
+                            onMinutesChange(59)
+                        }
+                    }
+                    Text(selectedHours.toString().padStart(2, '0'), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text("小时", color = Color.White.copy(alpha = 0.52f), fontSize = 13.sp)
+                    Box(Modifier.height(28.dp).width(1.dp).background(Color.White.copy(alpha = 0.16f)))
+                    Text(selectedMinutes.toString().padStart(2, '0'), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text("分钟", color = Color.White.copy(alpha = 0.52f), fontSize = 13.sp)
+                    SleepTimerRoundButton("+") {
+                        if (selectedMinutes < 59) {
+                            onMinutesChange(selectedMinutes + 1)
+                        } else if (selectedHours < 23) {
+                            onHoursChange(selectedHours + 1)
+                            onMinutesChange(0)
+                        }
+                    }
+                }
+                Text("最大 23 小时 59 分钟", color = Color.White.copy(alpha = 0.36f), fontSize = 11.sp)
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("停止方式", color = Color.White.copy(alpha = 0.52f), fontSize = 13.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SleepTimerModeOption(
+                        text = SleepTimerStopMode.IMMEDIATE.label,
+                        selected = stopMode == SleepTimerStopMode.IMMEDIATE,
+                        onClick = { onStopModeChange(SleepTimerStopMode.IMMEDIATE) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SleepTimerModeOption(
+                        text = SleepTimerStopMode.AFTER_CURRENT_CHAPTER.label,
+                        selected = stopMode == SleepTimerStopMode.AFTER_CURRENT_CHAPTER,
+                        onClick = { onStopModeChange(SleepTimerStopMode.AFTER_CURRENT_CHAPTER) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SleepTimerActionButton(
+                    text = if (timerEnabled) "关闭定时" else "取消",
+                    primary = false,
+                    onClick = { if (timerEnabled) onDisableTimer() else onDismiss() },
+                    modifier = Modifier.weight(1f)
+                )
+                SleepTimerActionButton(
+                    text = if (timerEnabled) "更新定时" else "开始定时",
+                    primary = true,
+                    onClick = onStartOrUpdate,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SleepTimerPill(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(99.dp))
+            .background(if (selected) Color(0xFF8258FF) else Color.White.copy(alpha = 0.035f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.76f),
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun SleepTimerRoundButton(text: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.08f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = text, color = Color.White.copy(alpha = 0.88f), fontSize = 22.sp)
+    }
+}
+
+@Composable
+private fun SleepTimerModeOption(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) Color(0xFF8258FF).copy(alpha = 0.1f) else Color.White.copy(alpha = 0.028f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(16.dp)
+                .clip(CircleShape)
+                .background(if (selected) Color(0xFF9B74FF) else Color.White.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White))
+            }
+        }
+        Text(
+            text = text,
+            color = if (selected) Color(0xFFD9CEFF) else Color.White.copy(alpha = 0.72f),
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun SleepTimerActionButton(text: String, primary: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .height(46.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(if (primary) Color(0xFF8258FF) else Color.White.copy(alpha = 0.035f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = text, color = if (primary) Color.White else Color.White.copy(alpha = 0.82f), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+private fun formatSleepTimerDuration(millis: Long): String {
+    val totalSeconds = (millis / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
+    }
+}
+
+private fun formatSleepTimerChoice(hours: Int, minutes: Int): String {
+    return when {
+        hours > 0 && minutes > 0 -> "${hours} 小时 ${minutes} 分钟"
+        hours > 0 -> "${hours} 小时"
+        minutes > 0 -> "${minutes} 分钟"
+        else -> "0 分钟"
+    }
+}
+
+private enum class SleepTimerStopMode(val label: String) {
+    IMMEDIATE("到时间立即停止"),
+    AFTER_CURRENT_CHAPTER("播完本章再停止")
+}
+
+private enum class BookReadingTarget {
+    CHAPTER_TITLE,
+    SENTENCE
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChapterCatalogBottomSheet(
@@ -1980,6 +3223,7 @@ private data class BookReadStateCache(
     val lastParagraphIndex: Int,
     val lastSentenceIndexInParagraph: Int,
     val lastChapterSentenceIndex: Int,
+    val lastReadingTargetName: String,
     val lastChapterTitle: String,
     val cachedVisibleText: List<String>,
     val updatedAt: Long
@@ -2009,6 +3253,8 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
         lastParagraphIndex = prefs.getInt(prefix + "paragraph", 0),
         lastSentenceIndexInParagraph = prefs.getInt(prefix + "sentence", 0),
         lastChapterSentenceIndex = prefs.getInt(prefix + "chapter_sentence", 0),
+        lastReadingTargetName = prefs.getString(prefix + "reading_target", null)
+            ?: BookReadingTarget.SENTENCE.name,
         lastChapterTitle = prefs.getString(prefix + "chapter_title", null).orEmpty(),
         cachedVisibleText = cachedText,
         updatedAt = prefs.getLong(prefix + "updated_at", 0L)
@@ -2025,6 +3271,7 @@ private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) 
         .putInt(prefix + "paragraph", state.lastParagraphIndex.coerceAtLeast(0))
         .putInt(prefix + "sentence", state.lastSentenceIndexInParagraph.coerceAtLeast(0))
         .putInt(prefix + "chapter_sentence", state.lastChapterSentenceIndex.coerceAtLeast(0))
+        .putString(prefix + "reading_target", state.lastReadingTargetName)
         .putString(prefix + "chapter_title", state.lastChapterTitle)
         .putString(prefix + "text", state.cachedVisibleText.joinToString(BOOK_READ_CACHE_SEPARATOR))
         .putLong(prefix + "updated_at", state.updatedAt)
