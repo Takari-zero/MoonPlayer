@@ -172,6 +172,6 @@ class StreamingPcmAudioPlayer(
     companion object {
         private const val TAG = "StreamingPcmAudioPlayer"
         private const val BYTES_PER_MONO_16BIT_SAMPLE = 2
-        private val SUPPORTED_SAMPLE_RATES = setOf(16000, 24000, 44100)
+        private val SUPPORTED_SAMPLE_RATES = setOf(8000, 16000, 24000, 44100)
     }
 }

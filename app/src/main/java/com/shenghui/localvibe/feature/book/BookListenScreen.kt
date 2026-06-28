@@ -94,6 +94,7 @@ import com.shenghui.localvibe.core.book.BookChapter
 import com.shenghui.localvibe.core.book.BookChapterDetector
 import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import com.shenghui.localvibe.core.tts.Aishell3SegmentedStreamingTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
@@ -1185,6 +1186,92 @@ fun BookListenScreen(
                     }
                 }
             },
+            onAishell3OfflinePreview = {
+                coroutineScope.launch {
+                    Log.d("Aishell3StreamingTts", "start aishell3 preview")
+                    Toast.makeText(context, "正在生成自研离线语音...", Toast.LENGTH_SHORT).show()
+
+                    val engine = Aishell3SegmentedStreamingTtsEngine(context.applicationContext)
+                    val streamingPlayer = StreamingPcmAudioPlayer()
+                    var chunkIndex = 0
+                    var playbackDurationMs = 0L
+                    var playbackStarted = false
+
+                    val result = runCatching {
+                        engine.speak(
+                            text = Aishell3SegmentedStreamingTtsEngine.PREVIEW_TEXT,
+                            params = StreamingTtsParams(
+                                voiceId = "aishell3-speaker-10",
+                                speed = 1f,
+                                pitch = 1f,
+                                volume = 1f
+                            ),
+                            onStart = {
+                                Log.d("Aishell3StreamingTts", "preview onStart")
+                            },
+                            onChunk = { chunk ->
+                                Log.d(
+                                    "Aishell3StreamingTts",
+                                    "ui chunk index=$chunkIndex bytes=${chunk.data.size} sampleRate=${chunk.format.sampleRate}"
+                                )
+
+                                if (chunkIndex == 0) {
+                                    val startResult = streamingPlayer.start(chunk.format)
+                                    if (startResult.isFailure) {
+                                        val message = startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败"
+                                        throw IllegalStateException(message)
+                                    }
+                                    playbackStarted = true
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "自研离线语音开始播放", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+
+                                val writeResult = streamingPlayer.write(chunk)
+                                if (writeResult.isFailure) {
+                                    val message = writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败"
+                                    throw IllegalStateException(message)
+                                }
+
+                                playbackDurationMs += chunk.data.size * 1000L /
+                                    (chunk.format.sampleRate * 2L)
+                                chunkIndex += 1
+                            },
+                            onDone = {
+                                Log.d("Aishell3StreamingTts", "preview onDone playbackDurationMs=$playbackDurationMs")
+                            },
+                            onError = { error ->
+                                Log.e("Aishell3StreamingTts", "preview error: $error")
+                            }
+                        )
+                    }.getOrElse { error ->
+                        Log.e("Aishell3StreamingTts", "preview exception", error)
+                        StreamingTtsResult.Error(error.message ?: "未知错误")
+                    }
+
+                    if (playbackStarted) {
+                        delay((playbackDurationMs + 220L).coerceAtMost(5000L))
+                    }
+                    streamingPlayer.release()
+                    engine.release()
+
+                    when (result) {
+                        StreamingTtsResult.Success -> {
+                            Toast.makeText(context, "自研离线语音播放完成", Toast.LENGTH_SHORT).show()
+                        }
+                        StreamingTtsResult.Stopped -> {
+                            Toast.makeText(context, "自研离线语音已停止", Toast.LENGTH_SHORT).show()
+                        }
+                        is StreamingTtsResult.Error -> {
+                            Toast.makeText(
+                                context,
+                                "自研离线语音失败：${result.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+            },
             onStreamingAudioTest = {
                 coroutineScope.launch {
                     Log.d("ToneStreamingTtsEngine", "start streaming tone test")
@@ -1957,6 +2044,7 @@ private fun VoicePackageSettingsBottomSheet(
     onRetry: () -> Unit,
     onPreview: () -> Unit,
     onAudioChannelTest: () -> Unit,
+    onAishell3OfflinePreview: () -> Unit,
     onStreamingAudioTest: () -> Unit,
     onBuiltInPreview: () -> Unit,
     onRefreshVoices: () -> Unit,
@@ -2088,6 +2176,12 @@ private fun VoicePackageSettingsBottomSheet(
                 text = "音频通道测试",
                 onClick = onAudioChannelTest,
                 modifier = Modifier.fillMaxWidth()
+            )
+            VoiceSheetActionButton(
+                text = "自研离线试听",
+                onClick = onAishell3OfflinePreview,
+                modifier = Modifier.fillMaxWidth(),
+                emphasized = true
             )
             VoiceSheetActionButton(
                 text = "流式音频测试",
