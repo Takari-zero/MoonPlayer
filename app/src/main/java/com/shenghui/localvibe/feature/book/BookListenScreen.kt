@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -97,6 +98,10 @@ import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
 import com.shenghui.localvibe.core.tts.BookTtsVoice
+import com.shenghui.localvibe.core.tts.StreamingPcmAudioPlayer
+import com.shenghui.localvibe.core.tts.StreamingTtsParams
+import com.shenghui.localvibe.core.tts.StreamingTtsResult
+import com.shenghui.localvibe.core.tts.ToneStreamingTtsEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1180,6 +1185,92 @@ fun BookListenScreen(
                     }
                 }
             },
+            onStreamingAudioTest = {
+                coroutineScope.launch {
+                    Log.d("ToneStreamingTtsEngine", "start streaming tone test")
+                    Toast.makeText(context, "正在播放流式测试音...", Toast.LENGTH_SHORT).show()
+
+                    val toneEngine = ToneStreamingTtsEngine()
+                    val streamingPlayer = StreamingPcmAudioPlayer()
+                    var chunkIndex = 0
+
+                    val initializeResult = toneEngine.initialize()
+                    if (initializeResult.isFailure) {
+                        val message = initializeResult.exceptionOrNull()?.message ?: "初始化失败"
+                        Log.e("ToneStreamingTtsEngine", "initialize failed: $message")
+                        Toast.makeText(context, "流式音频测试失败：$message", Toast.LENGTH_LONG).show()
+                        streamingPlayer.release()
+                        toneEngine.release()
+                        return@launch
+                    }
+
+                    val result = runCatching {
+                        toneEngine.speak(
+                            text = "tone streaming test",
+                            params = StreamingTtsParams(
+                                voiceId = "tone",
+                                speed = 1f,
+                                pitch = 1f,
+                                volume = 1f
+                            ),
+                            onStart = {
+                                Log.d("ToneStreamingTtsEngine", "streaming tone onStart")
+                            },
+                            onChunk = { chunk ->
+                                Log.d(
+                                    "ToneStreamingTtsEngine",
+                                    "chunk index=$chunkIndex chunk bytes=${chunk.data.size} sampleRate=${chunk.format.sampleRate}"
+                                )
+
+                                if (chunkIndex == 0) {
+                                    val startResult = streamingPlayer.start(chunk.format)
+                                    if (startResult.isFailure) {
+                                        val message = startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败"
+                                        throw IllegalStateException(message)
+                                    }
+                                }
+
+                                val writeResult = streamingPlayer.write(chunk)
+                                if (writeResult.isFailure) {
+                                    val message = writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败"
+                                    throw IllegalStateException(message)
+                                }
+
+                                chunkIndex += 1
+                            },
+                            onDone = {
+                                Log.d("ToneStreamingTtsEngine", "playback completed")
+                            },
+                            onError = { error ->
+                                Log.e("ToneStreamingTtsEngine", "streaming tone failed: $error")
+                            }
+                        )
+                    }.getOrElse { error ->
+                        Log.e("ToneStreamingTtsEngine", "streaming tone exception", error)
+                        StreamingTtsResult.Error(error.message ?: "未知错误")
+                    }
+
+                    delay(180)
+                    streamingPlayer.release()
+                    toneEngine.release()
+
+                    when (result) {
+                        StreamingTtsResult.Success -> {
+                            Toast.makeText(context, "流式音频测试完成", Toast.LENGTH_SHORT).show()
+                        }
+                        StreamingTtsResult.Stopped -> {
+                            Toast.makeText(context, "流式音频测试已停止", Toast.LENGTH_SHORT).show()
+                        }
+                        is StreamingTtsResult.Error -> {
+                            Toast.makeText(
+                                context,
+                                "流式音频测试失败：${result.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+            },
             onBuiltInPreview = {
                 if (isBuiltInOfflineTtsInitializing) {
                     Toast.makeText(context, "内置语音正在初始化", Toast.LENGTH_SHORT).show()
@@ -1866,6 +1957,7 @@ private fun VoicePackageSettingsBottomSheet(
     onRetry: () -> Unit,
     onPreview: () -> Unit,
     onAudioChannelTest: () -> Unit,
+    onStreamingAudioTest: () -> Unit,
     onBuiltInPreview: () -> Unit,
     onRefreshVoices: () -> Unit,
     onSelectVoice: (String?) -> Unit,
@@ -1995,6 +2087,11 @@ private fun VoicePackageSettingsBottomSheet(
             VoiceSheetActionButton(
                 text = "音频通道测试",
                 onClick = onAudioChannelTest,
+                modifier = Modifier.fillMaxWidth()
+            )
+            VoiceSheetActionButton(
+                text = "流式音频测试",
+                onClick = onStreamingAudioTest,
                 modifier = Modifier.fillMaxWidth()
             )
             if (!builtInOfflineTtsError.isNullOrBlank()) {
