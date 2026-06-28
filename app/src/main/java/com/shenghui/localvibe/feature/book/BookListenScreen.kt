@@ -93,6 +93,8 @@ import com.shenghui.localvibe.core.book.BookChapter
 import com.shenghui.localvibe.core.book.BookChapterDetector
 import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
+import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
 import com.shenghui.localvibe.core.tts.BookTtsVoice
 import kotlinx.coroutines.Dispatchers
@@ -188,6 +190,15 @@ fun BookListenScreen(
     val latestCurrentReadingTarget by rememberUpdatedState(currentReadingTarget)
 
     var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
+    val builtInOfflineTtsEngine = remember { BuiltInOfflineTtsEngine() }
+    var isBuiltInOfflineTtsInitializing by remember { mutableStateOf(false) }
+    var builtInOfflineTtsError by remember { mutableStateOf<String?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            builtInOfflineTtsEngine.release()
+        }
+    }
 
     fun saveProgress(index: Int, total: Int = paragraphs.size) {
         val file = bookFile ?: return
@@ -1143,6 +1154,8 @@ fun BookListenScreen(
             voices = ttsVoices,
             selectedVoiceName = selectedVoiceName,
             voiceDataInstallUnavailable = voiceDataInstallUnavailable,
+            isBuiltInOfflineTtsInitializing = isBuiltInOfflineTtsInitializing,
+            builtInOfflineTtsError = builtInOfflineTtsError,
             onDismiss = { showVoicePackageSheet = false },
             onInstallVoiceData = ::openVoiceDataInstaller,
             onOpenSystemSettings = ::openSystemVoiceSettings,
@@ -1150,6 +1163,62 @@ fun BookListenScreen(
                 restartTtsCheck()
             },
             onPreview = ::previewSystemVoice,
+            onAudioChannelTest = {
+                coroutineScope.launch {
+                    Toast.makeText(context, "正在播放测试音...", Toast.LENGTH_SHORT).show()
+                    val result = builtInOfflineTtsEngine.playAudioChannelTest {
+                        Toast.makeText(context, "测试音开始播放", Toast.LENGTH_SHORT).show()
+                    }
+                        when (result) {
+                            is BuiltInOfflineTtsResult.Success -> {
+                                Toast.makeText(context, "测试音播放完成", Toast.LENGTH_SHORT).show()
+                            }
+                        is BuiltInOfflineTtsResult.Failure -> {
+                            builtInOfflineTtsError = result.message
+                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            },
+            onBuiltInPreview = {
+                if (isBuiltInOfflineTtsInitializing) {
+                    Toast.makeText(context, "内置语音正在初始化", Toast.LENGTH_SHORT).show()
+                } else {
+                    coroutineScope.launch {
+                        builtInOfflineTtsError = null
+                        isBuiltInOfflineTtsInitializing = true
+                        Toast.makeText(context, "正在生成内置语音...", Toast.LENGTH_SHORT).show()
+                        val initialized = builtInOfflineTtsEngine.isReady ||
+                            builtInOfflineTtsEngine.initialize(context.applicationContext)
+                        isBuiltInOfflineTtsInitializing = false
+
+                        if (!initialized) {
+                            val error = builtInOfflineTtsEngine.lastError ?: "内置语音初始化失败"
+                            builtInOfflineTtsError = error
+                            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                            return@launch
+                        }
+
+                        Toast.makeText(context, "正在播放内置语音...", Toast.LENGTH_SHORT).show()
+                        val result = builtInOfflineTtsEngine.speak("这是一段内置离线语音试听。") {
+                            Toast.makeText(context, "内置语音开始播放", Toast.LENGTH_SHORT).show()
+                        }
+                        when (result) {
+                            is BuiltInOfflineTtsResult.Success -> {
+                                Toast.makeText(
+                                    context,
+                                    "内置语音试听完成：已播放${result.sourceLabel}",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            is BuiltInOfflineTtsResult.Failure -> {
+                                builtInOfflineTtsError = result.message
+                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+            },
             onRefreshVoices = {
                 ttsVoices = ttsController?.getAvailableVoices().orEmpty()
                 if (ttsVoices.isEmpty()) {
@@ -1789,11 +1858,15 @@ private fun VoicePackageSettingsBottomSheet(
     voices: List<BookTtsVoice>,
     selectedVoiceName: String?,
     voiceDataInstallUnavailable: Boolean,
+    isBuiltInOfflineTtsInitializing: Boolean,
+    builtInOfflineTtsError: String?,
     onDismiss: () -> Unit,
     onInstallVoiceData: () -> Unit,
     onOpenSystemSettings: () -> Unit,
     onRetry: () -> Unit,
     onPreview: () -> Unit,
+    onAudioChannelTest: () -> Unit,
+    onBuiltInPreview: () -> Unit,
     onRefreshVoices: () -> Unit,
     onSelectVoice: (String?) -> Unit,
     onSearchRhVoice: () -> Unit
@@ -1912,6 +1985,26 @@ private fun VoicePackageSettingsBottomSheet(
                 modifier = Modifier.fillMaxWidth(),
                 emphasized = isTtsReady
             )
+
+            VoiceSheetActionButton(
+                text = if (isBuiltInOfflineTtsInitializing) "内置语音初始化中" else "内置语音试听",
+                onClick = onBuiltInPreview,
+                modifier = Modifier.fillMaxWidth(),
+                emphasized = true
+            )
+            VoiceSheetActionButton(
+                text = "音频通道测试",
+                onClick = onAudioChannelTest,
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (!builtInOfflineTtsError.isNullOrBlank()) {
+                Text(
+                    text = "内置语音：$builtInOfflineTtsError",
+                    color = Color(0xFFFFD5D5).copy(alpha = 0.88f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            }
 
             if (!isTtsReady) {
                 Column(
