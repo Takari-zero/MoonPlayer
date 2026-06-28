@@ -14,7 +14,10 @@ class StreamingPcmAudioPlayer(
     private var activeFormat: PcmAudioFormat? = null
     private var startTimeMs: Long = 0L
     private var firstChunkWritten = false
+    @Volatile
     private var stopped = true
+    @Volatile
+    private var paused = false
 
     fun start(format: PcmAudioFormat): Result<Unit> = synchronized(lock) {
         runCatching {
@@ -76,6 +79,7 @@ class StreamingPcmAudioPlayer(
             startTimeMs = System.currentTimeMillis()
             firstChunkWritten = false
             stopped = false
+            paused = false
             onStateChanged("started")
         }.onFailure { error ->
             Log.e(TAG, "start failed", error)
@@ -84,35 +88,59 @@ class StreamingPcmAudioPlayer(
         }
     }
 
-    fun write(chunk: PcmAudioChunk): Result<Int> = synchronized(lock) {
-        runCatching {
+    fun write(chunk: PcmAudioChunk): Result<Int> {
+        val track: AudioTrack
+        val format: PcmAudioFormat
+        synchronized(lock) {
             if (stopped) {
                 Log.d(TAG, "write ignored because player is stopped")
                 return Result.success(0)
             }
 
-            val track = requireNotNull(audioTrack) { "AudioTrack is not started" }
-            val format = requireNotNull(activeFormat) { "No active audio format" }
+            track = requireNotNull(audioTrack) { "AudioTrack is not started" }
+            format = requireNotNull(activeFormat) { "No active audio format" }
             require(chunk.format == format) {
                 "Chunk format changed from $format to ${chunk.format}"
             }
+        }
 
+        return runCatching {
             if (chunk.data.isEmpty()) {
                 Log.d(TAG, "write empty chunk isFinal=${chunk.isFinal}")
                 return Result.success(0)
             }
 
-            val written = track.write(chunk.data, 0, chunk.data.size)
-            Log.d(TAG, "write bytes=$written requested=${chunk.data.size}")
-            require(written > 0) {
-                "AudioTrack.write failed: $written"
-            }
+            var totalWritten = 0
+            var offset = 0
+            while (offset < chunk.data.size) {
+                if (stopped) {
+                    Log.d(TAG, "write stopped totalWritten=$totalWritten requested=${chunk.data.size}")
+                    return Result.success(totalWritten)
+                }
+                while (paused && !stopped) {
+                    Thread.sleep(PAUSED_WRITE_WAIT_MS)
+                }
+                if (stopped) {
+                    Log.d(TAG, "write stopped after pause totalWritten=$totalWritten requested=${chunk.data.size}")
+                    return Result.success(totalWritten)
+                }
 
-            if (!firstChunkWritten) {
-                firstChunkWritten = true
-                val firstChunkToPlayMs = System.currentTimeMillis() - startTimeMs
-                Log.d(TAG, "firstChunkToPlayMs=$firstChunkToPlayMs")
-                onStateChanged("first_chunk")
+                val byteCount = minOf(MAX_WRITE_BYTES, chunk.data.size - offset)
+                val written = track.write(chunk.data, offset, byteCount)
+                Log.d(TAG, "write bytes=$written requested=$byteCount")
+                require(written > 0) {
+                    "AudioTrack.write failed: $written"
+                }
+
+                totalWritten += written
+                offset += written
+
+                if (!firstChunkWritten) {
+                    firstChunkWritten = true
+                    val firstChunkToPlayMs = System.currentTimeMillis() - startTimeMs
+                    Log.d(TAG, "firstChunkToPlayMs=$firstChunkToPlayMs")
+                    onStateChanged("first_chunk")
+                }
             }
 
             if (chunk.isFinal) {
@@ -120,7 +148,7 @@ class StreamingPcmAudioPlayer(
                 onStateChanged("final_chunk")
             }
 
-            written
+            totalWritten
         }.onFailure { error ->
             Log.e(TAG, "write failed", error)
             onStateChanged("error:${error.message}")
@@ -130,6 +158,7 @@ class StreamingPcmAudioPlayer(
     fun stop() = synchronized(lock) {
         Log.d(TAG, "stop")
         stopped = true
+        paused = false
         audioTrack?.let { track ->
             runCatching {
                 if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
@@ -144,6 +173,40 @@ class StreamingPcmAudioPlayer(
         onStateChanged("stopped")
     }
 
+    fun pause() = synchronized(lock) {
+        Log.d(TAG, "pause")
+        paused = true
+        audioTrack?.let { track ->
+            runCatching {
+                if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    track.pause()
+                }
+                onStateChanged("paused")
+            }.onFailure { error ->
+                Log.w(TAG, "pause failed", error)
+                onStateChanged("error:${error.message}")
+            }
+        }
+    }
+
+    fun resume() = synchronized(lock) {
+        Log.d(TAG, "resume")
+        val track = audioTrack
+        if (track == null || stopped) {
+            onStateChanged("error:AudioTrack is not paused")
+            return@synchronized Result.failure(IllegalStateException("AudioTrack is not paused"))
+        }
+        runCatching {
+            paused = false
+            track.play()
+            Log.d(TAG, "AudioTrack playState=${track.playState}")
+            onStateChanged("resumed")
+        }.onFailure { error ->
+            Log.w(TAG, "resume failed", error)
+            onStateChanged("error:${error.message}")
+        }
+    }
+
     fun release() = synchronized(lock) {
         Log.d(TAG, "release")
         releaseLocked()
@@ -152,6 +215,7 @@ class StreamingPcmAudioPlayer(
 
     private fun releaseLocked() {
         stopped = true
+        paused = false
         audioTrack?.let { track ->
             runCatching {
                 if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
@@ -172,6 +236,8 @@ class StreamingPcmAudioPlayer(
     companion object {
         private const val TAG = "StreamingPcmAudioPlayer"
         private const val BYTES_PER_MONO_16BIT_SAMPLE = 2
+        private const val MAX_WRITE_BYTES = 2048
+        private const val PAUSED_WRITE_WAIT_MS = 20L
         private val SUPPORTED_SAMPLE_RATES = setOf(8000, 16000, 24000, 44100)
     }
 }
