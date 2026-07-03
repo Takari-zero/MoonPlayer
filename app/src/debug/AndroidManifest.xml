@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="com.shenghui.localvibe.debug.FastSpeech2SmokeTestActivity"
+            android:exported="true" />
+        <activity
+            android:name="com.shenghui.localvibe.debug.BookReaderControllerSmokeTestActivity"
+            android:exported="true" />
+        <activity
+            android:name="com.shenghui.localvibe.debug.BookReaderAutoAdvanceSmokeTestActivity"
+            android:exported="true" />
+        <activity
+            android:name="com.shenghui.localvibe.debug.FastSpeech2AudioQualityDiagnosisActivity"
+            android:exported="true" />
+    </application>
+</manifest>

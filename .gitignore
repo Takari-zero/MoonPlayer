@@ -1,0 +1,18 @@
+.gradle/
+/build/
+/app/build/
+/.idea/
+*.iml
+local.properties
+
+test-results/
+
+.kotlin/
+
+# Local CodeGraph index
+.codegraph/
+
+.agents/
+skills-lock.json
+app/src/main/assets/fastspeech2/
+app/libs/tflite-local/

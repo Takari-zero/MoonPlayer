@@ -1,0 +1,18 @@
+﻿{
+  "project": "LocalVibe",
+  "module": "video",
+  "currentTask": "TODO-011",
+  "adbPath": "E:\\Android\\platform-tools\\adb.exe",
+  "adbPort": 62001,
+  "requireUserConfirmationBeforeCommit": true,
+  "allowAutoPush": false,
+  "lastKnownMainCommit": "8ddff8a",
+  "uiDesignRule": "Before new dialogs, panels, or complex UI work, remind the user to create a UI mockup with Stitch or Product Design first.",
+  "notes": [
+    "Do not enter music or novel modules before the video module is completed.",
+    "Do not fake success.",
+    "High-risk work must be split or researched first.",
+    "Real-device UI, audio, and gesture behavior require user confirmation.",
+    "ADB must use -P 62001."
+  ]
+}

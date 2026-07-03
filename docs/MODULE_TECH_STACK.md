@@ -1,0 +1,451 @@
+# LocalVibe / Moon鎾斁鍣?妯″潡鎶€鏈爤
+
+## 瑙嗛妯″潡鎶€鏈爤
+
+- Kotlin
+- Jetpack Compose
+- Media3 ExoPlayer
+- MediaStore
+- DataStore
+- ActivityResult 鏂囦欢 / 鏉冮檺閫夋嫨
+
+瑙嗛妯″潡浠ユ湰鍦拌棰戞壂鎻忋€佹枃浠跺す绠＄悊鍜屾í灞忔挱鏀句负鏍稿績銆傛挱鏀惧櫒椤甸潰鍙互鍒涘缓闈㈠悜褰撳墠瑙嗛鐨?ExoPlayer 瀹炰緥锛屼絾涓嶅緱鎶婅棰戞挱鏀捐縼绉诲埌闊充箰鍚庡彴 Service銆?
+## 闊充箰妯″潡鎶€鏈爤
+
+- Kotlin
+- Jetpack Compose
+- Media3 ExoPlayer
+- Media3 MediaSessionService
+- MediaStore
+- Notification / MediaSession
+- DataStore
+
+闊充箰妯″潡浠ュ悗鍙版挱鏀句负鏍稿績銆俙MusicPlaybackService` 鎸佹湁鍏ㄥ眬 ExoPlayer 鍜?MediaSession锛岃礋璐ｆ挱鏀鹃槦鍒椼€侀€氱煡鏍忋€侀攣灞忔帶鍒跺拰鎾斁妯″紡銆俙AudioPlayerScreen` 鍙繛鎺ュ拰鎺у埗 Service锛屼笉搴斿垱寤虹嫭绔嬫挱鏀惧櫒銆?
+## 灏忚 / TTS 妯″潡鎶€鏈爤
+
+- Kotlin
+- Jetpack Compose
+- Storage Access Framework
+- Android TextToSpeech
+- DataStore
+- 鑷畾涔?TXT reader
+
+灏忚妯″潡鍙睍绀虹敤鎴蜂富鍔ㄥ鍏ョ殑 TXT銆傜涓€闃舵鎸夋钀藉垏鍒嗗苟鏀寔鍚功杩涘害淇濆瓨锛涚珷鑺傝瘑鍒€佸悗鍙版湕璇诲拰鏇村鏉傜殑涔︽簮鑳藉姏鍚庣画鍗曠嫭璇勪及銆?
+## 璁剧疆 / 鏁版嵁绠＄悊鎶€鏈爤
+
+- Jetpack Compose
+- DataStore
+- 绯荤粺鏉冮檺 Intent
+- 鏈湴鐘舵€佹竻鐞?
+璁剧疆椤靛彧绠＄悊鏈湴鏁版嵁鍜屾湰鍦版潈闄愭彁绀猴紝涓嶆墿灞曡处鍙枫€佷簯澶囦唤銆佷細鍛樻垨骞垮憡閰嶇疆銆?
+## 鎵弿 / 鏂囦欢璁块棶绛栫暐
+
+- 濯掍綋鑷姩鍙戠幇浼樺厛浣跨敤 MediaStore銆?- 鐢ㄦ埛涓诲姩閫夋嫨鏂囦欢鎴栫洰褰曟椂浣跨敤 Storage Access Framework銆?- 涓嶇敵璇?`MANAGE_EXTERNAL_STORAGE`銆?- 鍒犻櫎鐪熷疄鏂囦欢蹇呴』渚濊禆绯荤粺鍏佽鐨?URI 鍒犻櫎鎴栫郴缁熷垹闄ゆ巿鏉冩祦绋嬨€?- 鍒犻櫎澶辫触鏃跺繀椤讳繚鐣欏師濮嬫暟鎹紝涓嶅緱璇垹 UI 鐘舵€併€?- 闅愯棌 / 绉婚櫎鍒楄〃椤瑰簲鍐欏叆鏈湴闅愯棌璁板綍锛屼笉绛夊悓浜庡垹闄ょ湡瀹炴枃浠躲€?
+## 鐘舵€佹寔涔呭寲绛栫暐
+
+- 浣跨敤 DataStore Preferences銆?- 鍏堜繚鎸佽交閲忥紝涓嶅紩鍏?Room銆?- 瑙嗛淇濆瓨鎾斁杩涘害銆佹渶杩戞挱鏀俱€侀殣钘忚棰?URI銆侀殣钘忚棰戞枃浠跺す ID銆?- 闊充箰淇濆瓨闅愯棌闊抽 URI銆佹渶杩戦煶棰?URI銆佸繀瑕佺殑鎾斁妯″紡鐘舵€侊紱闊充箰涓嶄繚瀛樻挱鏀捐繘搴︺€?- 灏忚淇濆瓨瀵煎叆璁板綍鍜屽惉涔﹁繘搴︺€?- 娓呯悊鏁版嵁蹇呴』鎸夋ā鍧楁槑纭紝涓嶅仛璺ㄦā鍧楅『鎵嬫竻鐞嗐€?
+## 寮€鍙戣緟鍔╁伐鍏?
+### Codex
+
+鐢ㄤ簬浠ｇ爜闃呰銆佷换鍔℃媶鍒嗐€佸疄鐜般€侀獙璇佸拰鏂囨。缁存姢銆傛瘡杞换鍔″繀椤绘槑纭ā鍧椼€佽寖鍥村拰绂佹椤广€?
+### CodeGraph
+
+鐢ㄤ簬鏈湴浠ｇ爜绱㈠紩銆佸奖鍝嶉潰鍒嗘瀽銆佸嚱鏁拌皟鐢ㄥ叧绯绘鏌ャ€備慨鏀瑰叡浜枃浠跺墠浼樺厛鐢?CodeGraph 纭璋冪敤鏂瑰拰褰卞搷鑼冨洿銆?
+### GitHub
+
+鐢ㄤ簬浠撳簱銆佹彁浜ゃ€丳R銆乮ssue 绠＄悊銆備笉瑕佸湪鏈‘璁や慨鏀硅寖鍥村拰楠岃瘉缁撴灉鍓嶆彁浜ゆ垨 push銆?
+### Superpowers
+
+鐢ㄤ簬椤圭洰瑙勫垝銆佹妧鏈爤姊崇悊銆佷换鍔℃媶鍒嗐€佽皟璇曟祦绋嬪拰寮€鍙戠邯寰嬨€備娇鐢ㄥ墠瑕佽鏄庣敤閫斻€?
+### Product Design
+
+鐢ㄤ簬 UI 鏂规銆侀〉闈㈡晥鏋滃浘鍜屼氦浜掗鏍兼帰绱€傝璁′骇鐗╀笉鑳芥湭缁忕‘璁ょ洿鎺ユ贩鍏ヤ笟鍔′唬鐮併€?
+### Figma
+
+鐢ㄤ簬璁捐绋挎暣鐞嗗拰鍚庣画 UI 浜や粯銆傚綋鍓?Android 鏈湴鎾斁鍣ㄥ紑鍙戜笉渚濊禆 Figma锛屼絾闇€瑕佽璁℃矇娣€鏃跺彲浣跨敤銆?
+### Linear
+
+鐢ㄤ簬浠诲姟鎺掓湡銆丅ug 鍒楄〃鍜岃凯浠ｇ鐞嗐€備釜浜哄紑鍙戦樁娈靛彲閫夌敤銆?
+### Vercel
+
+涓昏鐢ㄤ簬 Web 閮ㄧ讲銆傚綋鍓?Android 椤圭洰鏆傚皯鐢ㄣ€?
+### Atlassian Rovo
+
+鐢ㄤ簬鍥㈤槦鏂囨。鍜岀煡璇嗗簱銆備釜浜洪」鐩殏灏戠敤銆?
+### Gradle
+
+鐢ㄤ簬 Android 缂栬瘧楠岃瘉銆備笟鍔′唬鐮佸紑鍙戣疆娆″繀椤昏繍琛岋細
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+docs-only 杞涓嶉渶瑕佺紪璇戯紝浣嗗繀椤荤‘璁ゅ彧鏀规枃妗ｃ€?
+
+## Recent Media Module Technical Status
+
+Latest synced commit: `b77cd10 feat(media): refine music player and unify search`.
+
+Music home and playback:
+
+- Music home continues to use real scanned local audio files and real scanned audio folder groups. Do not introduce formal fake song data.
+- Music home search is an inline top-bar search. It does not add a second row, does not increase top-bar height, and does not render internal search or clear icons.
+- Music list item clicks play audio only. They do not navigate to the player page.
+- Clicking the current song toggles play/pause without rebuilding the queue or seeking to `0`.
+- The mini player reads the real current audio state and supports previous, play/pause, next, and seek through the bottom progress line.
+- The mini player wrapper remains transparent while the inner control card keeps its own dark rounded background.
+- `RotatingMusicThumb` remains the mini player's left moon-phase rotating thumb.
+- Music playback queue uses the real scanned audio list so previous/next are not limited to a single Media3 item.
+- Sequential mode supports wrap-around at the first and last item.
+- Random mode uses non-fixed randomness, avoids the current song when possible, and uses random history for previous.
+- Music player page first UI is complete and controls the same playback controller/queue. Bottom function entries such as lyrics, A-B, timer, and favorite may still be placeholders or Toasts unless their real logic is separately implemented.
+
+Music folders and selection:
+
+- Music folder entry uses real `audioFolders` and shows real folder counts/sizes.
+- Folder deletion is scoped to scanned audio files inside that folder. It must not delete non-audio files or the folder itself.
+- Folder deletion must require confirmation and must respect Android storage permission limits.
+- Song multi-select and folder multi-select are separate states and must not trigger each other.
+
+Shared search UI:
+
+- `app/src/main/java/com/shenghui/localvibe/core/ui/MoonInlineSearchField.kt` is the shared inline top-bar search field for cross-module alignment.
+- Video home, video folder detail, and book home search should match the music home search behavior: inline top-bar expansion, search/more buttons remain visible, no internal icon/X, blank/result click exits search.
+- This shared search alignment is a UI/interaction alignment only. It does not imply video player or book reader feature changes.
+
+Bottom navigation icons:
+
+- The book tab uses an open-book icon and the profile tab uses a profile/person icon.
+- `MoonBottomNavigationBar` height, selected state behavior, and navigation logic should remain unchanged unless a separate task explicitly allows it.
+
+Boundaries:
+
+- No permissions, dependencies, Gradle changes, or Manifest changes are part of this media refinement.
+- Full lyrics, lyric parsing/sync, complete music A-B loop logic, complete sleep timer logic, favorite persistence, complex playlist management, album/artist metadata, audio tag parsing, advanced music secondary filters, visualization, and enhanced background notification controls remain deferred.
+### 鐪熸満瀹夎楠岃瘉
+
+娑夊強涓氬姟浠ｇ爜銆佹潈闄愩€佹挱鏀俱€佹壂鎻忋€佸垹闄ゃ€乀TS銆侀€氱煡鏍忔垨閿佸睆鎺у埗鐨勮疆娆★紝缂栬瘧鎴愬姛鍚庡簲灏介噺杩涜鐪熸満楠岃瘉銆傛棤娉曠湡鏈洪獙璇佹椂蹇呴』鏄庣‘璇存槑銆?
+
+## 视频播放页已接入的播放器内工具
+
+- 字幕样式：仍基于当前视频播放页 Compose 控制层和 Media3 字幕显示能力；顶部“字幕”直接打开字幕样式；字幕选择/清除走现有文件选择与 MediaItem 字幕接入链路；字幕背景默认关闭；字幕大小、基础位置、颜色在当前播放页状态内生效。字幕时间/同步尚未接入真实时间轴偏移，不能做假成功。
+- AB 循环：在 `VideoPlayerScreen.kt` 内实现为底部半透明悬浮条；使用当前播放器进度设置 A/B 点；播放进度轮询到达 B 点后 seek 回 A 点；切换视频清空 AB 状态。不使用右侧面板，不写 DataStore。
+- 睡眠定时：在 `VideoPlayerScreen.kt` 内实现为居中深色半透明弹窗；默认 30 分钟；快捷按钮为 `30min / 45min / 60min / 1h30min / 2h`；大号小时/分钟通过 Compose 手势上下拖动修改待确认时间；点击“确认”后才启动倒计时；重置取消定时并回到 `0:30`；倒计时结束后暂停当前播放，不退出 App、不锁屏、不切视频；不写 DataStore。
+- 工具栏图标：信息、播放列表、睡眠、控制、解码、高级等入口应使用语义明确的图标；不要为不同功能重复使用齿轮图标。
+- 解码与格式：`VideoPlayerScreen.kt` 内的“解码与格式”面板基于 Media3 / 系统解码链路展示信息，包括播放内核、文件扩展名、视频/音频轨道 MIME、codec、分辨率、设备支持状态。不可用数据显示“未知”，不伪造成功状态。
+- 播放失败提示：播放器真实报错时提示当前设备或系统解码器可能不支持该视频编码；提示只解释风险，不自动修复，也不声明该格式已支持。
+- 视频均衡器：`VideoPlayerScreen.kt` 内接入 Android `Equalizer`、`BassBoost`、`Virtualizer`。使用播放器 `audioSessionId` 创建系统音效对象；session 变化时 release/recreate，播放页销毁时 release。UI 为深色半透明无边框右侧面板，含预设、5 个横向频段、低音增强、环境声、完成、恢复默认；频段和效果滑杆采用 4dp 轨道 + 16dp 圆形 thumb；紧凑一页优先布局。不支持时显示“不支持”，不假成功。
+
+开发边界：不要为上述播放器内工具新增权限或依赖；不要改 Gradle / Manifest；不要把睡眠定时改成系统 TimePicker；不要把 AB 或睡眠定时恢复成旧右侧面板；不要把字幕时间同步标记为已完成，除非真实影响字幕显示时间；不要声称 Media3 + 系统解码等于万能解码；不要未经确认接入 FFmpeg、mpv、native decoder 或硬解/软解切换；不要把视频均衡器改回后续占位或假滑杆，不要新增音效库 / 权限，不要写持久化，除非后续单独任务明确允许。
+
+验证记录：相关播放器内工具轮次均要求 `.\gradlew.bat :app:assembleDebug --console=plain` 通过；均衡器验证使用 ADB `E:\Android\platform-tools\adb.exe -P 62001` 安装 / 启动流程，真实声音效果仍需真机确认；真机验证无明显问题后，工作区应保持 clean。
+
+## 视频格式识别与解码边界
+
+- `MediaStoreScanner` 依赖 Android MediaStore 返回的视频媒体记录；系统库能否收录由 Android 媒体库决定。
+- 手动文件夹扫描的轻量扩展名识别包括：`mp4 / mkv / webm / avi / mov / m4v / 3gp / 3gpp / ts / m2ts / mts / flv / wmv / asf`。
+- 扩展名识别只代表 LocalVibe 会把文件作为视频候选并交给 Media3 尝试播放；实际能否播放取决于容器、编码、设备系统解码器和 Media3 支持状态。
+- 不为格式识别新增重型解析，不批量读取文件内容，不引入 `MediaMetadataRetriever` 扫描所有视频。
+- 后置高风险：真正万能解码、FFmpeg / mpv / native decoder、硬解/软解切换、复杂画面调节、手势系统、字幕真实时间轴偏移。
+
+## 视频主页字段实现边界
+
+已完成字段 / 高级项：
+
+- 日期显示：在 `VideoLibraryScreen.kt` 中作为真实字段开关展示；列表 / 网格显示 `最近：yyyy-MM-dd`；来源为文件夹内最近视频修改时间；应与日期排序口径保持一致。
+- 缩略图显示时长：在视频主页高级设置中作为真实开关；时长来源为 MediaStore `DURATION`；只展示代表缩略图对应视频的时长标签；无时长时不显示。
+- 扩展名 / 格式显示：在字段设置中作为真实开关；使用已有 `LocalMediaFile.extension`；文件夹内去重聚合后展示 `格式：mp4`、`格式：mp4 / mkv`、`格式：mp4 / mkv +2`。
+- 更多功能占位清理：视频主页和文件夹详情页不应保留普通按钮式“更多功能”占位；未完成项必须弱化为后续或隐藏。
+
+实现边界：
+
+- 不为主页字段引入 `MediaMetadataRetriever` 批量扫描。
+- 不为日期、时长、扩展名显示新增重型扫描或文件内容解析。
+- 不把缺失数据伪造成 `00:00`、`1970-01-01` 等假值。
+- 不为了主页字段修改 `VideoPlayerScreen.kt`。
+- 不触碰音乐 / 小说模块、Gradle、Manifest、权限或依赖。
+
+后置项：
+
+- 路径显示：后置，路径过长且有隐私/稳定性问题。
+- 播放进度：后置，文件夹卡片上的语义不明确。
+- 文件夹总时长：后置，需要聚合全部视频，性能和语义风险高。
+- 分辨率 / 帧率：后置，可能需要额外元数据读取。
+- 显示隐藏文件和文件夹：后置，涉及隐藏 / 恢复语义。
+- 识别 `.nomedia`：后置，涉及扫描策略和 Android 媒体库规则。
+
+## 视频文件夹详情页实现边界
+
+已完成能力：
+
+- 日期显示：在 `FolderScreen.kt` 中用于视频详情列表 / 网格条目；来源为 `LocalMediaFile.modifiedAt`；格式为 `yyyy-MM-dd`；空日期不显示，不伪造 `1970-01-01`。
+- 网格 UI 对齐：视频文件夹详情页网格使用 3 列轻量布局；普通态透明；标题单行省略；元信息弱化显示；保留缩略图右下角时长标签；未播放视频不显示 `上次 0:00`。
+- 扩展名 / 格式显示：在详情页列表 / 网格元信息行展示；来源为已有 `LocalMediaFile.extension`；统一小写；空扩展名不显示，不展示 `未知格式`。
+
+实现边界：
+
+- 不为详情页日期 / 格式显示修改 scanner。
+- 不为详情页字段引入 `MediaMetadataRetriever` 批量读取、文件内容解析或额外扫描。
+- 不为了详情页字段修改 `VideoPlayerScreen.kt` 或 `VideoLibraryScreen.kt`。
+- 不触碰音乐 / 小说模块、Gradle、Manifest、权限或依赖。
+- 不在详情页字段收口时改删除授权链路或扫描策略。
+
+后置项：
+
+- 路径显示：后置。
+- 文件失效状态专项：后置。
+- 文件夹总时长：后置，涉及聚合和语义风险。
+- 分辨率 / 帧率：后置，可能需要额外元数据读取。
+- 删除授权链路大改：后置。
+- 扫描策略大改：后置。
+## Video Picture Adjustment Implementation Boundary
+
+- Location: video player page, primarily `VideoPlayerScreen.kt`, with the player using the `video_player_texture_view.xml` texture-view surface.
+- Feature status: first real version complete; this is no longer a placeholder panel.
+- Controls: brightness, contrast, saturation, color temperature, effect toggle, presets (`默认 / 明亮 / 影院 / 护眼 / 鲜艳`), and Done.
+- Reset behavior: the bottom duplicate `恢复默认设置` entry was removed from picture adjustment; the `默认` preset remains the supported reset path for neutral parameters.
+- Rendering path: Android 12+ uses `RenderEffect` with `ColorMatrixColorFilter`.
+- Scope: effects apply only to the current video player display and do not modify source video files.
+- Unsupported devices: Android 12 and below show unsupported state, disable controls, and must not fake success.
+- Lifecycle: the video player pauses on `ON_STOP` so returning to the desktop does not keep video audio playing.
+- Regression boundaries: do not let saturation or any single slider update unrelated sliders; do not let the effect toggle clear parameters; do not add sharpening, dark enhancement, advanced filters, or native decoder changes without a separate researched task.
+
+## Video Playback Regression Review Boundary
+
+- TODO-006 is complete for the current video player regression review after equalizer and picture adjustment.
+- Double-tap seek is a real `VideoPlayerScreen.kt` gesture behavior: left double tap seeks backward, right double tap seeks forward, and the progress state must follow the seek.
+- Sleep timer has separate timed countdown and end-of-current-video modes. `播完当前视频后停止` must not be represented as a 30-minute countdown.
+- The player handles end-of-current-video sleep mode by pausing on current item end and not advancing to the next item.
+- Bottom system gesture safe area is reserved for Android navigation. Drags starting there must not trigger player brightness, volume, horizontal seek, or other full-screen gestures.
+- Non-bottom gestures remain active: middle left brightness, middle right volume, horizontal seek, and double-tap seek.
+- Current lifecycle behavior is intentional: `ON_STOP` pauses video playback, and returning to the app does not auto-resume.
+- Deferred technical work remains separate: subtitle time sync, two-finger zoom / complex gestures, FFmpeg/mpv/native decoder, advanced filters, sharpening, and dark enhancement.
+
+## External SRT Subtitle Sync Implementation Boundary
+
+- External SRT subtitle time sync first version is complete for manually selected `.srt` subtitles.
+- Supported behavior: global offset from `-5s` to `+5s`, quick buttons, thin slider, reset to `0s`, and Done closing the panel without clearing the offset.
+- Rendering path: read the selected external SRT, parse cue timestamps, apply the offset, clamp negative timestamps to `0`, write an adjusted temporary SRT under app cache, and reload subtitles through `MediaItem.SubtitleConfiguration`.
+- Playback continuity: keep the current playback position and playback state as much as possible while reloading the adjusted subtitle configuration.
+- The original subtitle file is not modified.
+- Unsupported boundaries remain explicit: embedded subtitles do not support offset, ASS/SSA advanced subtitle sync is not fully supported, and this is not universal subtitle sync.
+- No Gradle, Manifest, permissions, dependencies, scanner, video home, or folder detail changes are required for this feature.
+- Test SRT files are local validation artifacts only and must not be committed.
+
+## Unavailable Video File State Implementation Boundary
+
+- Video unavailable-file state first version is complete in the video folder detail UI.
+- Detection path: perform a lightweight readability check on the existing video URI with `contentResolver.openFileDescriptor(uri, "r")`.
+
+## Video Home And Folder Detail Shared UI Components
+
+Bottom navigation:
+
+- Shared component: `app/src/main/java/com/shenghui/localvibe/core/ui/MoonBottomNavigationBar.kt`.
+- The video home page and video folder detail page both render bottom navigation through this component.
+- This keeps bottom bar height, background, selected indicator, icon/text colors, tab spacing, and Material3 `NavigationBarItem` behavior aligned.
+- In video folder detail, `Video` remains selected. `Music`, `Novel`, and `Me` route through the existing top-level navigation.
+- Current convention: tapping the selected `Video` tab inside video folder detail does not force navigation to video home; use the top-left back button to return.
+
+Search and title rendering:
+
+- Video home search and video folder detail search are Compose text-field UI fixes only. They keep single-line search behavior while using a stable height and readable text style to avoid vertical clipping.
+- Video home folder titles may render up to 2 lines with ellipsis after the second line.
+
+Layout constraints:
+
+- Video folder detail content and the lower-right play FAB must account for the bottom navigation bar.
+- Selection mode controls must not overlap bottom navigation.
+- The video player page is not part of this bottom-navigation UI change.
+- No permissions, dependencies, Gradle changes, Manifest changes, music internals, or novel internals are required for this shared UI component.
+- Covered surfaces: folder detail list cards, folder detail grid cards, tap interception, and remove-from-list reuse.
+- UI state: dim the unavailable item, show `文件已失效` in the thumbnail area, and show `文件已失效` in the metadata line.
+- Interaction state: unavailable video taps must not enter `VideoPlayerScreen`; show `文件已失效，可从列表移除` instead.
+- Delete boundary: unavailable videos should only expose remove-from-list behavior. Do not show permanent-delete wording or fake a local-file delete success when the file cannot be accessed.
+- Architecture boundary: no new permissions, no full-disk validation, no scanner rewrite, no Gradle/Manifest/dependency changes, and no music/novel module changes.
+- Future work remains separate: batch unavailable-file cleanup, unified unavailable-file management, and rescan-based cleanup policy.
+
+## Video Hidden Records And Delete Implementation Boundary
+
+- Hidden record management is implemented inside the video home `More` panel instead of a new route or page.
+- Record sources are app state records for hidden folders, hidden videos, and unavailable files. The UI must not render mock records.
+- Hidden folder and hidden video records support restore and clear. Unavailable records support clear only.
+- Clearing a record is app-state cleanup only and must not delete real media files.
+- Multi-select hide/delete is implemented for both video home and video folder detail.
+- Hide is app-level visibility state and must not call the local-file delete path.
+- Delete uses the existing real video deletion path, including confirmation, MediaStore/security handling, and failure reporting.
+- Video home folder delete is scoped to videos that LocalVibe has identified inside the selected folders; it must not delete non-video files.
+- Video folder detail delete is scoped to selected video files.
+- Selection mode should hide the video play FAB on both home and folder detail surfaces.
+
+## Video Thumbnail Cache And Prewarm Implementation Boundary
+
+- Video thumbnail disk cache is implemented under app cache `video_thumbnails`.
+- Cache identity is based on `uri + modifiedAt + size`; do not replace it with file name, display title, or folder name.
+- `VideoThumbnailStore` is the single thumbnail generation/cache boundary. New thumbnail work should reuse it instead of bypassing invalid-frame checks.
+- Folder-detail video rows/cards must request thumbnails through the video file's own cache key to avoid cross-video thumbnail reuse.
+- Video home folder thumbnails reuse a representative accessible video thumbnail; they are not separate permanent folder thumbnails detached from the underlying video.
+- If a representative video disappears, the folder should choose the next accessible video. If none exists, show a placeholder and do not show stale cache.
+- Real video deletion clears the matching thumbnail cache. Hide/list-hidden behavior does not clear thumbnail cache.
+- Invalid-frame fallback rejects black frames, white/overexposed blank frames, and low-information solid-color frames before writing cache.
+- Existing invalid cache files should be deleted when read and regenerated if possible.
+- Thumbnail generation may try multiple candidate frame times, but must not scan the full video.
+- Background prewarming is implemented as a lightweight coroutine queue, not WorkManager.
+- Prewarming triggers after startup/restored video scans, video scan completion, rescan, and manual video folder add.
+- Prewarming processes scanned video files only, skips unreadable/unavailable files, skips valid cached thumbnails, runs with concurrency 1, caps each run at about 100 attempted videos, and delays about 90ms between generated items.
+- Prewarming must not start from list scrolling or repeated Composable recomposition.
+- Thumbnail cache size limiting is implemented in the thumbnail cache boundary.
+- The cache directory remains app cache `video_thumbnails`; do not trim unrelated app cache directories.
+- Cache size limit is `300MB`; when exceeded, cleanup trims to about `260MB`.
+- Cleanup uses file `lastModified` as the recency signal and deletes oldest thumbnail cache files first.
+- Successful thumbnail cache reads update `lastModified`, so actively used thumbnails are kept longer.
+- Thumbnail writes from on-demand loading and background prewarming both need to pass through `VideoThumbnailStore` so invalid-frame detection and cache-size enforcement are not bypassed.
+- Cache cleanup failures for individual files should be contained and must not crash playback, list rendering, or prewarming.
+- Real video deletion may clear the matching thumbnail cache, but cache-limit trimming must never delete source video files. Hide/list-hidden behavior must not clear thumbnail cache.
+- No new permissions, Gradle dependencies, Manifest changes, or scanner architecture changes are required for the thumbnail cache/prewarm path.
+
+## Video Player Queue Panel And Gesture Implementation Boundary
+
+- The video player queue/list panel is implemented inside the player page and should stay scoped to `VideoPlayerScreen.kt` unless routing data must be passed from the host.
+- The panel uses the current playback queue as its data source. It must not render hard-coded example videos.
+- The panel is a right-side translucent player function panel with compact header, real search, real filters, current-item highlight, unavailable-item state, and no permanent-delete action.
+- Queue item thumbnails should continue to use the existing video thumbnail cache path and must not bypass black/white/low-information frame validation.
+- Queue filters use real state: all items, no-progress/unwatched items, progress/watched items, and unavailable items.
+- Current item identity is based on the current queue URI. The current item is highlighted and may show `正在播放`, but must not overlay a circular play button on top of the thumbnail.
+- Unavailable queue items must not call playback switching. They may call the existing remove-from-list path.
+- Player function panel visuals are unified as dark translucent rounded panels without obvious thick borders.
+- This visual unification must not change equalizer, picture adjustment, subtitle sync, AB loop, sleep timer, audio track, speed, decode info, or gesture settings behavior.
+- Player gestures are handled by the full player surface pointer input in `LocalVideoPlayer`.
+- Double-tap seek, horizontal drag seek, brightness drag, and volume drag must execute real actions, not only show overlays.
+- The gesture pointer input is keyed by the current `mediaFile.uri` and `player` so an in-player queue switch recreates the gesture handler for the new player instance.
+- The bottom system gesture safe area remains part of the player gesture boundary and should only block gestures that start in that bottom zone.
+- No new permissions, Gradle dependencies, Manifest changes, video home changes, folder detail changes, music changes, or novel changes are required for this player queue/gesture work.
+
+## Video Module Closure Technical Baseline
+
+- Video home remains Jetpack Compose UI backed by scanned local video records, DataStore app state, MediaStore/SAF boundaries, and the video thumbnail cache.
+- Video folder detail remains the scoped surface for per-video list/grid behavior, unavailable-file state, multi-select hide/delete, and one-video-one-thumbnail rendering.
+- Video player remains a page-local Media3 ExoPlayer surface. It should not be migrated to the music background service.
+- Player tools currently implemented in `VideoPlayerScreen.kt` include queue panel, speed, resize mode, screenshot, subtitle style, external SRT sync, AB loop, sleep timer, gesture settings, equalizer, picture adjustment, audio tracks, decode/format info, and playback diagnostics.
+- Thumbnail cache remains app cache `video_thumbnails`, keyed by `uri + modifiedAt + size`, with invalid-frame detection, prewarm, delete cleanup, and 300MB/260MB trimming.
+- Delete/hide semantics remain separate in app state and storage access: hide updates app visibility records; delete follows real MediaStore/permission deletion and must preserve records on failure.
+
+Deferred high-risk technical work:
+
+- FFmpeg/mpv/native decoder integration.
+- Hardware/software decoder switching.
+- Embedded subtitle offset in the Media3 render path.
+- Full ASS/SSA subtitle sync.
+- Delete authorization architecture changes.
+- Hidden-file and `.nomedia` scan strategy changes.
+- Batch resolution/frame-rate metadata statistics.
+- Complex two-finger gesture system.
+- Advanced picture filters beyond the first real brightness/contrast/saturation/color-temperature version.
+
+Required real-device verification areas:
+
+- Video home, folder detail, player basics, player queue, subtitles, gestures, equalizer, picture adjustment, AB loop, sleep timer, thumbnails, unavailable files, hide/delete, and permission denial behavior.
+
+Technical regression boundaries:
+
+- Do not add new permissions or dependencies for video closure polish.
+- Do not bypass `VideoThumbnailStore` for new thumbnail work.
+- Do not bypass the existing delete permission chain.
+- Do not make UI-only controls that claim real playback, subtitle, gesture, or filter behavior without touching the real underlying path.
+- Do not modify music or novel modules as part of video closure work.
+
+## Video Recent UI And Subtitle Control Technical Boundary
+
+Recent completed commits covered video-home cache management, player entry refinement, advanced panel wording, and inline subtitle sync controls.
+
+Video home `More` panel:
+
+- The panel is a fixed-height dark translucent Compose surface with a fixed header and internally scrollable content.
+- `Cache management`, `Fields`, `Advanced`, and `Hidden records` are folded sections that must not resize the outer panel when expanded.
+- `Hidden records` stays at the bottom of the folded section stack.
+- `Advanced` uses the same folded-row height, icon sizing, title sizing, subtitle area, padding, background, and arrow alignment as the other folded sections.
+
+Thumbnail cache management:
+
+- Cache usage must be calculated from the real `cache/video_thumbnails/` directory.
+- The cache-size display must not use hard-coded values.
+- Manual cache clearing must only delete thumbnail-cache files under `video_thumbnails`.
+- Manual cache clearing must not delete source videos, hidden records, playback progress, subtitle files, or unrelated app cache.
+- The cache limit remains about `300MB`, trimmed to about `260MB`, and writes still pass through `VideoThumbnailStore`.
+
+Player function entries:
+
+- Default player controls expose speed, portrait/landscape, equalizer, picture adjustment, and expand.
+- Expanded controls expose screenshot, info, queue/list, AB loop, sleep timer, control bar, gestures, decode, advanced, and collapse.
+- Audio track selection remains in the top bar only; do not duplicate it in the player function grid.
+- This entry cleanup must not remove or weaken the underlying feature implementations.
+
+Advanced player panel:
+
+- The `Advanced` panel should list genuinely deferred high-risk work only.
+- External SRT subtitle time sync is already implemented and must not be shown as a generic future placeholder.
+- Deferred items include embedded subtitle time offset, full ASS/SSA advanced subtitle sync, FFmpeg/mpv/native decoder work, decoder enhancement, and complex picture filters.
+
+Subtitle style and inline subtitle sync:
+
+- Subtitle time sync is embedded in the subtitle style panel and should not navigate to a separate subtitle-time panel from the subtitle style flow.
+- No external SRT: show `需外挂 SRT`, disable plus/minus and drag controls, and do not call the real offset path.
+- External SRT loaded: plus/minus changes offset through the existing external SRT offset implementation.
+- Short press on `+/-` changes exactly `0.1s`.
+- Long press on `+/-` continuously repeats offset changes.
+- Vertical drag on the center value accumulates drag distance, can cross multiple `0.1s` steps in one gesture, previews the draft offset while dragging, and applies the final offset on release.
+- Offset remains clamped to about `-5.0s` through `+5.0s`.
+- Do not add a second SRT parser path for these controls; reuse the existing adjusted-SRT reload path.
+
+Video-module technical boundaries:
+
+- External `.srt` sync is the current supported subtitle-sync scope.
+- Embedded subtitle offset and ASS/SSA advanced subtitle sync remain deferred.
+- No FFmpeg/mpv/native decoder, new permissions, new dependencies, Gradle changes, Manifest changes, music changes, or novel changes are part of this completion.
+
+## Video Player Sleep And Gesture Safety Technical Notes
+
+Sleep-mode playback recovery:
+
+- Sleep pause state is consumed when the user manually taps the bottom play button after an automatic sleep pause.
+- Timed sleep pause should not immediately pause again after manual play.
+- `pause after current video` must handle `Player.STATE_ENDED` explicitly:
+  - Queue has next item: seek/move to the next media item and start playback.
+  - Queue has no next item: seek the current media item to `0` and start playback.
+- Sleep remains a reusable player feature; clearing the consumed sleep state must not permanently disable future sleep timers.
+
+Top-center gesture safe area:
+
+- `VideoPlayerScreen.kt` uses a top-center safe area before brightness/volume gesture mode selection.
+- Current safe area constants are about `96dp` from the top and the center `25%` through `75%` of screen width.
+- The check is based on the drag start point for the whole gesture.
+- If a gesture starts inside this safe area, vertical brightness/volume adjustment is ignored for that gesture.
+- Left-side brightness and right-side volume gestures remain active outside this safe area.
+- This safety rule should not affect click, double-tap seek, horizontal seek, subtitle controls, sleep, AB loop, player queue, or control-bar interactions.
+
+Boundary:
+
+- These fixes do not add permissions, dependencies, Gradle changes, Manifest changes, native decoder work, music-module changes, or novel-module changes.
+
+## 音乐模块媒体精修技术状态
+
+最近完成提交：`b77cd10 feat(media): refine music player and unify search`。
+
+- 音乐主页继续使用真实扫描到的本地音频数据作为列表来源，不使用正式假歌曲数据。
+- 音乐主页搜索使用通用 `MoonInlineSearchField`，在顶部栏内展开，不新增搜索行，不撑高顶部栏，输入框内部不放搜索图标或 X。
+- 音乐主页的 `我喜欢 / 最近播放 / 音乐文件夹` 入口和 `全部歌曲` 标题固定，只有歌曲列表区域滚动。
+- `音乐文件夹` 入口使用真实扫描分组和 `audioFolders.size`，文件夹列表显示真实歌曲数量和大小。
+- 歌曲列表点击只播放，不直接进入音乐播放页；点击当前歌曲会在播放 / 暂停之间切换，不重建队列，不 seek 到 `0`。
+- 音乐队列使用真实扫描音频列表，避免 Media3 只有当前单曲导致上一曲 / 下一曲失效。
+- 顺序模式支持首尾循环；随机模式使用非固定随机源，下一曲尽量避开当前歌曲，上一曲优先使用随机历史。
+- 迷你播放器读取真实当前音频状态，支持上一曲、播放 / 暂停、下一曲，以及底部进度线点击 / 拖动 seek。
+- 迷你播放器外层包裹区域应保持透明；内部控制卡片保留深色圆角卡片、边框和控制按钮。
+- `app/src/main/java/com/shenghui/localvibe/core/ui/RotatingMusicThumb.kt` 提供迷你播放器左侧旋转小方块组件。
+- 当前 `RotatingMusicThumb` 视觉方向为紫色月亮 / 月相，小方块整体慢速旋转，裁切问题已处理，无封面时不显示破图。
+- 音乐播放页第一版 UI 已完成：沉浸式展示，不显示底部导航栏，顶部保留下箭头和更多，使用真实当前音频、同一套队列控制、真实进度和 seek。
+- 音乐播放页底部的歌词、A-B、定时、收藏等入口若仍为占位或 Toast，必须继续标记为后续能力，不得写成完整逻辑已完成。
+- 音乐文件夹删除只允许删除已扫描到的音频文件，必须二次确认，不删除非音频文件，不删除整个文件夹。
+- 歌曲多选和文件夹多选状态分离，避免互相误触。
+- 跨模块搜索统一仅表示音乐、视频、小说顶部栏搜索框样式和交互对齐，不代表视频播放页或小说阅读页功能变化。
+- 小说 tab 和我的 tab 已替换为真实图标，但底部导航栏整体样式、高度、选中态和功能逻辑不变。
+- 当前阶段不新增权限、不新增依赖，不修改 Gradle / Manifest，不修改视频播放页或小说阅读页。
