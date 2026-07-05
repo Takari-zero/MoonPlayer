@@ -114,6 +114,7 @@ import com.shenghui.localvibe.feature.book.playback.BookReaderAudioTrackSink
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackController
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackEvent
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackTarget
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWiringAdapter
 import com.shenghui.localvibe.feature.book.playback.BookReaderRestorePositionGate
 import com.shenghui.localvibe.feature.book.playback.BookTtsEngine
 import com.shenghui.localvibe.feature.book.playback.BookTtsPcmResult
@@ -1509,15 +1510,47 @@ fun BookListenScreen(
         }
     }
 
-    LaunchedEffect(bookFile?.uri, paragraphs.size, currentParagraphIndex) {
+    LaunchedEffect(
+        bookFile?.uri,
+        paragraphs.size,
+        currentParagraphIndex,
+        currentSentenceIndexInParagraph,
+        cachedReadState,
+        speechRate,
+        chapters,
+    ) {
         if (bookFile != null && paragraphs.isNotEmpty()) {
+            val shadowChapterIndex = currentChapterIndexFor(currentParagraphIndex)
+            val shadowChapter = chapters.getOrNull(shadowChapterIndex)
+            val shadowChapterStart = shadowChapter?.paragraphIndex ?: 0
+            val shadowChapterEndExclusive = chapters
+                .getOrNull(shadowChapterIndex + 1)
+                ?.paragraphIndex
+                ?.coerceIn(shadowChapterStart, paragraphs.size)
+                ?: paragraphs.size
             Log.d(
                 FORMAL_BOOK_PLAYBACK_TAG,
-                "real reader screen entered bookId=${bookFile.uri} chapterIndex=${currentChapterIndexFor(currentParagraphIndex)}"
+                "real reader screen entered bookId=${bookFile.uri} chapterIndex=$shadowChapterIndex"
             )
             Log.d(
                 FORMAL_BOOK_PLAYBACK_TAG,
                 "real reader controller identity=${System.identityHashCode(formalPlaybackController)}"
+            )
+            logBookReaderEntryReadyShadow(
+                bookId = bookFile.uri,
+                bookTitle = bookFile.displayTitle(),
+                paragraphs = paragraphs,
+                restoreSnapshot = cachedReadState?.toEntryRestoreSnapshotInput(),
+                chapterIndex = shadowChapterIndex,
+                chapterTitle = shadowChapter?.title ?: "姝ｆ枃",
+                chapterStartIndex = shadowChapterStart,
+                chapterEndExclusive = shadowChapterEndExclusive,
+                speechRate = speechRate,
+                currentParagraphIndex = currentParagraphIndex,
+                currentSentenceIndex = currentSentenceIndexInParagraph,
+                currentChapterIndex = shadowChapterIndex,
+                currentListenedTimeLabel = cachedReadState?.cachedListenedTimeLabel.orEmpty(),
+                currentRemainingTimeLabel = cachedReadState?.cachedRemainingTimeLabel.orEmpty(),
             )
         }
     }
@@ -5007,6 +5040,19 @@ private fun BookReadStateCache.firstVisibleSentenceIndex(): Int? =
 
 private fun BookReadStateCache.firstVisibleChapterSentenceIndex(): Int? =
     cachedVisibleChapterSentenceIndexes.firstOrNull()
+
+private fun BookReadStateCache.toEntryRestoreSnapshotInput(): BookReaderEntryReadyStateWiringAdapter.RestoreSnapshotInput {
+    return BookReaderEntryReadyStateWiringAdapter.RestoreSnapshotInput(
+        paragraphIndex = lastParagraphIndex,
+        sentenceIndex = lastSentenceIndexInParagraph,
+        cachedViewport = BookReaderEntryReadyStateWiringAdapter.CachedViewportInput(
+            firstVisibleParagraphIndex = firstVisibleParagraphIndex() ?: lastParagraphIndex,
+            firstVisibleSentenceIndex = firstVisibleSentenceIndex() ?: lastSentenceIndexInParagraph,
+            firstVisibleChapterSentenceIndex = firstVisibleChapterSentenceIndex() ?: lastChapterSentenceIndex,
+            firstVisibleItemScrollOffset = viewportFirstVisibleItemScrollOffset,
+        )
+    )
+}
 
 private fun findSnapshotRealContentInitialIndex(
     cachedReadState: BookReadStateCache?,
