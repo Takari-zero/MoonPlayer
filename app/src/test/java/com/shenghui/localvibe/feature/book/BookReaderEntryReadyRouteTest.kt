@@ -102,6 +102,21 @@ class BookReaderEntryReadyRouteTest {
         assertEquals(1.5f, plan.loadRequestOrNull()?.speechRate)
     }
 
+    @Test
+    fun disabledReadyPathDoesNotPassReadyStateToBookListenScreen() {
+        val plan = BookReaderEntryReadyPath.plan(
+            enabled = false,
+            routeState = BookReaderEntryReadyRouteState.Ready(
+                input = input(),
+                readyState = readyState(),
+            ),
+        )
+
+        assertTrue(plan is BookReaderEntryReadyPathPlan.Legacy)
+        assertFalse(plan.usesReadyState)
+        assertNull(plan.entryReadyStateForScreen())
+    }
+
     private fun input(): BookReaderEntryReadyRouteInput {
         return BookReaderEntryReadyRouteInput(
             bookFile = bookFile(),

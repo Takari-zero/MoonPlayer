@@ -118,3 +118,33 @@ object BookReaderEntryReadyRouteShadow {
         }
     }
 }
+
+sealed interface BookReaderEntryReadyPathPlan {
+    val usesReadyState: Boolean
+        get() = false
+
+    fun entryReadyStateForScreen(): BookReaderEntryReadyState? = null
+
+    data object Legacy : BookReaderEntryReadyPathPlan
+
+    data class Ready(
+        val readyState: BookReaderEntryReadyState,
+    ) : BookReaderEntryReadyPathPlan {
+        override val usesReadyState: Boolean = true
+
+        override fun entryReadyStateForScreen(): BookReaderEntryReadyState = readyState
+    }
+}
+
+object BookReaderEntryReadyPath {
+    fun plan(
+        enabled: Boolean,
+        routeState: BookReaderEntryReadyRouteState?,
+    ): BookReaderEntryReadyPathPlan {
+        return if (enabled && routeState is BookReaderEntryReadyRouteState.Ready) {
+            BookReaderEntryReadyPathPlan.Ready(routeState.readyState)
+        } else {
+            BookReaderEntryReadyPathPlan.Legacy
+        }
+    }
+}

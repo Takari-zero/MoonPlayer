@@ -112,6 +112,7 @@ import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
 import com.shenghui.localvibe.feature.audio.AudioLibrarySection
 import com.shenghui.localvibe.feature.audio.AudioSortMode
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyPath
 import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteInput
 import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadow
 import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadowPlan
@@ -134,6 +135,7 @@ import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
 private const val ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW = false
+private const val ENABLE_BOOK_READER_READY_PATH = false
 private const val BOOK_READER_ROUTE_SHADOW_TAG = "LV_BOOK_FORMAL"
 
 class MainActivity : ComponentActivity() {
@@ -2549,9 +2551,14 @@ private fun LocalVibeApp() {
                         )
                     }
                 }
+                val entryReadyPathPlan = BookReaderEntryReadyPath.plan(
+                    enabled = ENABLE_BOOK_READER_READY_PATH,
+                    routeState = null,
+                )
                 BookListenScreen(
                     bookFile = resolvedBookFile,
                     initialParagraphIndex = initialBookParagraphIndex,
+                    entryReadyState = entryReadyPathPlan.entryReadyStateForScreen(),
                     onProgressChanged = { uri, paragraphIndex, totalParagraphs ->
                         val progress = PersistedBookProgress(
                             uri = uri,
