@@ -24,8 +24,12 @@ class BookReaderPreloadManagerTest {
     fun preloadFailureReturnsFailedStatusWithoutReadySnapshot() {
         val manager = BookReaderPreloadManager(
             repository = repository(
-                paragraphSource = BookDocumentParagraphSource {
-                    Result.failure(IllegalStateException("parse failed"))
+                paragraphSource = BookParagraphSource { request ->
+                    BookParagraphLoadResult.failed(
+                        key = request.key,
+                        message = "parse failed",
+                        cause = IllegalStateException("parse failed"),
+                    )
                 }
             )
         )
@@ -41,9 +45,12 @@ class BookReaderPreloadManagerTest {
     fun preloadManySkipsDuplicateBookKeys() {
         var loadCalls = 0
         val repository = repository(
-            paragraphSource = BookDocumentParagraphSource {
+            paragraphSource = BookParagraphSource { request ->
                 loadCalls++
-                Result.success(listOf("Chapter 1", "First sentence."))
+                BookParagraphLoadResult.success(
+                    key = request.key,
+                    paragraphs = listOf("Chapter 1", "First sentence."),
+                )
             }
         )
         val manager = BookReaderPreloadManager(repository)
@@ -58,7 +65,12 @@ class BookReaderPreloadManagerTest {
 
     private fun repository(
         paragraphs: List<String> = listOf("Chapter 1", "First sentence."),
-        paragraphSource: BookDocumentParagraphSource = BookDocumentParagraphSource { Result.success(paragraphs) },
+        paragraphSource: BookParagraphSource = BookParagraphSource { request ->
+            BookParagraphLoadResult.success(
+                key = request.key,
+                paragraphs = paragraphs,
+            )
+        },
     ): BookDocumentRepository {
         return BookDocumentRepository(
             paragraphSource = paragraphSource,

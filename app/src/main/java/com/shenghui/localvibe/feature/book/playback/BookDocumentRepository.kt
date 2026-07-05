@@ -21,10 +21,6 @@ data class BookDocumentPreloadRequest(
     }
 }
 
-fun interface BookDocumentParagraphSource {
-    fun loadParagraphs(key: BookDocumentCacheKey): Result<List<String>>
-}
-
 fun interface BookDocumentClock {
     fun nowMillis(): Long
 }
@@ -46,7 +42,7 @@ class IncrementingBookDocumentClock(
 }
 
 class BookDocumentRepository(
-    private val paragraphSource: BookDocumentParagraphSource,
+    private val paragraphSource: BookParagraphSource,
     private val clock: BookDocumentClock = SystemBookDocumentClock,
 ) {
     private val entries = linkedMapOf<BookDocumentCacheKey, BookDocumentCacheEntry>()
@@ -92,22 +88,14 @@ class BookDocumentRepository(
             createdAtMillis = cached?.createdAtMillis ?: loadingTime,
         )
 
-        val paragraphs = paragraphSource.loadParagraphs(request.key).getOrElse { error ->
+        val paragraphResult = paragraphSource.load(BookParagraphLoadRequest(request.key))
+        val paragraphs = paragraphResult.paragraphsOrNull()
+        if (paragraphs == null) {
+            val error = paragraphResult.errorOrNull()
+                ?: IllegalStateException("book document paragraphs unavailable")
             val failed = BookDocumentCacheEntry.failed(
                 key = request.key,
                 message = error.message ?: "book document preload failed",
-                createdAtMillis = cached?.createdAtMillis ?: loadingTime,
-                updatedAtMillis = clock.nowMillis(),
-                cause = error,
-            )
-            entries[request.key] = failed
-            return Result.failure(error)
-        }
-        if (paragraphs.none { it.isNotBlank() }) {
-            val error = IllegalArgumentException("paragraphs must not be empty")
-            val failed = BookDocumentCacheEntry.failed(
-                key = request.key,
-                message = error.message ?: "paragraphs must not be empty",
                 createdAtMillis = cached?.createdAtMillis ?: loadingTime,
                 updatedAtMillis = clock.nowMillis(),
                 cause = error,

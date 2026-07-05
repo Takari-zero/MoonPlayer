@@ -89,17 +89,3 @@ sealed interface BookParagraphLoadResult {
 fun interface BookParagraphSource {
     fun load(request: BookParagraphLoadRequest): BookParagraphLoadResult
 }
-
-fun BookParagraphSource.toDocumentParagraphSource(): BookDocumentParagraphSource {
-    return BookDocumentParagraphSource { key ->
-        when (val result = load(BookParagraphLoadRequest(key))) {
-            is BookParagraphLoadResult.Success -> Result.success(result.paragraphs)
-            is BookParagraphLoadResult.Empty -> Result.failure(
-                result.errorOrNull() ?: IllegalArgumentException(result.message)
-            )
-            is BookParagraphLoadResult.Failed -> Result.failure(
-                result.errorOrNull() ?: IllegalStateException(result.message)
-            )
-        }
-    }
-}

@@ -28,9 +28,12 @@ class BookDocumentRepositoryTest {
     fun repeatedPreloadUsesReadyCacheWithoutParsingAgain() {
         var loadCalls = 0
         val repository = repository(
-            paragraphSource = BookDocumentParagraphSource {
+            paragraphSource = BookParagraphSource { request ->
                 loadCalls++
-                Result.success(listOf("Chapter 1", "First sentence."))
+                BookParagraphLoadResult.success(
+                    key = request.key,
+                    paragraphs = listOf("Chapter 1", "First sentence."),
+                )
             }
         )
         val request = request()
@@ -46,8 +49,12 @@ class BookDocumentRepositoryTest {
     @Test
     fun failedPreloadIsCachedAsFailedAndNotReady() {
         val repository = repository(
-            paragraphSource = BookDocumentParagraphSource {
-                Result.failure(IllegalStateException("parse failed"))
+            paragraphSource = BookParagraphSource { request ->
+                BookParagraphLoadResult.failed(
+                    key = request.key,
+                    message = "parse failed",
+                    cause = IllegalStateException("parse failed"),
+                )
             }
         )
         val request = request()
@@ -86,9 +93,37 @@ class BookDocumentRepositoryTest {
         assertEquals(BookDocumentPreloadStatus.Stale, repository.get(request.key)?.preloadStatus)
     }
 
+    @Test
+    fun preloadAfterInvalidateReloadsParagraphSource() {
+        var loadCalls = 0
+        val repository = repository(
+            paragraphSource = BookParagraphSource { request ->
+                loadCalls++
+                BookParagraphLoadResult.success(
+                    key = request.key,
+                    paragraphs = listOf("Chapter 1", "First sentence."),
+                )
+            }
+        )
+        val request = request()
+        repository.preload(request).getOrThrow()
+        repository.invalidate(request.key, nowMillis = 300L)
+
+        val reloaded = repository.preload(request).getOrThrow()
+
+        assertEquals(2, loadCalls)
+        assertTrue(reloaded.isReady)
+        assertEquals(BookDocumentPreloadStatus.Ready, reloaded.preloadStatus)
+    }
+
     private fun repository(
         paragraphs: List<String> = listOf("Chapter 1", "First sentence."),
-        paragraphSource: BookDocumentParagraphSource = BookDocumentParagraphSource { Result.success(paragraphs) },
+        paragraphSource: BookParagraphSource = BookParagraphSource { request ->
+            BookParagraphLoadResult.success(
+                key = request.key,
+                paragraphs = paragraphs,
+            )
+        },
     ): BookDocumentRepository {
         return BookDocumentRepository(
             paragraphSource = paragraphSource,

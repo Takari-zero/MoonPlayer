@@ -60,7 +60,7 @@ class BookParagraphSourceTest {
             )
         }
         val repository = BookDocumentRepository(
-            paragraphSource = source.toDocumentParagraphSource(),
+            paragraphSource = source,
             clock = IncrementingBookDocumentClock(start = 100L),
         )
 
