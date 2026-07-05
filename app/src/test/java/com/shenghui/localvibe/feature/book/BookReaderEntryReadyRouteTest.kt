@@ -117,6 +117,64 @@ class BookReaderEntryReadyRouteTest {
         assertNull(plan.entryReadyStateForScreen())
     }
 
+    @Test
+    fun disabledRouteLoaderDoesNotLoadReadyState() {
+        var loadCalls = 0
+
+        val state = BookReaderEntryReadyRouteLoader.loadIfEnabled(
+            enabled = false,
+            input = input(),
+            loader = BookReaderEntryReadyRouteReadyStateLoader {
+                loadCalls++
+                Result.success(readyState())
+            },
+        )
+
+        assertNull(state)
+        assertEquals(0, loadCalls)
+    }
+
+    @Test
+    fun enabledRouteLoaderBuildsReadyStateFromInjectedLoader() {
+        val readyState = readyState()
+
+        val state = BookReaderEntryReadyRouteLoader.loadIfEnabled(
+            enabled = true,
+            input = input(),
+            loader = BookReaderEntryReadyRouteReadyStateLoader { request ->
+                assertEquals("file://demo.txt", request.bookId)
+                assertEquals(0, request.chapterStartIndex)
+                Result.success(readyState)
+            },
+        )
+
+        assertTrue(state is BookReaderEntryReadyRouteState.Ready)
+        val loaded = (state as BookReaderEntryReadyRouteState.Ready).readyState
+        assertSame(readyState, loaded)
+        assertEquals(loaded.canonicalTarget.paragraphIndex, loaded.playbackSeed.paragraphIndex)
+        assertEquals(loaded.canonicalTarget.sentenceIndex, loaded.playbackSeed.sentenceIndex)
+        assertEquals(loaded.canonicalTarget.chapterSentenceIndex, loaded.progressSnapshot.chapterSentenceIndex)
+    }
+
+    @Test
+    fun routeLoaderFailureFallsBackToFailedStateWithoutReadyPath() {
+        val state = BookReaderEntryReadyRouteLoader.loadIfEnabled(
+            enabled = true,
+            input = input(),
+            loader = BookReaderEntryReadyRouteReadyStateLoader {
+                Result.failure(IllegalStateException("paragraphs unavailable"))
+            },
+        )
+
+        assertTrue(state is BookReaderEntryReadyRouteState.Failed)
+        val plan = BookReaderEntryReadyPath.plan(
+            enabled = true,
+            routeState = state,
+        )
+        assertFalse(plan.usesReadyState)
+        assertNull(plan.entryReadyStateForScreen())
+    }
+
     private fun input(): BookReaderEntryReadyRouteInput {
         return BookReaderEntryReadyRouteInput(
             bookFile = bookFile(),

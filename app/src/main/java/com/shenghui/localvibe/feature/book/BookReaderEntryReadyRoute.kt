@@ -148,3 +148,37 @@ object BookReaderEntryReadyPath {
         }
     }
 }
+
+fun interface BookReaderEntryReadyRouteReadyStateLoader {
+    fun load(request: BookReaderEntryLoadRequest): Result<BookReaderEntryReadyState>
+}
+
+object BookReaderEntryReadyRouteLoader {
+    fun loadIfEnabled(
+        enabled: Boolean,
+        input: BookReaderEntryReadyRouteInput,
+        loader: BookReaderEntryReadyRouteReadyStateLoader,
+    ): BookReaderEntryReadyRouteState? {
+        if (!enabled) return null
+        val request = input.toLoadRequest()
+            ?: return BookReaderEntryReadyRouteState.Failed(
+                input = input,
+                message = "book file unavailable",
+            )
+        return loader.load(request).fold(
+            onSuccess = { readyState ->
+                BookReaderEntryReadyRouteState.Ready(
+                    input = input,
+                    readyState = readyState,
+                )
+            },
+            onFailure = { error ->
+                BookReaderEntryReadyRouteState.Failed(
+                    input = input,
+                    message = error.message ?: "reader entry ready state unavailable",
+                    cause = error,
+                )
+            },
+        )
+    }
+}
