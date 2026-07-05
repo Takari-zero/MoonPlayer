@@ -1,4 +1,4 @@
-﻿package com.shenghui.localvibe
+package com.shenghui.localvibe
 
 import android.Manifest
 import android.app.Activity
@@ -124,6 +124,8 @@ import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteState
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
 import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWiringAdapter
+import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeFactory
+import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiring
 import com.shenghui.localvibe.feature.book.playback.BookReaderRestoreCacheSource
 import com.shenghui.localvibe.feature.book.playback.toEntryRestoreSnapshotInput
 import com.shenghui.localvibe.feature.folder.FolderScreen
@@ -144,6 +146,7 @@ import kotlin.random.Random
 
 private const val ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW = false
 private const val ENABLE_BOOK_READER_READY_PATH = true
+private const val ENABLE_BOOKSHELF_READER_PRELOAD = false
 private const val BOOK_READER_ROUTE_SHADOW_TAG = "LV_BOOK_FORMAL"
 
 class MainActivity : ComponentActivity() {
@@ -161,6 +164,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalVibeApp() {
     val context = LocalContext.current
+    @Suppress("UNUSED_VARIABLE")
+    val bookshelfReaderPreloadWiringPlan = remember(context) {
+        BookReaderPreloadRuntimeWiring.plan(
+            enabled = ENABLE_BOOKSHELF_READER_PRELOAD,
+            runtimeFactory = {
+                BookReaderPreloadRuntimeFactory.fromContext(context.applicationContext)
+            },
+        )
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val navController = rememberNavController()
     val coroutineScope = rememberCoroutineScope()
