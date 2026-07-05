@@ -114,11 +114,17 @@ import com.shenghui.localvibe.feature.book.playback.BookReaderAudioTrackSink
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackController
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackEvent
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackTarget
-import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWiringAdapter
+import com.shenghui.localvibe.feature.book.playback.BookReaderRestoreCache
+import com.shenghui.localvibe.feature.book.playback.BookReaderRestoreCacheSource
 import com.shenghui.localvibe.feature.book.playback.BookReaderRestorePositionGate
 import com.shenghui.localvibe.feature.book.playback.BookTtsEngine
 import com.shenghui.localvibe.feature.book.playback.BookTtsPcmResult
 import com.shenghui.localvibe.feature.book.playback.NoopBookReaderAudioSink
+import com.shenghui.localvibe.feature.book.playback.firstVisibleChapterSentenceIndex
+import com.shenghui.localvibe.feature.book.playback.firstVisibleParagraphIndex
+import com.shenghui.localvibe.feature.book.playback.firstVisibleSentenceIndex
+import com.shenghui.localvibe.feature.book.playback.stableUiSnapshotSource
+import com.shenghui.localvibe.feature.book.playback.toEntryRestoreSnapshotInput
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -4916,53 +4922,14 @@ private data class ReaderSentence(
     val chapterSentenceIndex: Int
 )
 
-private typealias BookReaderStableUiSnapshot = BookReadStateCache
-
-private data class BookReadStateCache(
-    val bookUri: String,
-    val bookTitle: String,
-    val lastParagraphIndex: Int,
-    val lastSentenceIndexInParagraph: Int,
-    val lastChapterSentenceIndex: Int,
-    val lastReadingTargetName: String,
-    val lastChapterTitle: String,
-    val cachedVisibleText: List<String>,
-    val cachedVisibleParagraphIndexes: List<Int> = emptyList(),
-    val cachedVisibleSentenceIndexes: List<Int> = emptyList(),
-    val cachedVisibleChapterSentenceIndexes: List<Int> = emptyList(),
-    val cachedChapterSentenceCount: Int = 0,
-    val cachedProgressValue: Float = -1f,
-    val cachedProgressMaxValue: Float = -1f,
-    val cachedListenedTimeLabel: String = "",
-    val cachedRemainingTimeLabel: String = "",
-    val viewportFirstVisibleItemIndex: Int = 0,
-    val viewportFirstVisibleItemScrollOffset: Int = 0,
-    val updatedAt: Long
-) {
-    fun hasViewportSnapshot(): Boolean {
-        return cachedVisibleText.isNotEmpty() &&
-            cachedVisibleParagraphIndexes.size == cachedVisibleText.size &&
-            cachedVisibleSentenceIndexes.size == cachedVisibleText.size &&
-            cachedVisibleChapterSentenceIndexes.size == cachedVisibleText.size
-    }
-}
+private typealias BookReadStateCache = BookReaderRestoreCache
+private typealias BookReaderStableUiSnapshot = BookReaderRestoreCache
 
 private data class BookReaderVisibleViewport(
     val firstVisibleItemIndex: Int,
     val firstVisibleItemScrollOffset: Int,
     val visibleLazyItemIndexes: List<Int>
 )
-
-private fun BookReadStateCache.stableUiSnapshotSource(): String {
-    return when {
-        cachedProgressValue >= 0f &&
-            cachedProgressMaxValue > 0f &&
-            cachedListenedTimeLabel.isNotBlank() &&
-            cachedRemainingTimeLabel.isNotBlank() -> "stable_snapshot"
-        hasViewportSnapshot() -> "legacy_viewport_backfill"
-        else -> "recent_record_backfill"
-    }
-}
 
 private fun backfillStableUiSnapshot(
     state: BookReadStateCache,
@@ -5032,28 +4999,6 @@ private fun estimateAbsoluteSnapshotTimeLabels(
     return formatDuration(listenedSeconds) to formatDuration(remainingSeconds)
 }
 
-private fun BookReadStateCache.firstVisibleParagraphIndex(): Int? =
-    cachedVisibleParagraphIndexes.firstOrNull()
-
-private fun BookReadStateCache.firstVisibleSentenceIndex(): Int? =
-    cachedVisibleSentenceIndexes.firstOrNull()
-
-private fun BookReadStateCache.firstVisibleChapterSentenceIndex(): Int? =
-    cachedVisibleChapterSentenceIndexes.firstOrNull()
-
-private fun BookReadStateCache.toEntryRestoreSnapshotInput(): BookReaderEntryReadyStateWiringAdapter.RestoreSnapshotInput {
-    return BookReaderEntryReadyStateWiringAdapter.RestoreSnapshotInput(
-        paragraphIndex = lastParagraphIndex,
-        sentenceIndex = lastSentenceIndexInParagraph,
-        cachedViewport = BookReaderEntryReadyStateWiringAdapter.CachedViewportInput(
-            firstVisibleParagraphIndex = firstVisibleParagraphIndex() ?: lastParagraphIndex,
-            firstVisibleSentenceIndex = firstVisibleSentenceIndex() ?: lastSentenceIndexInParagraph,
-            firstVisibleChapterSentenceIndex = firstVisibleChapterSentenceIndex() ?: lastChapterSentenceIndex,
-            firstVisibleItemScrollOffset = viewportFirstVisibleItemScrollOffset,
-        )
-    )
-}
-
 private fun findSnapshotRealContentInitialIndex(
     cachedReadState: BookReadStateCache?,
     chapterSentences: List<ReaderSentence>,
@@ -5080,80 +5025,12 @@ private fun findSnapshotRealContentInitialIndex(
     )
 }
 
-private const val BOOK_READ_CACHE_PREFS = "book_read_state_cache"
-private const val BOOK_READ_CACHE_SEPARATOR = "\u001E"
-
-private fun bookReadCachePrefix(bookUri: String): String {
-    return "book_${bookUri.hashCode()}_"
-}
-
-private fun parseBookReadCacheIntList(raw: String?): List<Int> {
-    return raw
-        ?.split(BOOK_READ_CACHE_SEPARATOR)
-        ?.mapNotNull { it.toIntOrNull() }
-        .orEmpty()
-}
-
 private fun loadBookReadStateCache(context: Context, bookUri: String?): BookReadStateCache? {
-    if (bookUri.isNullOrBlank()) return null
-    val prefs = context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE)
-    val prefix = bookReadCachePrefix(bookUri)
-    val storedUri = prefs.getString(prefix + "uri", null) ?: return null
-    if (storedUri != bookUri) return null
-    val cachedText = prefs
-        .getString(prefix + "text", null)
-        ?.split(BOOK_READ_CACHE_SEPARATOR)
-        ?.filter { it.isNotBlank() }
-        .orEmpty()
-    return BookReadStateCache(
-        bookUri = storedUri,
-        bookTitle = prefs.getString(prefix + "title", null).orEmpty(),
-        lastParagraphIndex = prefs.getInt(prefix + "paragraph", 0),
-        lastSentenceIndexInParagraph = prefs.getInt(prefix + "sentence", 0),
-        lastChapterSentenceIndex = prefs.getInt(prefix + "chapter_sentence", 0),
-        lastReadingTargetName = prefs.getString(prefix + "reading_target", null)
-            ?: BookReadingTarget.SENTENCE.name,
-        lastChapterTitle = prefs.getString(prefix + "chapter_title", null).orEmpty(),
-        cachedVisibleText = cachedText,
-        cachedVisibleParagraphIndexes = parseBookReadCacheIntList(prefs.getString(prefix + "visible_paragraphs", null)),
-        cachedVisibleSentenceIndexes = parseBookReadCacheIntList(prefs.getString(prefix + "visible_sentences", null)),
-        cachedVisibleChapterSentenceIndexes = parseBookReadCacheIntList(prefs.getString(prefix + "visible_chapter_sentences", null)),
-        cachedChapterSentenceCount = prefs.getInt(prefix + "chapter_sentence_count", 0),
-        cachedProgressValue = prefs.getFloat(prefix + "progress_value", -1f),
-        cachedProgressMaxValue = prefs.getFloat(prefix + "progress_max_value", -1f),
-        cachedListenedTimeLabel = prefs.getString(prefix + "listened_time_label", null).orEmpty(),
-        cachedRemainingTimeLabel = prefs.getString(prefix + "remaining_time_label", null).orEmpty(),
-        viewportFirstVisibleItemIndex = prefs.getInt(prefix + "first_visible_item", 0),
-        viewportFirstVisibleItemScrollOffset = prefs.getInt(prefix + "first_visible_offset", 0),
-        updatedAt = prefs.getLong(prefix + "updated_at", 0L)
-    )
+    return BookReaderRestoreCacheSource.load(context, bookUri)
 }
 
 private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) {
-    if (state.bookUri.isBlank()) return
-    val prefix = bookReadCachePrefix(state.bookUri)
-    context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putString(prefix + "uri", state.bookUri)
-        .putString(prefix + "title", state.bookTitle)
-        .putInt(prefix + "paragraph", state.lastParagraphIndex.coerceAtLeast(0))
-        .putInt(prefix + "sentence", state.lastSentenceIndexInParagraph.coerceAtLeast(0))
-        .putInt(prefix + "chapter_sentence", state.lastChapterSentenceIndex.coerceAtLeast(0))
-        .putString(prefix + "reading_target", state.lastReadingTargetName)
-        .putString(prefix + "chapter_title", state.lastChapterTitle)
-        .putString(prefix + "text", state.cachedVisibleText.joinToString(BOOK_READ_CACHE_SEPARATOR))
-        .putString(prefix + "visible_paragraphs", state.cachedVisibleParagraphIndexes.joinToString(BOOK_READ_CACHE_SEPARATOR))
-        .putString(prefix + "visible_sentences", state.cachedVisibleSentenceIndexes.joinToString(BOOK_READ_CACHE_SEPARATOR))
-        .putString(prefix + "visible_chapter_sentences", state.cachedVisibleChapterSentenceIndexes.joinToString(BOOK_READ_CACHE_SEPARATOR))
-        .putInt(prefix + "chapter_sentence_count", state.cachedChapterSentenceCount.coerceAtLeast(0))
-        .putFloat(prefix + "progress_value", state.cachedProgressValue)
-        .putFloat(prefix + "progress_max_value", state.cachedProgressMaxValue)
-        .putString(prefix + "listened_time_label", state.cachedListenedTimeLabel)
-        .putString(prefix + "remaining_time_label", state.cachedRemainingTimeLabel)
-        .putInt(prefix + "first_visible_item", state.viewportFirstVisibleItemIndex.coerceAtLeast(0))
-        .putInt(prefix + "first_visible_offset", state.viewportFirstVisibleItemScrollOffset.coerceAtLeast(0))
-        .putLong(prefix + "updated_at", state.updatedAt)
-        .apply()
+    BookReaderRestoreCacheSource.save(context, state)
 }
 
 private fun buildReaderSentences(
