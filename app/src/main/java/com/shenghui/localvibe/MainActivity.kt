@@ -164,13 +164,29 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalVibeApp() {
     val context = LocalContext.current
+    val bookshelfReaderPreloadObserveDecision = remember(BuildConfig.APPLICATION_ID) {
+        BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = BuildConfig.APPLICATION_ID,
+            explicitPreloadFlag = ENABLE_BOOKSHELF_READER_PRELOAD,
+        )
+    }
     @Suppress("UNUSED_VARIABLE")
-    val bookshelfReaderPreloadWiringPlan = remember(context) {
+    val bookshelfReaderPreloadWiringPlan = remember(context, bookshelfReaderPreloadObserveDecision.preloadEnabled) {
         BookReaderPreloadRuntimeWiring.plan(
-            enabled = ENABLE_BOOKSHELF_READER_PRELOAD,
+            enabled = bookshelfReaderPreloadObserveDecision.preloadEnabled,
             runtimeFactory = {
                 BookReaderPreloadRuntimeFactory.fromContext(context.applicationContext)
             },
+        )
+    }
+    LaunchedEffect(bookshelfReaderPreloadObserveDecision) {
+        Log.d(
+            BOOK_READER_ROUTE_SHADOW_TAG,
+            "phase5c bookshelf preload observe " +
+                "formalPackage=${bookshelfReaderPreloadObserveDecision.formalPackage} " +
+                "preloadEnabled=${bookshelfReaderPreloadObserveDecision.preloadEnabled} " +
+                "preloadStarted=${bookshelfReaderPreloadObserveDecision.preloadStarted} " +
+                "txtReadTriggered=${bookshelfReaderPreloadObserveDecision.txtReadTriggered}"
         )
     }
     val lifecycleOwner = LocalLifecycleOwner.current

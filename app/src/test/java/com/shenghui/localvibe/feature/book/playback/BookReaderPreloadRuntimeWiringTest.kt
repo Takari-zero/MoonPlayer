@@ -1,4 +1,4 @@
-package com.shenghui.localvibe.feature.book.playback
+﻿package com.shenghui.localvibe.feature.book.playback
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -6,6 +6,62 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BookReaderPreloadRuntimeWiringTest {
+    @Test
+    fun formalPackageCanEnterObservePathWhenExplicitFlagIsFalse() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe.fastspeech2formal",
+            explicitPreloadFlag = false,
+        )
+
+        assertTrue(decision.formalPackage)
+        assertTrue(decision.observeEnabled)
+        assertFalse(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun mainPackageKeepsObservePathDisabled() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe",
+            explicitPreloadFlag = false,
+        )
+
+        assertFalse(decision.formalPackage)
+        assertFalse(decision.observeEnabled)
+        assertFalse(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun mainPackageCannotEnableBookshelfPreloadEvenWhenFlagIsTrue() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe",
+            explicitPreloadFlag = true,
+        )
+
+        assertFalse(decision.formalPackage)
+        assertFalse(decision.observeEnabled)
+        assertFalse(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun formalPackageCanEnableBookshelfPreloadOnlyWhenFlagIsTrue() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe.fastspeech2formal",
+            explicitPreloadFlag = true,
+        )
+
+        assertTrue(decision.formalPackage)
+        assertTrue(decision.observeEnabled)
+        assertTrue(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
     @Test
     fun disabledWiringDoesNotCreateRuntimeFactoryOrStartPreload() {
         var factoryCreations = 0
@@ -98,7 +154,7 @@ class BookReaderPreloadRuntimeWiringTest {
         assertEquals(1, factoryCreations)
         assertEquals(1, sourceCreations)
         assertEquals(0, readCalls)
-        assertTrue(runtime.readyStateStore.get(request().key) is BookReaderEntryReadyStateStoreEntry)
+        assertFalse(runtime.readyStateStore.get(request().key).isReady)
     }
 
     @Test

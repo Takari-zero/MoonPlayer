@@ -1,5 +1,15 @@
 ﻿package com.shenghui.localvibe.feature.book.playback
 
+private const val FORMAL_READER_PACKAGE_NAME = "com.shenghui.localvibe.fastspeech2formal"
+
+data class BookReaderPreloadObserveDecision(
+    val formalPackage: Boolean,
+    val observeEnabled: Boolean,
+    val preloadEnabled: Boolean,
+    val preloadStarted: Boolean = false,
+    val txtReadTriggered: Boolean = false,
+)
+
 sealed interface BookReaderBookshelfClickPlan {
     data object LegacyOpen : BookReaderBookshelfClickPlan
     data object PrepareOnBookshelf : BookReaderBookshelfClickPlan
@@ -39,6 +49,18 @@ sealed interface BookReaderPreloadRuntimeWiringPlan {
 }
 
 object BookReaderPreloadRuntimeWiring {
+    fun observeDecision(
+        packageName: String,
+        explicitPreloadFlag: Boolean,
+    ): BookReaderPreloadObserveDecision {
+        val formalPackage = packageName == FORMAL_READER_PACKAGE_NAME
+        return BookReaderPreloadObserveDecision(
+            formalPackage = formalPackage,
+            observeEnabled = formalPackage,
+            preloadEnabled = formalPackage && explicitPreloadFlag,
+        )
+    }
+
     fun plan(
         enabled: Boolean,
         runtimeFactory: () -> BookReaderPreloadRuntimeFactory,
