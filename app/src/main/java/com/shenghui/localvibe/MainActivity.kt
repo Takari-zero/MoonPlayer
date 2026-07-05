@@ -123,6 +123,10 @@ import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadowPlan
 import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteState
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
+import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiringPlan
+import com.shenghui.localvibe.feature.book.playback.BookReaderBookshelfPreloadCandidate
+import com.shenghui.localvibe.feature.book.playback.BookDocumentPreloadRequest
+import com.shenghui.localvibe.feature.book.playback.BookDocumentCacheKey
 import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWiringAdapter
 import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeFactory
 import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiring
@@ -146,7 +150,7 @@ import kotlin.random.Random
 
 private const val ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW = false
 private const val ENABLE_BOOK_READER_READY_PATH = true
-private const val ENABLE_BOOKSHELF_READER_PRELOAD = false
+private const val ENABLE_BOOKSHELF_READER_PRELOAD = true
 private const val BOOK_READER_ROUTE_SHADOW_TAG = "LV_BOOK_FORMAL"
 
 class MainActivity : ComponentActivity() {
@@ -2518,6 +2522,93 @@ private fun LocalVibeApp() {
                             BOOK_LOG_TAG,
                             "final bookFiles count=${bookFiles.size}, imported=${importedBookFiles.size}, folderIgnored=${folderBookFiles.size}, uris=${bookFiles.joinToString { it.uri }}"
                         )
+                    }
+                    LaunchedEffect(
+                        bookshelfReaderPreloadObserveDecision.preloadEnabled,
+                        bookFiles.map { it.normalizedBookKey() },
+                    ) {
+                        if (!bookshelfReaderPreloadObserveDecision.preloadEnabled) {
+                            Log.d(
+                                BOOK_READER_ROUTE_SHADOW_TAG,
+                                "phase5c bookshelf preload skipped main package " +
+                                    "formalPackage=${bookshelfReaderPreloadObserveDecision.formalPackage} " +
+                                    "preloadEnabled=${bookshelfReaderPreloadObserveDecision.preloadEnabled}"
+                            )
+                            return@LaunchedEffect
+                        }
+                        val preloadRequests = bookFiles
+                            .take(2)
+                            .map { file ->
+                                val progress = bookProgressMap[file.uri]
+                                BookDocumentPreloadRequest(
+                                    key = BookDocumentCacheKey(file.normalizedBookKey()),
+                                    title = file.name.substringBeforeLast('.', file.name).ifBlank { file.name },
+                                    savedParagraphIndex = progress?.paragraphIndex?.coerceAtLeast(0) ?: 0,
+                                    savedSentenceIndex = 0,
+                                    chapterTitle = "??",
+                                    chapterStartIndex = 0,
+                                    speechRate = 1f,
+                                )
+                            }
+                        if (preloadRequests.isEmpty()) {
+                            Log.d(
+                                BOOK_READER_ROUTE_SHADOW_TAG,
+                                "phase5c bookshelf preload scheduled count=0 uiBlocked=false"
+                            )
+                            return@LaunchedEffect
+                        }
+                        Log.d(
+                            BOOK_READER_ROUTE_SHADOW_TAG,
+                            "phase5c bookshelf preload scheduled count=${preloadRequests.size} uiBlocked=false"
+                        )
+                        withContext(Dispatchers.IO) {
+                            val enabledPlan = bookshelfReaderPreloadWiringPlan as? BookReaderPreloadRuntimeWiringPlan.Enabled
+                            if (enabledPlan == null) {
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c bookshelf preload skipped main package " +
+                                        "formalPackage=${bookshelfReaderPreloadObserveDecision.formalPackage} " +
+                                        "preloadEnabled=${bookshelfReaderPreloadObserveDecision.preloadEnabled}"
+                                )
+                                return@withContext
+                            }
+                            val runtime = enabledPlan.createRuntime()
+                            Log.d(
+                                BOOK_READER_ROUTE_SHADOW_TAG,
+                                "phase5c bookshelf preload start count=${preloadRequests.size} " +
+                                    "uiBlocked=false txtReadOnMain=false"
+                            )
+                            val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+                                runtime = runtime,
+                                candidates = preloadRequests.map { request ->
+                                    BookReaderBookshelfPreloadCandidate(request)
+                                },
+                                recentBookKeys = preloadRequests.map { request -> request.key },
+                                currentBookKey = null,
+                                maxPreloadCount = 2,
+                            )
+                            result.results.forEach { preloadResult ->
+                                if (preloadResult.isReady) {
+                                    Log.d(
+                                        BOOK_READER_ROUTE_SHADOW_TAG,
+                                        "phase5c bookshelf preload success " +
+                                            "bookId=${preloadResult.key.bookId}"
+                                    )
+                                    Log.d(
+                                        BOOK_READER_ROUTE_SHADOW_TAG,
+                                        "phase5c readyState stored " +
+                                            "bookId=${preloadResult.key.bookId}"
+                                    )
+                                } else {
+                                    Log.w(
+                                        BOOK_READER_ROUTE_SHADOW_TAG,
+                                        "phase5c bookshelf preload failed " +
+                                            "bookId=${preloadResult.key.bookId} " +
+                                            "reason=${preloadResult.message.orEmpty()}"
+                                    )
+                                }
+                            }
+                        }
                     }
                     BookLibraryScreen(
                         bookFiles = bookFiles,

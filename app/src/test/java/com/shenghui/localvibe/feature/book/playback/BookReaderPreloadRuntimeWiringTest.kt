@@ -212,6 +212,99 @@ class BookReaderPreloadRuntimeWiringTest {
         assertTrue(runtime.readyStateStore.get(request().key).isReady)
     }
 
+    @Test
+    fun scheduledPreloadReadsSourceAndStoresReadyStateOnlyWhenExplicitlyScheduled() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val request = request()
+        val candidate = BookReaderBookshelfPreloadCandidate(request)
+
+        val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+            runtime = runtime,
+            candidates = listOf(candidate),
+            recentBookKeys = listOf(request.key),
+            currentBookKey = null,
+            maxPreloadCount = 1,
+        )
+
+        assertTrue(result.scheduled)
+        assertFalse(result.uiBlocked)
+        assertFalse(result.txtReadOnMain)
+        assertEquals(1, readCalls)
+        assertTrue(result.results.single().isReady)
+        assertTrue(runtime.readyStateStore.get(request.key).isReady)
+    }
+
+    @Test
+    fun scheduledPreloadFailureDoesNotMarkStoreReady() {
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    BookParagraphLoadResult.failed(
+                        key = request.key,
+                        message = "parse failed",
+                        cause = IllegalStateException("parse failed"),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val request = request()
+
+        val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+            runtime = runtime,
+            candidates = listOf(BookReaderBookshelfPreloadCandidate(request)),
+            recentBookKeys = listOf(request.key),
+            currentBookKey = null,
+            maxPreloadCount = 1,
+        )
+
+        assertTrue(result.scheduled)
+        assertFalse(result.results.single().isReady)
+        assertFalse(runtime.readyStateStore.get(request.key).isReady)
+    }
+
+    @Test
+    fun emptyPreloadPlanDoesNotReadSourceOrStartPreload() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+
+        val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+            runtime = runtime,
+            candidates = emptyList(),
+            recentBookKeys = emptyList(),
+            currentBookKey = null,
+            maxPreloadCount = 1,
+        )
+
+        assertFalse(result.scheduled)
+        assertFalse(result.uiBlocked)
+        assertFalse(result.txtReadOnMain)
+        assertEquals(0, readCalls)
+        assertTrue(result.results.isEmpty())
+    }
     private fun request(): BookDocumentPreloadRequest {
         return BookDocumentPreloadRequest(
             key = BookDocumentCacheKey("content://book/demo.txt"),

@@ -10,6 +10,13 @@ data class BookReaderPreloadObserveDecision(
     val txtReadTriggered: Boolean = false,
 )
 
+data class BookReaderPreloadScheduleResult(
+    val scheduled: Boolean,
+    val results: List<BookReaderPreloadResult> = emptyList(),
+    val uiBlocked: Boolean = false,
+    val txtReadOnMain: Boolean = false,
+)
+
 sealed interface BookReaderBookshelfClickPlan {
     data object LegacyOpen : BookReaderBookshelfClickPlan
     data object PrepareOnBookshelf : BookReaderBookshelfClickPlan
@@ -58,6 +65,28 @@ object BookReaderPreloadRuntimeWiring {
             formalPackage = formalPackage,
             observeEnabled = formalPackage,
             preloadEnabled = formalPackage && explicitPreloadFlag,
+        )
+    }
+
+    fun schedulePreload(
+        runtime: BookReaderPreloadRuntime,
+        candidates: List<BookReaderBookshelfPreloadCandidate>,
+        recentBookKeys: List<BookDocumentCacheKey>,
+        currentBookKey: BookDocumentCacheKey?,
+        maxPreloadCount: Int,
+    ): BookReaderPreloadScheduleResult {
+        val plan = runtime.bookshelfPreloadCoordinator.plan(
+            candidates = candidates,
+            recentBookKeys = recentBookKeys,
+            currentBookKey = currentBookKey,
+            maxPreloadCount = maxPreloadCount,
+        )
+        if (plan.isEmpty()) {
+            return BookReaderPreloadScheduleResult(scheduled = false)
+        }
+        return BookReaderPreloadScheduleResult(
+            scheduled = true,
+            results = runtime.bookshelfPreloadCoordinator.preload(plan),
         )
     }
 
