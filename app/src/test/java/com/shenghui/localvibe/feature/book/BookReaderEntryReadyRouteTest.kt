@@ -8,6 +8,7 @@ import com.shenghui.localvibe.feature.book.playback.BookReaderEntryPlaybackSeed
 import com.shenghui.localvibe.feature.book.playback.BookReaderEntryProgressSnapshot
 import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyState
 import com.shenghui.localvibe.feature.book.playback.BookReaderEntrySentence
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -16,6 +17,46 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BookReaderEntryReadyRouteTest {
+    @Test
+    fun formalPackageCanEnableReadyPathWhenExplicitFlagIsTrue() {
+        assertTrue(
+            BookReaderEntryReadyPackageGate.isFormalPackage(
+                packageName = "com.shenghui.localvibe.fastspeech2formal",
+            )
+        )
+        assertTrue(
+            BookReaderEntryReadyPackageGate.shouldEnable(
+                packageName = "com.shenghui.localvibe.fastspeech2formal",
+                explicitFlag = true,
+            )
+        )
+    }
+
+    @Test
+    fun mainPackageCannotEnableReadyPathEvenWhenExplicitFlagIsTrue() {
+        assertFalse(
+            BookReaderEntryReadyPackageGate.isFormalPackage(
+                packageName = "com.shenghui.localvibe",
+            )
+        )
+        assertFalse(
+            BookReaderEntryReadyPackageGate.shouldEnable(
+                packageName = "com.shenghui.localvibe",
+                explicitFlag = true,
+            )
+        )
+    }
+
+    @Test
+    fun formalPackageStaysDisabledWhenExplicitFlagIsFalse() {
+        assertFalse(
+            BookReaderEntryReadyPackageGate.shouldEnable(
+                packageName = "com.shenghui.localvibe.fastspeech2formal",
+                explicitFlag = false,
+            )
+        )
+    }
+
     @Test
     fun routeInputBuildsLoadRequestFromBookFileWithoutLoadingParagraphs() {
         val input = BookReaderEntryReadyRouteInput(
@@ -118,7 +159,7 @@ class BookReaderEntryReadyRouteTest {
     }
 
     @Test
-    fun disabledRouteLoaderDoesNotLoadReadyState() {
+    fun disabledRouteLoaderDoesNotLoadReadyState() = runBlocking {
         var loadCalls = 0
 
         val state = BookReaderEntryReadyRouteLoader.loadIfEnabled(
@@ -135,7 +176,7 @@ class BookReaderEntryReadyRouteTest {
     }
 
     @Test
-    fun enabledRouteLoaderBuildsReadyStateFromInjectedLoader() {
+    fun enabledRouteLoaderBuildsReadyStateFromInjectedLoader() = runBlocking {
         val readyState = readyState()
 
         val state = BookReaderEntryReadyRouteLoader.loadIfEnabled(
@@ -157,7 +198,7 @@ class BookReaderEntryReadyRouteTest {
     }
 
     @Test
-    fun routeLoaderFailureFallsBackToFailedStateWithoutReadyPath() {
+    fun routeLoaderFailureFallsBackToFailedStateWithoutReadyPath() = runBlocking {
         val state = BookReaderEntryReadyRouteLoader.loadIfEnabled(
             enabled = true,
             input = input(),

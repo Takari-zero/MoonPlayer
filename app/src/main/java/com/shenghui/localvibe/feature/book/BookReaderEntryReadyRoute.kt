@@ -149,12 +149,27 @@ object BookReaderEntryReadyPath {
     }
 }
 
+object BookReaderEntryReadyPackageGate {
+    private const val FORMAL_PACKAGE_NAME = "com.shenghui.localvibe.fastspeech2formal"
+
+    fun isFormalPackage(packageName: String): Boolean {
+        return packageName == FORMAL_PACKAGE_NAME
+    }
+
+    fun shouldEnable(
+        packageName: String,
+        explicitFlag: Boolean,
+    ): Boolean {
+        return explicitFlag && isFormalPackage(packageName)
+    }
+}
+
 fun interface BookReaderEntryReadyRouteReadyStateLoader {
-    fun load(request: BookReaderEntryLoadRequest): Result<BookReaderEntryReadyState>
+    suspend fun load(request: BookReaderEntryLoadRequest): Result<BookReaderEntryReadyState>
 }
 
 object BookReaderEntryReadyRouteLoader {
-    fun loadIfEnabled(
+    suspend fun loadIfEnabled(
         enabled: Boolean,
         input: BookReaderEntryReadyRouteInput,
         loader: BookReaderEntryReadyRouteReadyStateLoader,
