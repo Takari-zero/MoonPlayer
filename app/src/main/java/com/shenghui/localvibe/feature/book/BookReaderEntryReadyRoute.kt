@@ -81,3 +81,40 @@ object BookReaderEntryReadyRouteHost {
         }
     }
 }
+
+sealed interface BookReaderEntryReadyRouteShadowPlan {
+    val shouldRunLoader: Boolean
+        get() = false
+
+    fun loadRequestOrNull(): BookReaderEntryLoadRequest? = null
+
+    data class Disabled(
+        val input: BookReaderEntryReadyRouteInput,
+    ) : BookReaderEntryReadyRouteShadowPlan
+
+    data class Enabled(
+        val input: BookReaderEntryReadyRouteInput,
+        val loadRequest: BookReaderEntryLoadRequest,
+    ) : BookReaderEntryReadyRouteShadowPlan {
+        override val shouldRunLoader: Boolean = true
+
+        override fun loadRequestOrNull(): BookReaderEntryLoadRequest = loadRequest
+    }
+}
+
+object BookReaderEntryReadyRouteShadow {
+    fun plan(
+        enabled: Boolean,
+        input: BookReaderEntryReadyRouteInput,
+    ): BookReaderEntryReadyRouteShadowPlan {
+        val loadRequest = input.toLoadRequest()
+        return if (enabled && loadRequest != null) {
+            BookReaderEntryReadyRouteShadowPlan.Enabled(
+                input = input,
+                loadRequest = loadRequest,
+            )
+        } else {
+            BookReaderEntryReadyRouteShadowPlan.Disabled(input)
+        }
+    }
+}

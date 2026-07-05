@@ -72,6 +72,36 @@ class BookReaderEntryReadyRouteTest {
         assertFalse(decision.exposesStableSnapshotAsReaderContent)
     }
 
+    @Test
+    fun disabledRouteShadowDoesNotCreateLoadRequest() {
+        val plan = BookReaderEntryReadyRouteShadow.plan(
+            enabled = false,
+            input = input(),
+        )
+
+        assertTrue(plan is BookReaderEntryReadyRouteShadowPlan.Disabled)
+        assertNull(plan.loadRequestOrNull())
+        assertFalse(plan.shouldRunLoader)
+    }
+
+    @Test
+    fun enabledRouteShadowCreatesReadOnlyLoadRequest() {
+        val plan = BookReaderEntryReadyRouteShadow.plan(
+            enabled = true,
+            input = BookReaderEntryReadyRouteInput(
+                bookFile = bookFile(),
+                initialParagraphIndex = 7,
+                speechRate = 1.5f,
+            ),
+        )
+
+        assertTrue(plan is BookReaderEntryReadyRouteShadowPlan.Enabled)
+        assertTrue(plan.shouldRunLoader)
+        assertEquals("file://demo.txt", plan.loadRequestOrNull()?.bookId)
+        assertEquals(7, plan.loadRequestOrNull()?.chapterStartIndex)
+        assertEquals(1.5f, plan.loadRequestOrNull()?.speechRate)
+    }
+
     private fun input(): BookReaderEntryReadyRouteInput {
         return BookReaderEntryReadyRouteInput(
             bookFile = bookFile(),

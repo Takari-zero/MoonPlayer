@@ -112,6 +112,9 @@ import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
 import com.shenghui.localvibe.feature.audio.AudioLibrarySection
 import com.shenghui.localvibe.feature.audio.AudioSortMode
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteInput
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadow
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadowPlan
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
 import com.shenghui.localvibe.feature.folder.FolderScreen
@@ -129,6 +132,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
+
+private const val ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW = false
+private const val BOOK_READER_ROUTE_SHADOW_TAG = "LV_BOOK_FORMAL"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -2518,11 +2524,34 @@ private fun LocalVibeApp() {
                     ?: selectedBookUri?.let { uri ->
                         allBookFiles.firstOrNull { it.uri == uri }
                     }
+                val initialBookParagraphIndex = resolvedBookFile?.let { file ->
+                    bookProgressMap[file.uri]?.paragraphIndex ?: 0
+                } ?: 0
+                val entryReadyRouteShadowPlan = BookReaderEntryReadyRouteShadow.plan(
+                    enabled = ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW,
+                    input = BookReaderEntryReadyRouteInput(
+                        bookFile = resolvedBookFile,
+                        initialParagraphIndex = initialBookParagraphIndex,
+                        speechRate = 1f,
+                    )
+                )
+                if (entryReadyRouteShadowPlan is BookReaderEntryReadyRouteShadowPlan.Enabled) {
+                    LaunchedEffect(entryReadyRouteShadowPlan.loadRequest) {
+                        val request = entryReadyRouteShadowPlan.loadRequest
+                        Log.d(
+                            BOOK_READER_ROUTE_SHADOW_TAG,
+                            "phase5b route shadow wiring enabled " +
+                                "bookId=${request.bookId} " +
+                                "bookTitle=${request.bookTitle} " +
+                                "routeInitialParagraphIndex=$initialBookParagraphIndex " +
+                                "chapterStartIndex=${request.chapterStartIndex} " +
+                                "speechRate=${request.speechRate}"
+                        )
+                    }
+                }
                 BookListenScreen(
                     bookFile = resolvedBookFile,
-                    initialParagraphIndex = resolvedBookFile?.let { file ->
-                        bookProgressMap[file.uri]?.paragraphIndex ?: 0
-                    } ?: 0,
+                    initialParagraphIndex = initialBookParagraphIndex,
                     onProgressChanged = { uri, paragraphIndex, totalParagraphs ->
                         val progress = PersistedBookProgress(
                             uri = uri,
