@@ -1,0 +1,133 @@
+package com.shenghui.localvibe.feature.book
+
+import com.shenghui.localvibe.core.scanner.LocalMediaFile
+import com.shenghui.localvibe.core.scanner.LocalMediaType
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryCanonicalTarget
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryLoadRequest
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryPlaybackSeed
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryProgressSnapshot
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyState
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntrySentence
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BookReaderEntryReadyRouteTest {
+    @Test
+    fun routeInputBuildsLoadRequestFromBookFileWithoutLoadingParagraphs() {
+        val input = BookReaderEntryReadyRouteInput(
+            bookFile = bookFile(),
+            initialParagraphIndex = 12,
+            speechRate = 1.25f,
+        )
+
+        val request = input.toLoadRequest()
+
+        assertEquals("file://demo.txt", request?.bookId)
+        assertEquals("Demo Book", request?.bookTitle)
+        assertEquals(12, request?.chapterStartIndex)
+        assertEquals(1.25f, request?.speechRate)
+    }
+
+    @Test
+    fun readyStateIsTheOnlyStateThatReachesReaderContentSlot() {
+        val readyState = readyState()
+        val decision = BookReaderEntryReadyRouteHost.resolveSlot(
+            BookReaderEntryReadyRouteState.Ready(
+                input = input(),
+                readyState = readyState,
+            )
+        )
+
+        assertTrue(decision is BookReaderEntryReadyRouteSlot.ReadyContent)
+        assertSame(readyState, decision.readyStateOrNull())
+        assertFalse(decision.exposesStableSnapshotAsReaderContent)
+    }
+
+    @Test
+    fun preparingStateDoesNotGenerateFakeReaderContent() {
+        val decision = BookReaderEntryReadyRouteHost.resolveSlot(
+            BookReaderEntryReadyRouteState.Preparing(input())
+        )
+
+        assertTrue(decision is BookReaderEntryReadyRouteSlot.Preparing)
+        assertNull(decision.readyStateOrNull())
+        assertFalse(decision.exposesStableSnapshotAsReaderContent)
+    }
+
+    @Test
+    fun failedStateDoesNotGenerateFakeReaderContent() {
+        val decision = BookReaderEntryReadyRouteHost.resolveSlot(
+            BookReaderEntryReadyRouteState.Failed(
+                input = input(),
+                message = "paragraphs unavailable",
+            )
+        )
+
+        assertTrue(decision is BookReaderEntryReadyRouteSlot.Failed)
+        assertNull(decision.readyStateOrNull())
+        assertFalse(decision.exposesStableSnapshotAsReaderContent)
+    }
+
+    private fun input(): BookReaderEntryReadyRouteInput {
+        return BookReaderEntryReadyRouteInput(
+            bookFile = bookFile(),
+            initialParagraphIndex = 0,
+        )
+    }
+
+    private fun bookFile(): LocalMediaFile {
+        return LocalMediaFile(
+            id = "book-1",
+            name = "Demo Book",
+            uri = "file://demo.txt",
+            type = LocalMediaType.BOOK,
+            extension = "txt",
+            size = 128L,
+            parentFolderName = "Books",
+        )
+    }
+
+    private fun readyState(): BookReaderEntryReadyState {
+        val sentence = BookReaderEntrySentence(
+            text = "第一句。",
+            paragraphIndex = 0,
+            sentenceIndex = 0,
+            chapterSentenceIndex = 0,
+        )
+        return BookReaderEntryReadyState(
+            bookId = "file://demo.txt",
+            bookTitle = "Demo Book",
+            paragraphs = listOf("第一句。"),
+            chapterTitle = "正文",
+            chapterSentences = listOf(sentence),
+            canonicalTarget = BookReaderEntryCanonicalTarget(
+                paragraphIndex = 0,
+                sentenceIndex = 0,
+                chapterSentenceIndex = 0,
+            ),
+            progressSnapshot = BookReaderEntryProgressSnapshot(
+                chapterSentenceIndex = 0,
+                totalChapterSentenceCount = 1,
+                progressValue = 0f,
+                progressMaxValue = 1f,
+                listenedTimeLabel = "00:00",
+                remainingTimeLabel = "00:01",
+            ),
+            lazyListInitialIndex = 1,
+            lazyListInitialOffset = 0,
+            playbackSeed = BookReaderEntryPlaybackSeed(
+                bookId = "file://demo.txt",
+                bookTitle = "Demo Book",
+                chapterIndex = 0,
+                chapterTitle = "正文",
+                paragraphIndex = 0,
+                sentenceIndex = 0,
+                sentenceText = "第一句。",
+            ),
+        )
+    }
+}
