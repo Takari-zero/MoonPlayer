@@ -114,6 +114,7 @@ import com.shenghui.localvibe.feature.book.playback.BookReaderAudioTrackSink
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackController
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackEvent
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackTarget
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyState
 import com.shenghui.localvibe.feature.book.playback.BookReaderRestoreCache
 import com.shenghui.localvibe.feature.book.playback.BookReaderRestoreCacheSource
 import com.shenghui.localvibe.feature.book.playback.BookReaderRestorePositionGate
@@ -142,6 +143,7 @@ private const val FORMAL_BOOK_PLAYBACK_DRY_RUN_TAG = "LV_BOOK_FORMAL_DRYRUN"
 fun BookListenScreen(
     bookFile: LocalMediaFile?,
     initialParagraphIndex: Int,
+    entryReadyState: BookReaderEntryReadyState? = null,
     onProgressChanged: (String, Int, Int) -> Unit,
     onBeforeSpeak: () -> Unit,
     onBack: () -> Unit,
@@ -150,6 +152,9 @@ fun BookListenScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val screenEnterAtMillis = remember(bookFile?.uri) { System.currentTimeMillis() }
+    val entryReadyConsumeBoundary = remember(entryReadyState) {
+        BookReaderEntryReadyConsumeBoundary.from(entryReadyState)
+    }
     val initialReadStateCache = remember(bookFile?.uri) {
         loadBookReadStateCache(context.applicationContext, bookFile?.uri)
             ?.let { state ->
