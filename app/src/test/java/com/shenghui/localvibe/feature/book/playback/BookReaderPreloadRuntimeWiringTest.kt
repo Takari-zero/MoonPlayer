@@ -305,6 +305,115 @@ class BookReaderPreloadRuntimeWiringTest {
         assertEquals(0, readCalls)
         assertTrue(result.results.isEmpty())
     }
+
+    @Test
+    fun formalStoreHitSelectsReadyReaderWithoutSyncPreload() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val preloadResult = runtime.preloadManager.preload(request())
+        assertTrue(preloadResult.isReady)
+        readCalls = 0
+
+        val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+            plan = BookReaderPreloadRuntimeWiring.plan(
+                enabled = true,
+                runtimeFactory = {
+                    error("click must not create a runtime or parse text")
+                },
+            ),
+            key = request().key,
+            readyStateStore = runtime.readyStateStore,
+        )
+
+        assertTrue(clickResult.clickPlan is BookReaderBookshelfClickPlan.OpenReadyReader)
+        assertEquals(runtime.readyStateStore.getReadyState(request().key), clickResult.readyState)
+        assertFalse(clickResult.syncPreloadStarted)
+        assertFalse(clickResult.txtReadTriggered)
+        assertEquals(0, readCalls)
+        val readyState = requireNotNull(clickResult.readyState)
+        assertEquals(readyState.canonicalTarget.paragraphIndex, readyState.playbackSeed.paragraphIndex)
+        assertEquals(readyState.canonicalTarget.sentenceIndex, readyState.playbackSeed.sentenceIndex)
+        assertEquals(readyState.canonicalTarget.chapterSentenceIndex, readyState.progressSnapshot.chapterSentenceIndex)
+    }
+
+    @Test
+    fun formalStoreMissFallsBackLegacyWithoutSyncParse() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+
+        val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+            plan = BookReaderPreloadRuntimeWiring.plan(
+                enabled = true,
+                runtimeFactory = {
+                    error("click must not create a runtime or parse text")
+                },
+            ),
+            key = request().key,
+            readyStateStore = runtime.readyStateStore,
+        )
+
+        assertTrue(clickResult.clickPlan is BookReaderBookshelfClickPlan.LegacyOpen)
+        assertEquals(null, clickResult.readyState)
+        assertFalse(clickResult.syncPreloadStarted)
+        assertFalse(clickResult.txtReadTriggered)
+        assertEquals(0, readCalls)
+    }
+
+    @Test
+    fun mainPackageDisabledPlanAlwaysUsesLegacyEvenIfStoreHasReadyState() {
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val preloadResult = runtime.preloadManager.preload(request())
+        assertTrue(preloadResult.isReady)
+
+        val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+            plan = BookReaderPreloadRuntimeWiring.plan(
+                enabled = false,
+                runtimeFactory = {
+                    error("disabled click must not create a runtime")
+                },
+            ),
+            key = request().key,
+            readyStateStore = runtime.readyStateStore,
+        )
+
+        assertTrue(clickResult.clickPlan is BookReaderBookshelfClickPlan.LegacyOpen)
+        assertEquals(null, clickResult.readyState)
+        assertFalse(clickResult.syncPreloadStarted)
+        assertFalse(clickResult.txtReadTriggered)
+    }
+
     private fun request(): BookDocumentPreloadRequest {
         return BookDocumentPreloadRequest(
             key = BookDocumentCacheKey("content://book/demo.txt"),

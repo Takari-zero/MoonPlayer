@@ -157,6 +157,10 @@ fun BookListenScreen(
     }
     val entryReadyFirstFrame = entryReadyConsumeBoundary.firstFrameOrNull()
     val usesEntryReadyState = entryReadyConsumeBoundary.usesReadyState
+    val entryReadyScreenPlan = entryReadyConsumeBoundary.screenPlan()
+    val entryReadyInteractionState = remember(entryReadyState) {
+        BookReaderEntryReadyInteractionState()
+    }
     val initialReadStateCache = remember(bookFile?.uri, usesEntryReadyState) {
         if (usesEntryReadyState) return@remember null
         loadBookReadStateCache(context.applicationContext, bookFile?.uri)
@@ -317,6 +321,10 @@ fun BookListenScreen(
 
     LaunchedEffect(entryReadyState) {
         val firstFrame = entryReadyFirstFrame ?: return@LaunchedEffect
+        val firstFrameEqualsPlayTarget =
+            firstFrame.firstFrameTarget.paragraphIndex == firstFrame.playbackSeed.paragraphIndex &&
+                firstFrame.firstFrameTarget.sentenceIndex == firstFrame.playbackSeed.sentenceIndex &&
+                firstFrame.firstFrameTarget.chapterSentenceIndex == firstFrame.progressSnapshot.chapterSentenceIndex
         Log.d(
             FORMAL_BOOK_PLAYBACK_TAG,
             "phase5b formal ready path BookListenScreen entryReadyState non-null " +
@@ -325,6 +333,14 @@ fun BookListenScreen(
                 "${firstFrame.firstFrameTarget.chapterSentenceIndex} " +
                 "playback seed target=${firstFrame.playbackSeed.paragraphIndex}/" +
                 "${firstFrame.playbackSeed.sentenceIndex}"
+        )
+        Log.d(
+            FORMAL_BOOK_PLAYBACK_TAG,
+            "phase5c ready screen path selected entryReadyState non-null=true " +
+                "legacyRestoreLoadSkipped=${entryReadyScreenPlan.skipLegacyRestoreLoad} " +
+                "stableSnapshotSkipped=${entryReadyScreenPlan.skipStableSnapshot} " +
+                "restorePromptReachable=${!entryReadyScreenPlan.skipRestorePrompt} " +
+                "firstFrameEqualsPlayTarget=$firstFrameEqualsPlayTarget"
         )
     }
 
@@ -1521,7 +1537,25 @@ fun BookListenScreen(
 
     requestSpeakCurrent = { speakCurrentSentence() }
 
-    LaunchedEffect(bookFile?.uri) {
+    LaunchedEffect(bookFile?.uri, usesEntryReadyState) {
+        if (usesEntryReadyState) {
+            val firstFrame = entryReadyFirstFrame
+            if (firstFrame != null) {
+                paragraphs = firstFrame.paragraphs
+                currentParagraphIndex = firstFrame.firstFrameTarget.paragraphIndex
+                currentSentenceIndexInParagraph = firstFrame.firstFrameTarget.sentenceIndex
+                currentReadingTargetName = BookReadingTarget.SENTENCE.name
+            }
+            isLoading = false
+            loadError = null
+            hasSettledInitialReaderPosition = true
+            hasCompletedSnapshotToRealHandoff = true
+            Log.d(
+                FORMAL_BOOK_PLAYBACK_TAG,
+                "phase5c ready screen path legacyRestoreLoadSkipped=true restorePromptReachable=false"
+            )
+            return@LaunchedEffect
+        }
         if (bookFile == null) {
             isLoading = false
             loadError = "未选择小说文件"
@@ -1700,7 +1734,8 @@ fun BookListenScreen(
             )
 
             when {
-                instantEntryRenderMode == BookReaderRestorePositionGate.INITIAL_RENDER_STABLE_UI_SNAPSHOT &&
+                !entryReadyScreenPlan.skipStableSnapshot &&
+                    instantEntryRenderMode == BookReaderRestorePositionGate.INITIAL_RENDER_STABLE_UI_SNAPSHOT &&
                     shouldShowCachedReaderWhileLoading() &&
                     cachedReadState?.cachedVisibleText.orEmpty().isNotEmpty() -> {
                     val rawCachedState = cachedReadState
@@ -1900,7 +1935,7 @@ fun BookListenScreen(
                     )
                 }
 
-                isLoading -> {
+                isLoading && !entryReadyScreenPlan.skipRestorePrompt -> {
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -1947,7 +1982,7 @@ fun BookListenScreen(
                         currentChapter == null -> "开头"
                         else -> currentChapter.title
                     }
-                    val chapterSentences = remember(
+                    val legacyChapterSentences = remember(
                         paragraphs,
                         chapterStartIndex,
                         chapterEndExclusive,
@@ -1960,6 +1995,7 @@ fun BookListenScreen(
                             chapterTitle = currentChapter?.title
                         )
                     }
+                    val chapterSentences = legacyChapterSentences
                     val currentChapterSentenceIndex = chapterSentences
                         .indexOfFirst {
                             it.paragraphIndex == currentParagraphIndex &&
@@ -1974,6 +2010,38 @@ fun BookListenScreen(
                         }
                         .let { fallbackIndex -> fallbackIndex.coerceAtLeast(0) }
                         .coerceAtMost((chapterSentences.size - 1).coerceAtLeast(0))
+                    val readyInitialLocalTargetIndex = remember(entryReadyState, currentChapter?.title, chapterSentences.size) {
+                        currentChapterSentenceIndex
+                    }
+                    val readyUiListPlan = entryReadyFirstFrame?.uiListPlan(
+                        readerListSize = chapterSentences.size,
+                        targetLocalIndex = readyInitialLocalTargetIndex,
+                        interactionState = entryReadyInteractionState,
+                    )
+                    LaunchedEffect(readyUiListPlan, currentChapter?.title) {
+                        val plan = readyUiListPlan ?: return@LaunchedEffect
+                        Log.d(
+                            FORMAL_BOOK_PLAYBACK_TAG,
+                            "phase5c ready screen path reader list plan " +
+                                "readyListSize=${plan.readerListSize} " +
+                                "totalReadySentenceCount=${plan.totalReadySentenceCount} " +
+                                "targetChapterIndex=${currentChapterIndexFor(currentParagraphIndex)} " +
+                                "targetSentenceGlobalIndex=${plan.targetGlobalIndex} " +
+                                "targetSentenceLocalIndex=${plan.targetLocalIndex} " +
+                                "firstFrameEqualsPlayTarget=${plan.firstFrameEqualsPlayTarget} " +
+                                "readyWindowBuildSkippedFullList=${!plan.exposesFullReadyList}"
+                        )
+                    }
+                    LaunchedEffect(readyUiListPlan?.shouldApplyInitialSeed) {
+                        if (readyUiListPlan?.shouldApplyInitialSeed == true) {
+                            entryReadyInteractionState.markInitialSeedConsumed()
+                            Log.d(
+                                FORMAL_BOOK_PLAYBACK_TAG,
+                                "phase5c ready initial target consumed " +
+                                    "targetSentenceLocalIndex=${readyUiListPlan.targetLocalIndex}"
+                            )
+                        }
+                    }
                     val listenedTimeLabel = estimateSentenceTimeLabel(
                         sentences = chapterSentences,
                         fromIndex = 0,
@@ -2026,6 +2094,14 @@ fun BookListenScreen(
                         visibleSentences: List<ReaderSentence>,
                         reason: String
                     ) {
+                        if (!entryReadyScreenPlan.allowLegacyViewportCacheWrite) {
+                            Log.d(
+                                FORMAL_BOOK_PLAYBACK_TAG,
+                                "phase5c ready screen path legacy viewport cache skipped reason=$reason " +
+                                    "firstVisible=$firstVisibleItemIndex offset=$firstVisibleItemScrollOffset"
+                            )
+                            return
+                        }
                         val snapshotSentences = visibleSentences
                             .filter { it.text.isNotBlank() }
                             .take(32)
@@ -2062,21 +2138,23 @@ fun BookListenScreen(
                                 "listened=${state.cachedListenedTimeLabel} remaining=${state.cachedRemainingTimeLabel}"
                         )
                     }
-                    LaunchedEffect(
-                        bookFile?.uri,
-                        chapterTitle,
-                        currentParagraphIndex,
-                        currentSentenceIndexInParagraph,
-                        currentChapterSentenceIndex,
-                        chapterSentences
-                    ) {
-                        val firstSentenceIndex = (currentChapterSentenceIndex - 3).coerceAtLeast(0)
-                        saveViewportReadState(
-                            firstVisibleItemIndex = if (firstSentenceIndex == 0) 0 else firstSentenceIndex + 1,
-                            firstVisibleItemScrollOffset = 0,
-                            visibleSentences = chapterSentences.drop(firstSentenceIndex).take(24),
-                            reason = "target_neighborhood"
-                        )
+                    if (!usesEntryReadyState) {
+                        LaunchedEffect(
+                            bookFile?.uri,
+                            chapterTitle,
+                            currentParagraphIndex,
+                            currentSentenceIndexInParagraph,
+                            currentChapterSentenceIndex,
+                            chapterSentences
+                        ) {
+                            val firstSentenceIndex = (currentChapterSentenceIndex - 3).coerceAtLeast(0)
+                            saveViewportReadState(
+                                firstVisibleItemIndex = if (firstSentenceIndex == 0) 0 else firstSentenceIndex + 1,
+                                firstVisibleItemScrollOffset = 0,
+                                visibleSentences = chapterSentences.drop(firstSentenceIndex).take(24),
+                                reason = "target_neighborhood"
+                            )
+                        }
                     }
                     val savedProgressTimeState = BookReaderRestorePositionGate.resolveProgressTimeForSnapshotOrPendingHandoff(
                         savedProgressValue = cachedReadState?.cachedProgressValue?.takeIf { it >= 0f },
@@ -2086,7 +2164,7 @@ fun BookListenScreen(
                         chapterSentenceIndex = cachedReadState?.lastChapterSentenceIndex,
                         totalChapterSentenceCount = cachedReadState?.cachedChapterSentenceCount,
                     )
-                    val activeSavedProgressTimeState = if (pendingSnapshotHandoff || !hasSettledInitialReaderPosition) {
+                    val activeSavedProgressTimeState = if (!usesEntryReadyState && (pendingSnapshotHandoff || !hasSettledInitialReaderPosition)) {
                         savedProgressTimeState
                     } else {
                         null
@@ -2188,23 +2266,62 @@ fun BookListenScreen(
                             )
                         },
                         onRetryTts = { restartTtsCheck() },
-                        initialSentenceListIndexOverride = entryReadyFirstFrame?.lazyListInitialIndex
-                            ?: snapshotMappedRealIndex
-                            ?: cachedReadState
-                                ?.viewportFirstVisibleItemIndex
-                                ?.takeIf { hasSavedRestorePosition && !hasSettledInitialReaderPosition && it >= 0 },
-                        initialSentenceListScrollOffsetOverride = entryReadyFirstFrame?.lazyListInitialOffset
-                            ?: cachedReadState
+                        initialSentenceListIndexOverride = if (readyUiListPlan?.shouldApplyInitialSeed == true) {
+                            readyUiListPlan.targetLocalIndex.plus(1)
+                        } else {
+                            snapshotMappedRealIndex
+                                ?: cachedReadState
+                                    ?.viewportFirstVisibleItemIndex
+                                    ?.takeIf { hasSavedRestorePosition && !hasSettledInitialReaderPosition && it >= 0 }
+                        },
+                        initialSentenceListScrollOffsetOverride = if (readyUiListPlan?.shouldApplyInitialSeed == true) {
+                            entryReadyFirstFrame?.lazyListInitialOffset ?: 0
+                        } else {
+                            cachedReadState
                                 ?.viewportFirstVisibleItemScrollOffset
                                 ?.takeIf { hasSavedRestorePosition && !hasSettledInitialReaderPosition }
-                            ?: 0,
+                                ?: 0
+                        },
                         onViewportSnapshotChanged = { firstVisibleItemIndex, firstVisibleItemScrollOffset, visibleSentences ->
-                            saveViewportReadState(
-                                firstVisibleItemIndex = firstVisibleItemIndex,
-                                firstVisibleItemScrollOffset = firstVisibleItemScrollOffset,
-                                visibleSentences = visibleSentences,
-                                reason = "visible_window"
-                            )
+                            if (usesEntryReadyState) {
+                                visibleSentences.firstOrNull()?.let { firstVisible ->
+                                    if (!entryReadyInteractionState.manualViewportTakeover) {
+                                        entryReadyInteractionState.markManualViewportTakeover()
+                                        Log.d(
+                                            FORMAL_BOOK_PLAYBACK_TAG,
+                                            "phase5c ready manual viewport takeover"
+                                        )
+                                        Log.d(
+                                            FORMAL_BOOK_PLAYBACK_TAG,
+                                            "phase5c ready skip seed reapply after manual"
+                                        )
+                                    }
+                                    currentParagraphIndex = firstVisible.paragraphIndex.coerceIn(
+                                        0,
+                                        (paragraphs.size - 1).coerceAtLeast(0)
+                                    )
+                                    currentSentenceIndexInParagraph = firstVisible.sentenceIndexInParagraph.coerceAtLeast(0)
+                                    currentReadingTargetName = BookReadingTarget.SENTENCE.name
+                                    Log.d(
+                                        FORMAL_BOOK_PLAYBACK_TAG,
+                                        "phase5c ready screen path manual viewport target updated " +
+                                            "paragraphIndex=$currentParagraphIndex " +
+                                            "sentenceIndex=$currentSentenceIndexInParagraph " +
+                                            "chapterSentenceIndex=${firstVisible.chapterSentenceIndex}"
+                                    )
+                                }
+                            } else {
+                                saveViewportReadState(
+                                    firstVisibleItemIndex = firstVisibleItemIndex,
+                                    firstVisibleItemScrollOffset = firstVisibleItemScrollOffset,
+                                    visibleSentences = visibleSentences,
+                                    reason = "visible_window"
+                                )
+                            }
+                        },
+                        logRestoreScrollSkipped = readyUiListPlan?.shouldLogRestoreScrollSkipped ?: true,
+                        onRestoreScrollSkippedLogged = {
+                            entryReadyInteractionState.markRestoreScrollSkipLogged()
                         },
                         onPositionSettled = {
                             if (!hasSettledInitialReaderPosition) {
@@ -2237,6 +2354,7 @@ fun BookListenScreen(
                         },
                         instantEntryRenderMode = "real_content",
                         restoreKey = "real#$restorePositionKey#$currentChapterSentenceIndex",
+                        allowInitialRestoreScroll = entryReadyScreenPlan.allowInitialRestoreScroll,
                         snapshotHandoffPending = pendingSnapshotHandoff,
                         snapshotFirstVisibleParagraphIndex = snapshotFirstVisibleParagraphIndex,
                         snapshotFirstVisibleSentenceIndex = snapshotFirstVisibleSentenceIndex,
@@ -2660,9 +2778,12 @@ private fun BookListenContent(
     initialSentenceListScrollOffsetOverride: Int = 0,
     onViewportSnapshotChanged: (Int, Int, List<ReaderSentence>) -> Unit = { _, _, _ -> },
     onPositionSettled: () -> Unit = {},
+    logRestoreScrollSkipped: Boolean = true,
+    onRestoreScrollSkippedLogged: () -> Unit = {},
     showPositioningOverlay: Boolean = false,
     instantEntryRenderMode: String = "real_content",
     restoreKey: String = "",
+    allowInitialRestoreScroll: Boolean = true,
     snapshotHandoffPending: Boolean = false,
     snapshotFirstVisibleParagraphIndex: Int? = null,
     snapshotFirstVisibleSentenceIndex: Int? = null,
@@ -2748,6 +2869,17 @@ private fun BookListenContent(
             FORMAL_BOOK_PLAYBACK_TAG,
             "perf restore_initial_state index=$initialSentenceListIndex offset=$initialSentenceListScrollOffset renderMode=$instantEntryRenderMode restoreKey=$restoreKey"
         )
+        if (!allowInitialRestoreScroll) {
+            if (logRestoreScrollSkipped) {
+                Log.d(
+                    FORMAL_BOOK_PLAYBACK_TAG,
+                    "phase5c ready restore scroll skipped once allowInitialRestoreScroll=false " +
+                        "index=$initialSentenceListIndex offset=$initialSentenceListScrollOffset"
+                )
+                onRestoreScrollSkippedLogged()
+            }
+            return@LaunchedEffect
+        }
         Log.d(FORMAL_BOOK_PLAYBACK_TAG, "restore position scroll start index=$initialSentenceListIndex offset=$initialSentenceListScrollOffset")
         val alignStartedAtMillis = System.currentTimeMillis()
         if (snapshotHandoffPending) {

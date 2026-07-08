@@ -20,6 +20,11 @@ class BookReaderEntryReadyConsumeBoundaryTest {
         assertTrue(boundary is BookReaderEntryReadyConsumeBoundary.Legacy)
         assertFalse(boundary.usesReadyState)
         assertNull(boundary.firstFrameOrNull())
+        assertFalse(boundary.screenPlan().skipLegacyRestoreLoad)
+        assertFalse(boundary.screenPlan().skipStableSnapshot)
+        assertFalse(boundary.screenPlan().skipRestorePrompt)
+        assertTrue(boundary.screenPlan().allowLegacyViewportCacheWrite)
+        assertTrue(boundary.screenPlan().allowInitialRestoreScroll)
     }
 
     @Test
@@ -52,6 +57,143 @@ class BookReaderEntryReadyConsumeBoundaryTest {
         assertEquals(firstFrame.firstFrameTarget.chapterSentenceIndex, firstFrame.progressSnapshot.chapterSentenceIndex)
         assertEquals(firstFrame.firstFrameTarget.chapterSentenceIndex + 1, firstFrame.lazyListInitialIndex)
         assertEquals(24, firstFrame.lazyListInitialOffset)
+    }
+
+    @Test
+    fun readyStateSelectsReadyScreenPlanWithoutLegacyRestoreOrSnapshot() {
+        val boundary = BookReaderEntryReadyConsumeBoundary.from(readyState())
+        val plan = boundary.screenPlan()
+
+        assertTrue(boundary.usesReadyState)
+        assertTrue(plan.skipLegacyRestoreLoad)
+        assertTrue(plan.skipStableSnapshot)
+        assertTrue(plan.skipRestorePrompt)
+        assertFalse(plan.allowLegacyViewportCacheWrite)
+        assertFalse(plan.allowInitialRestoreScroll)
+    }
+
+    @Test
+    fun readyStateMakesRestorePromptUnreachableAndInitialLoadingFalse() {
+        val plan = BookReaderEntryReadyConsumeBoundary.from(readyState()).screenPlan()
+
+        val initialLoading = false
+        val restorePromptReachable = initialLoading && !plan.skipRestorePrompt
+
+        assertFalse(restorePromptReachable)
+    }
+
+    @Test
+    fun readyStateManualScrollSettleDoesNotRequestRestoreScroll() {
+        val plan = BookReaderEntryReadyConsumeBoundary.from(readyState()).screenPlan()
+
+        assertFalse(plan.allowInitialRestoreScroll)
+    }
+
+    @Test
+    fun readyStateHighlightTargetUsesPlaybackTargetSource() {
+        val firstFrame = requireNotNull(
+            BookReaderEntryReadyConsumeBoundary.from(readyState()).firstFrameOrNull()
+        )
+        val highlightedSentence = firstFrame.chapterSentences[firstFrame.firstFrameTarget.chapterSentenceIndex]
+
+        assertEquals(firstFrame.playbackSeed.paragraphIndex, highlightedSentence.paragraphIndex)
+        assertEquals(firstFrame.playbackSeed.sentenceIndex, highlightedSentence.sentenceIndex)
+    }
+
+    @Test
+    fun readyStateGlobalChapterSentenceIndexMapsToListIndex() {
+        val firstFrame = requireNotNull(
+            BookReaderEntryReadyConsumeBoundary.from(readyState()).firstFrameOrNull()
+        )
+
+        assertEquals(
+            firstFrame.firstFrameTarget.chapterSentenceIndex,
+            firstFrame.chapterSentences[firstFrame.firstFrameTarget.chapterSentenceIndex].chapterSentenceIndex
+        )
+    }
+
+    @Test
+    fun readyStateWithLargeSentenceSetDoesNotExposeFullListToReaderUiPlan() {
+        val firstFrame = requireNotNull(
+            BookReaderEntryReadyConsumeBoundary.from(largeReadyState()).firstFrameOrNull()
+        )
+
+        val plan = firstFrame.uiListPlan(
+            readerListSize = 120,
+            targetLocalIndex = 42,
+        )
+
+        assertEquals(1_000, plan.totalReadySentenceCount)
+        assertEquals(120, plan.readerListSize)
+        assertEquals(500, plan.targetGlobalIndex)
+        assertEquals(42, plan.targetLocalIndex)
+        assertFalse(plan.exposesFullReadyList)
+        assertTrue(plan.firstFrameEqualsPlayTarget)
+    }
+
+    @Test
+    fun readyStateLocalTargetIndexIsClampedToReaderList() {
+        val firstFrame = requireNotNull(
+            BookReaderEntryReadyConsumeBoundary.from(largeReadyState()).firstFrameOrNull()
+        )
+
+        val plan = firstFrame.uiListPlan(
+            readerListSize = 12,
+            targetLocalIndex = 500,
+        )
+
+        assertEquals(11, plan.targetLocalIndex)
+        assertFalse(plan.exposesFullReadyList)
+    }
+
+    @Test
+    fun readyInitialSeedIsNotReappliedAfterManualViewportTakeover() {
+        val firstFrame = requireNotNull(
+            BookReaderEntryReadyConsumeBoundary.from(largeReadyState()).firstFrameOrNull()
+        )
+        val state = BookReaderEntryReadyInteractionState()
+
+        val initialPlan = firstFrame.uiListPlan(
+            readerListSize = 120,
+            targetLocalIndex = 42,
+            interactionState = state,
+        )
+        state.markInitialSeedConsumed()
+        state.markManualViewportTakeover()
+        val manualPlan = firstFrame.uiListPlan(
+            readerListSize = 120,
+            targetLocalIndex = 99,
+            interactionState = state,
+        )
+
+        assertTrue(initialPlan.shouldApplyInitialSeed)
+        assertEquals(42, initialPlan.targetLocalIndex)
+        assertFalse(manualPlan.shouldApplyInitialSeed)
+        assertEquals(99, manualPlan.targetLocalIndex)
+        assertFalse(manualPlan.shouldLogRestoreScrollSkipped)
+    }
+
+    @Test
+    fun readyRestoreScrollSkippedLogIsOneShot() {
+        val firstFrame = requireNotNull(
+            BookReaderEntryReadyConsumeBoundary.from(largeReadyState()).firstFrameOrNull()
+        )
+        val state = BookReaderEntryReadyInteractionState()
+
+        val firstPlan = firstFrame.uiListPlan(
+            readerListSize = 120,
+            targetLocalIndex = 42,
+            interactionState = state,
+        )
+        state.markRestoreScrollSkipLogged()
+        val repeatedPlan = firstFrame.uiListPlan(
+            readerListSize = 120,
+            targetLocalIndex = 43,
+            interactionState = state,
+        )
+
+        assertTrue(firstPlan.shouldLogRestoreScrollSkipped)
+        assertFalse(repeatedPlan.shouldLogRestoreScrollSkipped)
     }
 
     private fun readyState(): BookReaderEntryReadyState {
@@ -98,6 +240,48 @@ class BookReaderEntryReadyConsumeBoundaryTest {
                 paragraphIndex = 1,
                 sentenceIndex = 0,
                 sentenceText = "第二句。",
+            ),
+        )
+    }
+
+    private fun largeReadyState(): BookReaderEntryReadyState {
+        val sentences = (0 until 1_000).map { index ->
+            BookReaderEntrySentence(
+                text = "Sentence $index.",
+                paragraphIndex = index,
+                sentenceIndex = 0,
+                chapterSentenceIndex = index,
+            )
+        }
+        return BookReaderEntryReadyState(
+            bookId = "file://large.txt",
+            bookTitle = "Large Book",
+            paragraphs = sentences.map { it.text },
+            chapterTitle = "Chapter",
+            chapterSentences = sentences,
+            canonicalTarget = BookReaderEntryCanonicalTarget(
+                paragraphIndex = 500,
+                sentenceIndex = 0,
+                chapterSentenceIndex = 500,
+            ),
+            progressSnapshot = BookReaderEntryProgressSnapshot(
+                chapterSentenceIndex = 500,
+                totalChapterSentenceCount = 1_000,
+                progressValue = 500f,
+                progressMaxValue = 999f,
+                listenedTimeLabel = "10:00",
+                remainingTimeLabel = "10:00",
+            ),
+            lazyListInitialIndex = 501,
+            lazyListInitialOffset = 0,
+            playbackSeed = BookReaderEntryPlaybackSeed(
+                bookId = "file://large.txt",
+                bookTitle = "Large Book",
+                chapterIndex = 0,
+                chapterTitle = "Chapter",
+                paragraphIndex = 500,
+                sentenceIndex = 0,
+                sentenceText = "Sentence 500.",
             ),
         )
     }

@@ -127,6 +127,8 @@ import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiri
 import com.shenghui.localvibe.feature.book.playback.BookReaderBookshelfPreloadCandidate
 import com.shenghui.localvibe.feature.book.playback.BookDocumentPreloadRequest
 import com.shenghui.localvibe.feature.book.playback.BookDocumentCacheKey
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyState
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateStore
 import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWiringAdapter
 import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeFactory
 import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiring
@@ -168,6 +170,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalVibeApp() {
     val context = LocalContext.current
+    val bookshelfReaderReadyStateStore = remember { BookReaderEntryReadyStateStore() }
     val bookshelfReaderPreloadObserveDecision = remember(BuildConfig.APPLICATION_ID) {
         BookReaderPreloadRuntimeWiring.observeDecision(
             packageName = BuildConfig.APPLICATION_ID,
@@ -175,11 +178,18 @@ private fun LocalVibeApp() {
         )
     }
     @Suppress("UNUSED_VARIABLE")
-    val bookshelfReaderPreloadWiringPlan = remember(context, bookshelfReaderPreloadObserveDecision.preloadEnabled) {
+    val bookshelfReaderPreloadWiringPlan = remember(
+        context,
+        bookshelfReaderReadyStateStore,
+        bookshelfReaderPreloadObserveDecision.preloadEnabled,
+    ) {
         BookReaderPreloadRuntimeWiring.plan(
             enabled = bookshelfReaderPreloadObserveDecision.preloadEnabled,
             runtimeFactory = {
-                BookReaderPreloadRuntimeFactory.fromContext(context.applicationContext)
+                BookReaderPreloadRuntimeFactory.fromContext(
+                    context = context.applicationContext,
+                    readyStateStoreFactory = { bookshelfReaderReadyStateStore },
+                )
             },
         )
     }
@@ -245,6 +255,7 @@ private fun LocalVibeApp() {
     var selectedVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAudioUri by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedBookUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedBookEntryReadyState by remember { mutableStateOf<BookReaderEntryReadyState?>(null) }
     var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
     var recentVideoUri by remember { mutableStateOf<String?>(null) }
     var recentAudioUri by remember { mutableStateOf<String?>(null) }
@@ -2636,8 +2647,32 @@ private fun LocalVibeApp() {
                             permanentlyDeleteMedia(files)
                         },
                         onOpenBook = { file ->
+                            val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+                                plan = bookshelfReaderPreloadWiringPlan,
+                                key = BookDocumentCacheKey(file.normalizedBookKey()),
+                                readyStateStore = bookshelfReaderReadyStateStore,
+                            )
                             selectedMediaFile = file
                             selectedBookUri = file.uri
+                            selectedBookEntryReadyState = clickResult.readyState
+                            if (clickResult.readyState != null) {
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c click readyState store hit " +
+                                        "bookId=${clickResult.readyState.bookId}"
+                                )
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c navigate with stored readyState " +
+                                        "bookId=${clickResult.readyState.bookId}"
+                                )
+                            } else {
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c click readyState store miss legacy fallback " +
+                                        "bookId=${file.normalizedBookKey()}"
+                                )
+                            }
                             navController.navigate(LocalVibeRoute.BookListen)
                         },
                         modifier = contentModifier
@@ -2661,6 +2696,17 @@ private fun LocalVibeApp() {
                     initialParagraphIndex = initialBookParagraphIndex,
                     speechRate = 1f,
                 )
+                val storedBookEntryReadyState = selectedBookEntryReadyState
+                    ?.takeIf { readyState ->
+                        resolvedBookFile?.normalizedBookKey() == readyState.bookId
+                    }
+                if (storedBookEntryReadyState != null) {
+                    Log.d(
+                        BOOK_READER_ROUTE_SHADOW_TAG,
+                        "phase5c route received stored readyState " +
+                            "bookId=${storedBookEntryReadyState.bookId}"
+                    )
+                }
                 val isFormalBookReaderPackage = BookReaderEntryReadyPackageGate.isFormalPackage(
                     packageName = BuildConfig.APPLICATION_ID,
                 )
@@ -2702,7 +2748,8 @@ private fun LocalVibeApp() {
                             "paragraphIndex=$initialBookParagraphIndex"
                     )
                 }
-                if (isBookReaderReadyPathEnabled) {
+                val shouldLoadReadyStateInRoute = false
+                if (isBookReaderReadyPathEnabled && shouldLoadReadyStateInRoute) {
                     LaunchedEffect(resolvedBookFile?.uri, initialBookParagraphIndex) {
                         entryReadyRouteState = BookReaderEntryReadyRouteState.Preparing(entryReadyRouteInput)
                         val loadedState = withContext(Dispatchers.IO) {
@@ -2762,12 +2809,17 @@ private fun LocalVibeApp() {
                         }
                     }
                 }
+                val effectiveEntryReadyRouteState = storedBookEntryReadyState?.let { readyState ->
+                    BookReaderEntryReadyRouteState.Ready(
+                        input = entryReadyRouteInput,
+                        readyState = readyState,
+                    )
+                } ?: entryReadyRouteState
                 val entryReadyPathPlan = BookReaderEntryReadyPath.plan(
                     enabled = isBookReaderReadyPathEnabled,
-                    routeState = entryReadyRouteState,
+                    routeState = effectiveEntryReadyRouteState,
                 )
-                val shouldWaitForFormalReadyState = isBookReaderReadyPathEnabled &&
-                    (entryReadyRouteState == null || entryReadyRouteState is BookReaderEntryReadyRouteState.Preparing)
+                val shouldWaitForFormalReadyState = false
                 if (shouldWaitForFormalReadyState) {
                     Box(
                         modifier = Modifier

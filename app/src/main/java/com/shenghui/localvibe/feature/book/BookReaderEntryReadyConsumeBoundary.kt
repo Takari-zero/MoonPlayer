@@ -14,6 +14,8 @@ sealed interface BookReaderEntryReadyConsumeBoundary {
 
     fun firstFrameOrNull(): BookReaderEntryReadyFirstFrame? = null
 
+    fun screenPlan(): BookReaderEntryReadyScreenPlan = BookReaderEntryReadyScreenPlan.Legacy
+
     data object Legacy : BookReaderEntryReadyConsumeBoundary
 
     data class Ready(
@@ -25,6 +27,8 @@ sealed interface BookReaderEntryReadyConsumeBoundary {
         override fun readyStateOrNull(): BookReaderEntryReadyState = readyState
 
         override fun firstFrameOrNull(): BookReaderEntryReadyFirstFrame = firstFrame
+
+        override fun screenPlan(): BookReaderEntryReadyScreenPlan = BookReaderEntryReadyScreenPlan.Ready
     }
 
     companion object {
@@ -41,6 +45,30 @@ sealed interface BookReaderEntryReadyConsumeBoundary {
     }
 }
 
+sealed interface BookReaderEntryReadyScreenPlan {
+    val skipLegacyRestoreLoad: Boolean
+    val skipStableSnapshot: Boolean
+    val skipRestorePrompt: Boolean
+    val allowLegacyViewportCacheWrite: Boolean
+    val allowInitialRestoreScroll: Boolean
+
+    data object Legacy : BookReaderEntryReadyScreenPlan {
+        override val skipLegacyRestoreLoad: Boolean = false
+        override val skipStableSnapshot: Boolean = false
+        override val skipRestorePrompt: Boolean = false
+        override val allowLegacyViewportCacheWrite: Boolean = true
+        override val allowInitialRestoreScroll: Boolean = true
+    }
+
+    data object Ready : BookReaderEntryReadyScreenPlan {
+        override val skipLegacyRestoreLoad: Boolean = true
+        override val skipStableSnapshot: Boolean = true
+        override val skipRestorePrompt: Boolean = true
+        override val allowLegacyViewportCacheWrite: Boolean = false
+        override val allowInitialRestoreScroll: Boolean = false
+    }
+}
+
 data class BookReaderEntryReadyFirstFrame(
     val paragraphs: List<String>,
     val chapterSentences: List<BookReaderEntrySentence>,
@@ -50,6 +78,31 @@ data class BookReaderEntryReadyFirstFrame(
     val lazyListInitialOffset: Int,
     val playbackSeed: BookReaderEntryPlaybackSeed,
 ) {
+    fun uiListPlan(
+        readerListSize: Int,
+        targetLocalIndex: Int,
+        interactionState: BookReaderEntryReadyInteractionState? = null,
+    ): BookReaderEntryReadyUiListPlan {
+        val safeReaderListSize = readerListSize.coerceAtLeast(0)
+        val safeLocalIndex = if (safeReaderListSize == 0) {
+            0
+        } else {
+            targetLocalIndex.coerceIn(0, safeReaderListSize - 1)
+        }
+        return BookReaderEntryReadyUiListPlan(
+            totalReadySentenceCount = chapterSentences.size,
+            readerListSize = safeReaderListSize,
+            targetGlobalIndex = firstFrameTarget.chapterSentenceIndex,
+            targetLocalIndex = safeLocalIndex,
+            exposesFullReadyList = safeReaderListSize == chapterSentences.size,
+            firstFrameEqualsPlayTarget = firstFrameTarget.paragraphIndex == playbackSeed.paragraphIndex &&
+                firstFrameTarget.sentenceIndex == playbackSeed.sentenceIndex &&
+                firstFrameTarget.chapterSentenceIndex == progressSnapshot.chapterSentenceIndex,
+            shouldApplyInitialSeed = interactionState?.shouldApplyInitialSeed ?: true,
+            shouldLogRestoreScrollSkipped = interactionState?.shouldLogRestoreScrollSkipped ?: true,
+        )
+    }
+
     companion object {
         fun from(readyState: BookReaderEntryReadyState): BookReaderEntryReadyFirstFrame {
             return BookReaderEntryReadyFirstFrame(
@@ -62,5 +115,45 @@ data class BookReaderEntryReadyFirstFrame(
                 playbackSeed = readyState.playbackSeed,
             )
         }
+    }
+}
+
+data class BookReaderEntryReadyUiListPlan(
+    val totalReadySentenceCount: Int,
+    val readerListSize: Int,
+    val targetGlobalIndex: Int,
+    val targetLocalIndex: Int,
+    val exposesFullReadyList: Boolean,
+    val firstFrameEqualsPlayTarget: Boolean,
+    val shouldApplyInitialSeed: Boolean,
+    val shouldLogRestoreScrollSkipped: Boolean,
+)
+
+class BookReaderEntryReadyInteractionState {
+    var initialSeedConsumed: Boolean = false
+        private set
+
+    var manualViewportTakeover: Boolean = false
+        private set
+
+    var restoreScrollSkipLogged: Boolean = false
+        private set
+
+    val shouldApplyInitialSeed: Boolean
+        get() = !initialSeedConsumed && !manualViewportTakeover
+
+    val shouldLogRestoreScrollSkipped: Boolean
+        get() = !restoreScrollSkipLogged && !manualViewportTakeover
+
+    fun markInitialSeedConsumed() {
+        initialSeedConsumed = true
+    }
+
+    fun markManualViewportTakeover() {
+        manualViewportTakeover = true
+    }
+
+    fun markRestoreScrollSkipLogged() {
+        restoreScrollSkipLogged = true
     }
 }

@@ -17,6 +17,13 @@ data class BookReaderPreloadScheduleResult(
     val txtReadOnMain: Boolean = false,
 )
 
+data class BookReaderBookshelfClickResult(
+    val clickPlan: BookReaderBookshelfClickPlan,
+    val readyState: BookReaderEntryReadyState? = null,
+    val syncPreloadStarted: Boolean = false,
+    val txtReadTriggered: Boolean = false,
+)
+
 sealed interface BookReaderBookshelfClickPlan {
     data object LegacyOpen : BookReaderBookshelfClickPlan
     data object PrepareOnBookshelf : BookReaderBookshelfClickPlan
@@ -88,6 +95,29 @@ object BookReaderPreloadRuntimeWiring {
             scheduled = true,
             results = runtime.bookshelfPreloadCoordinator.preload(plan),
         )
+    }
+
+    fun selectClickReadyState(
+        plan: BookReaderPreloadRuntimeWiringPlan,
+        key: BookDocumentCacheKey,
+        readyStateStore: BookReaderEntryReadyStateStore,
+    ): BookReaderBookshelfClickResult {
+        if (plan !is BookReaderPreloadRuntimeWiringPlan.Enabled) {
+            return BookReaderBookshelfClickResult(
+                clickPlan = BookReaderBookshelfClickPlan.LegacyOpen,
+            )
+        }
+        val readyState = readyStateStore.getReadyState(key)
+        return if (readyState != null) {
+            BookReaderBookshelfClickResult(
+                clickPlan = BookReaderBookshelfClickPlan.OpenReadyReader,
+                readyState = readyState,
+            )
+        } else {
+            BookReaderBookshelfClickResult(
+                clickPlan = BookReaderBookshelfClickPlan.LegacyOpen,
+            )
+        }
     }
 
     fun plan(
