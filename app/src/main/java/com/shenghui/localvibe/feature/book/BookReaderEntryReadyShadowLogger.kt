@@ -5,6 +5,10 @@ import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWir
 
 private const val BOOK_READER_ENTRY_READY_SHADOW_TAG = "LV_BOOK_FORMAL"
 
+internal fun shouldRunBookReaderEntryReadyShadow(
+    usesEntryReadyState: Boolean,
+): Boolean = !usesEntryReadyState
+
 internal fun logBookReaderEntryReadyShadow(
     bookId: String,
     bookTitle: String,

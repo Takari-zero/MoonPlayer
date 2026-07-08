@@ -1630,6 +1630,13 @@ fun BookListenScreen(
         chapters,
     ) {
         if (bookFile != null && paragraphs.isNotEmpty()) {
+            if (!shouldRunBookReaderEntryReadyShadow(usesEntryReadyState = usesEntryReadyState)) {
+                Log.d(
+                    FORMAL_BOOK_PLAYBACK_TAG,
+                    "phase5c ready shadow diagnostics skipped usesEntryReadyState=true"
+                )
+                return@LaunchedEffect
+            }
             val shadowChapterIndex = currentChapterIndexFor(currentParagraphIndex)
             val shadowChapter = chapters.getOrNull(shadowChapterIndex)
             val shadowChapterStart = shadowChapter?.paragraphIndex ?: 0
