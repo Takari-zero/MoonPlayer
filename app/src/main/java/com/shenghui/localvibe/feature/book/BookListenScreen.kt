@@ -2866,10 +2866,26 @@ private fun BookListenContent(
     } else {
         currentChapterSentenceIndex.coerceIn(0, seekEndIndex).toFloat()
     }
-    val displayedSeekValue = progressValueOverride ?: seekValue
+    val progressSeekInteraction = remember(chapterTitle, chapterSentences.size) {
+        BookReaderProgressSeekInteraction()
+    }
+    var progressSeekPreviewIndex by remember(chapterTitle, chapterSentences.size) {
+        mutableStateOf<Int?>(null)
+    }
+    var progressSeekRepeatedSkipLoggedIndex by remember(chapterTitle, chapterSentences.size) {
+        mutableStateOf<Int?>(null)
+    }
+    val previewSeekIndex = progressSeekPreviewIndex?.coerceIn(0, seekEndIndex)
+    val displayedSeekValue = previewSeekIndex?.toFloat() ?: progressValueOverride ?: seekValue
     val displayedSliderEndIndex = progressMaxValueOverride ?: sliderEndIndex.toFloat()
-    val displayedListenedTimeLabel = listenedTimeLabelOverride ?: listenedTimeLabel
-    val displayedRemainingTimeLabel = remainingTimeLabelOverride ?: remainingTimeLabel
+    val previewListenedTimeLabel = previewSeekIndex?.let { index ->
+        estimateSentenceTimeLabel(chapterSentences, 0, index, speechRate)
+    }
+    val previewRemainingTimeLabel = previewSeekIndex?.let { index ->
+        estimateSentenceTimeLabel(chapterSentences, index, chapterSentences.size, speechRate)
+    }
+    val displayedListenedTimeLabel = previewListenedTimeLabel ?: listenedTimeLabelOverride ?: listenedTimeLabel
+    val displayedRemainingTimeLabel = previewRemainingTimeLabel ?: remainingTimeLabelOverride ?: remainingTimeLabel
 
     LaunchedEffect(chapterTitle, currentChapterSentenceIndex, chapterSentences.size, isChapterTitleCurrent) {
         Log.d(
@@ -3056,8 +3072,53 @@ private fun BookListenContent(
                         maxValue = displayedSliderEndIndex,
                         onValueChange = {
                             if (progressUserSeekEnabled) {
-                                onSeekSentence(it.roundToInt().coerceIn(0, seekEndIndex))
+                                val previewIndex = it.roundToInt().coerceIn(0, seekEndIndex)
+                                val previousPreviewIndex = progressSeekPreviewIndex
+                                progressSeekInteraction.preview(previewIndex)
+                                if (previousPreviewIndex == null) {
+                                    Log.d(
+                                        FORMAL_BOOK_PLAYBACK_TAG,
+                                        "phase5c progress seek preview start index=$previewIndex"
+                                    )
+                                } else if (previousPreviewIndex == previewIndex) {
+                                    if (progressSeekRepeatedSkipLoggedIndex != previewIndex) {
+                                        Log.d(
+                                            FORMAL_BOOK_PLAYBACK_TAG,
+                                            "phase5c progress seek skipped repeated onValueChange index=$previewIndex"
+                                        )
+                                        progressSeekRepeatedSkipLoggedIndex = previewIndex
+                                    }
+                                } else {
+                                    Log.d(
+                                        FORMAL_BOOK_PLAYBACK_TAG,
+                                        "phase5c progress seek preview update index=$previewIndex"
+                                    )
+                                    progressSeekRepeatedSkipLoggedIndex = null
+                                }
+                                progressSeekPreviewIndex = previewIndex
                             }
+                        },
+                        onValueChangeFinished = {
+                            val commitIndex = progressSeekInteraction.finish()
+                            progressSeekPreviewIndex = null
+                            progressSeekRepeatedSkipLoggedIndex = null
+                            if (commitIndex != null && progressUserSeekEnabled) {
+                                val safeCommitIndex = commitIndex.coerceIn(0, seekEndIndex)
+                                Log.d(
+                                    FORMAL_BOOK_PLAYBACK_TAG,
+                                    "phase5c progress seek commit"
+                                )
+                                Log.d(
+                                    FORMAL_BOOK_PLAYBACK_TAG,
+                                    "phase5c progress seek commit target index=$safeCommitIndex"
+                                )
+                                onSeekSentence(safeCommitIndex)
+                            }
+                        },
+                        onValueChangeCanceled = {
+                            progressSeekInteraction.cancel()
+                            progressSeekPreviewIndex = null
+                            progressSeekRepeatedSkipLoggedIndex = null
                         }
                     )
                 } else {
@@ -3177,12 +3238,16 @@ private fun ReaderChapterProgressBar(
     value: Float,
     maxValue: Float,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    onValueChangeCanceled: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     ThinMoonSlider(
         value = value,
         valueRange = 0f..maxValue.coerceAtLeast(1f),
         onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
+        onValueChangeCanceled = onValueChangeCanceled,
         modifier = modifier,
         trackHeight = 3.dp,
         thumbSize = 11.dp
@@ -3194,6 +3259,8 @@ private fun ThinMoonSlider(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit = {},
+    onValueChangeCanceled: () -> Unit = {},
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     activeColor: Color = Color(0xFF8B5CFF),
@@ -3223,7 +3290,10 @@ private fun ThinMoonSlider(
                 if (enabled) {
                     Modifier
                         .pointerInput(valueRange.start, valueRange.endInclusive) {
-                            detectTapGestures { offset -> updateFromX(offset.x) }
+                            detectTapGestures { offset ->
+                                updateFromX(offset.x)
+                                onValueChangeFinished()
+                            }
                         }
                         .pointerInput(valueRange.start, valueRange.endInclusive) {
                             detectDragGestures(
@@ -3231,7 +3301,9 @@ private fun ThinMoonSlider(
                                 onDrag = { change, _ ->
                                     updateFromX(change.position.x)
                                     change.consume()
-                                }
+                                },
+                                onDragEnd = { onValueChangeFinished() },
+                                onDragCancel = { onValueChangeCanceled() }
                             )
                         }
                 } else {
@@ -5339,6 +5411,27 @@ private fun estimateChapterTimeLabel(
     val effectiveRate = (300f * safeSpeechRate).coerceAtLeast(60f)
     val seconds = ((chars * 60f) / effectiveRate).roundToInt().coerceAtLeast(0)
     return formatDuration(seconds)
+}
+
+internal class BookReaderProgressSeekInteraction {
+    private var previewIndex: Int? = null
+
+    fun preview(index: Int): Int? {
+        previewIndex = index
+        return null
+    }
+
+    fun finish(): Int? {
+        val commitIndex = previewIndex
+        previewIndex = null
+        return commitIndex
+    }
+
+    fun cancel() {
+        previewIndex = null
+    }
+
+    fun tap(index: Int): Int = index
 }
 
 private fun formatDuration(totalSeconds: Int): String {
