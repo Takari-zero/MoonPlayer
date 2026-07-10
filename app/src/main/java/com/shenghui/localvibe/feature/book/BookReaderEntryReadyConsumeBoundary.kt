@@ -129,6 +129,44 @@ data class BookReaderEntryReadyUiListPlan(
     val shouldLogRestoreScrollSkipped: Boolean,
 )
 
+internal data class BookReaderReadyWindowMappingPlan(
+    val windowStartInclusive: Int,
+    val windowEndExclusive: Int,
+    val targetIndexInWindow: Int,
+    val windowSize: Int,
+)
+
+internal fun planBookReaderReadyWindowMapping(
+    totalSentenceCount: Int,
+    targetGlobalSentenceIndex: Int,
+    maxWindowSize: Int = 133,
+): BookReaderReadyWindowMappingPlan {
+    val safeTotal: Int = totalSentenceCount.coerceAtLeast(0)
+    if (safeTotal == 0) {
+        return BookReaderReadyWindowMappingPlan(
+            windowStartInclusive = 0,
+            windowEndExclusive = 0,
+            targetIndexInWindow = 0,
+            windowSize = 0,
+        )
+    }
+
+    val safeWindowSize: Int = maxWindowSize.coerceAtLeast(1).coerceAtMost(safeTotal)
+    val safeTargetIndex: Int = targetGlobalSentenceIndex.coerceIn(0, safeTotal - 1)
+    val sentencesBeforeTarget: Int = safeWindowSize / 2
+    val preferredStart: Int = (safeTargetIndex - sentencesBeforeTarget).coerceAtLeast(0)
+    val maxStart: Int = (safeTotal - safeWindowSize).coerceAtLeast(0)
+    val start: Int = preferredStart.coerceAtMost(maxStart)
+    val end: Int = (start + safeWindowSize).coerceAtMost(safeTotal)
+
+    return BookReaderReadyWindowMappingPlan(
+        windowStartInclusive = start,
+        windowEndExclusive = end,
+        targetIndexInWindow = safeTargetIndex - start,
+        windowSize = end - start,
+    )
+}
+
 class BookReaderEntryReadyInteractionState {
     var initialSeedConsumed: Boolean = false
         private set

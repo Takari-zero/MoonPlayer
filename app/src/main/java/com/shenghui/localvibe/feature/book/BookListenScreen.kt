@@ -111,6 +111,7 @@ import com.shenghui.localvibe.core.tts.fastspeech2.FastSpeech2BookTtsEngineAdapt
 import com.shenghui.localvibe.feature.book.playback.BookReaderAutoAdvanceCoordinator
 import com.shenghui.localvibe.feature.book.playback.BookReaderAutoAdvanceDecision
 import com.shenghui.localvibe.feature.book.playback.BookReaderAudioTrackSink
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntrySentence
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackController
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackEvent
 import com.shenghui.localvibe.feature.book.playback.BookReaderPlaybackTarget
@@ -388,8 +389,69 @@ fun BookListenScreen(
         runCatching { BookReadingTarget.valueOf(currentReadingTargetName) }
             .getOrDefault(BookReadingTarget.SENTENCE)
     }
-    val chapters = remember(paragraphs, chapterRefreshKey) {
-        BookChapterDetector.detect(paragraphs)
+    val readyWindowMappingPlan = remember(entryReadyFirstFrame) {
+        val firstFrame = entryReadyFirstFrame
+        if (firstFrame == null) {
+            planBookReaderReadyWindowMapping(
+                totalSentenceCount = 0,
+                targetGlobalSentenceIndex = 0,
+            )
+        } else {
+            planBookReaderReadyWindowMapping(
+                totalSentenceCount = firstFrame.chapterSentences.size,
+                targetGlobalSentenceIndex = firstFrame.firstFrameTarget.chapterSentenceIndex,
+            )
+        }
+    }
+    val readyWindowSentences = remember(entryReadyFirstFrame, readyWindowMappingPlan) {
+        val firstFrame = entryReadyFirstFrame
+        if (firstFrame == null) {
+            emptyList()
+        } else {
+            buildReadyReaderSentences(
+                source = firstFrame.chapterSentences,
+                startInclusive = readyWindowMappingPlan.windowStartInclusive,
+                endExclusive = readyWindowMappingPlan.windowEndExclusive,
+            )
+        }
+    }
+    val readyCanonicalParagraphIndex = entryReadyFirstFrame?.firstFrameTarget?.paragraphIndex
+        ?: currentParagraphIndex
+    val readyChapterStartParagraphIndex = readyWindowSentences.firstOrNull()?.paragraphIndex
+        ?: readyCanonicalParagraphIndex
+    val readyChapterTitle = entryReadyState?.chapterTitle?.ifBlank { "Ready" } ?: "Ready"
+    val chapters = remember(
+        paragraphs,
+        chapterRefreshKey,
+        usesEntryReadyState,
+        readyChapterStartParagraphIndex,
+        readyCanonicalParagraphIndex,
+        readyChapterTitle,
+        readyWindowMappingPlan,
+    ) {
+        if (usesEntryReadyState) {
+            val mappingValid = readyChapterStartParagraphIndex <= readyCanonicalParagraphIndex
+            Log.d(FORMAL_BOOK_PLAYBACK_TAG, "phase5c ready chapter detect skipped first frame")
+            Log.d(
+                FORMAL_BOOK_PLAYBACK_TAG,
+                "phase5c ready chapter mapping " +
+                    "startParagraph=$readyChapterStartParagraphIndex " +
+                    "targetParagraph=$readyCanonicalParagraphIndex " +
+                    "valid=$mappingValid " +
+                    "windowStart=${readyWindowMappingPlan.windowStartInclusive} " +
+                    "windowEnd=${readyWindowMappingPlan.windowEndExclusive} " +
+                    "windowSize=${readyWindowMappingPlan.windowSize}"
+            )
+            listOf(
+                BookChapter(
+                    title = readyChapterTitle,
+                    paragraphIndex = readyChapterStartParagraphIndex,
+                )
+            )
+        } else {
+            Log.d(FORMAL_BOOK_PLAYBACK_TAG, "phase5c legacy chapter detect retained")
+            BookChapterDetector.detect(paragraphs)
+        }
     }
     val currentChapter = remember(chapters, currentParagraphIndex) {
         chapters.lastOrNull { it.paragraphIndex <= currentParagraphIndex }
@@ -1993,16 +2055,25 @@ fun BookListenScreen(
                         paragraphs,
                         chapterStartIndex,
                         chapterEndExclusive,
-                        currentChapter?.title
+                        currentChapter?.title,
+                        usesEntryReadyState,
                     ) {
-                        buildReaderSentences(
-                            paragraphs = paragraphs,
-                            startIndex = chapterStartIndex,
-                            endExclusive = chapterEndExclusive.coerceAtMost(paragraphs.size),
-                            chapterTitle = currentChapter?.title
-                        )
+                        if (usesEntryReadyState) {
+                            emptyList()
+                        } else {
+                            buildReaderSentences(
+                                paragraphs = paragraphs,
+                                startIndex = chapterStartIndex,
+                                endExclusive = chapterEndExclusive.coerceAtMost(paragraphs.size),
+                                chapterTitle = currentChapter?.title
+                            )
+                        }
                     }
-                    val chapterSentences = legacyChapterSentences
+                    val chapterSentences = if (usesEntryReadyState) {
+                        readyWindowSentences
+                    } else {
+                        legacyChapterSentences
+                    }
                     val currentChapterSentenceIndex = chapterSentences
                         .indexOfFirst {
                             it.paragraphIndex == currentParagraphIndex &&
@@ -2838,6 +2909,12 @@ private fun BookListenContent(
     }
     val seekEndIndex = (chapterSentences.size - 1).coerceAtLeast(0)
     val sliderEndIndex = seekEndIndex.coerceAtLeast(1)
+    var pendingProgressSeekUiTarget by remember(chapterTitle, chapterSentences.size) {
+        mutableStateOf<BookReaderProgressSeekUiTarget?>(null)
+    }
+    var progressSeekScrollToItemIndex by remember(chapterTitle, chapterSentences.size) {
+        mutableStateOf<Int?>(null)
+    }
     LaunchedEffect(sentenceListState, chapterSentences) {
         snapshotFlow {
             BookReaderVisibleViewport(
@@ -2853,11 +2930,50 @@ private fun BookListenContent(
                     .filter { sentenceIndex -> sentenceIndex in chapterSentences.indices }
                     .map { sentenceIndex -> chapterSentences[sentenceIndex] }
                 if (visibleSentences.isNotEmpty()) {
-                    onViewportSnapshotChanged(
-                        viewport.firstVisibleItemIndex,
-                        viewport.firstVisibleItemScrollOffset,
-                        visibleSentences
+                    val firstVisible = visibleSentences.first()
+                    val viewportTarget = BookReaderProgressSeekUiTarget.fromViewportFields(
+                        paragraphIndex = firstVisible.paragraphIndex,
+                        sentenceIndexInParagraph = firstVisible.sentenceIndexInParagraph,
+                        chapterSentenceIndex = firstVisible.chapterSentenceIndex,
                     )
+                    val pendingSeekTarget = pendingProgressSeekUiTarget
+                    if (BookReaderProgressSeekUiTarget.shouldSuppressViewport(
+                            pending = pendingSeekTarget,
+                            viewport = viewportTarget
+                        )
+                    ) {
+                        Log.d(
+                            FORMAL_BOOK_PLAYBACK_TAG,
+                            "phase5c progress seek viewport override suppressed " +
+                                "commitParagraph=${pendingSeekTarget?.paragraphIndex} " +
+                                "commitSentence=${pendingSeekTarget?.sentenceIndexInParagraph} " +
+                                "commitChapterSentenceIndex=${pendingSeekTarget?.chapterSentenceIndex} " +
+                                "viewportParagraph=${viewportTarget.paragraphIndex} " +
+                                "viewportSentence=${viewportTarget.sentenceIndexInParagraph} " +
+                                "viewportChapterSentenceIndex=${viewportTarget.chapterSentenceIndex} " +
+                                "parity=false"
+                        )
+                    } else {
+                        if (pendingSeekTarget != null) {
+                            Log.d(
+                                FORMAL_BOOK_PLAYBACK_TAG,
+                                "phase5c progress seek target parity " +
+                                    "commitParagraph=${pendingSeekTarget.paragraphIndex} " +
+                                    "commitSentence=${pendingSeekTarget.sentenceIndexInParagraph} " +
+                                    "commitChapterSentenceIndex=${pendingSeekTarget.chapterSentenceIndex} " +
+                                    "uiParagraph=${viewportTarget.paragraphIndex} " +
+                                    "uiSentence=${viewportTarget.sentenceIndexInParagraph} " +
+                                    "uiChapterSentenceIndex=${viewportTarget.chapterSentenceIndex} " +
+                                    "parity=true"
+                            )
+                            pendingProgressSeekUiTarget = null
+                        }
+                        onViewportSnapshotChanged(
+                            viewport.firstVisibleItemIndex,
+                            viewport.firstVisibleItemScrollOffset,
+                            visibleSentences
+                        )
+                    }
                 }
             }
     }
@@ -2927,6 +3043,16 @@ private fun BookListenContent(
                 "offset=$initialSentenceListScrollOffset renderMode=$instantEntryRenderMode"
         )
         onPositionSettled()
+    }
+    LaunchedEffect(progressSeekScrollToItemIndex, chapterSentences.size) {
+        val targetIndex = progressSeekScrollToItemIndex ?: return@LaunchedEffect
+        val safeTargetIndex = targetIndex.coerceIn(0, chapterSentences.size)
+        Log.d(
+            FORMAL_BOOK_PLAYBACK_TAG,
+            "phase5c progress seek scroll to committed target lazyIndex=$safeTargetIndex"
+        )
+        sentenceListState.scrollToItem(safeTargetIndex)
+        progressSeekScrollToItemIndex = null
     }
 
     Column(
@@ -3112,6 +3238,36 @@ private fun BookListenContent(
                                     FORMAL_BOOK_PLAYBACK_TAG,
                                     "phase5c progress seek commit target index=$safeCommitIndex"
                                 )
+                                val seekSentence = chapterSentences.getOrNull(safeCommitIndex)
+                                if (seekSentence != null) {
+                                    val seekUiTarget = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+                                        localIndex = safeCommitIndex,
+                                        paragraphIndex = seekSentence.paragraphIndex,
+                                        sentenceIndexInParagraph = seekSentence.sentenceIndexInParagraph,
+                                        chapterSentenceIndex = seekSentence.chapterSentenceIndex,
+                                    )
+                                    pendingProgressSeekUiTarget = seekUiTarget
+                                    progressSeekScrollToItemIndex = safeCommitIndex + 1
+                                    Log.d(
+                                        FORMAL_BOOK_PLAYBACK_TAG,
+                                        "phase5c progress seek ui target applied " +
+                                            "commitParagraph=${seekUiTarget.paragraphIndex} " +
+                                            "commitSentence=${seekUiTarget.sentenceIndexInParagraph} " +
+                                            "commitChapterSentenceIndex=${seekUiTarget.chapterSentenceIndex} " +
+                                            "uiParagraph=${seekUiTarget.paragraphIndex} " +
+                                            "uiSentence=${seekUiTarget.sentenceIndexInParagraph} " +
+                                            "uiChapterSentenceIndex=${seekUiTarget.chapterSentenceIndex}"
+                                    )
+                                    Log.d(
+                                        FORMAL_BOOK_PLAYBACK_TAG,
+                                        "phase5c progress seek highlight target applied " +
+                                            "commitParagraph=${seekUiTarget.paragraphIndex} " +
+                                            "commitSentence=${seekUiTarget.sentenceIndexInParagraph} " +
+                                            "commitChapterSentenceIndex=${seekUiTarget.chapterSentenceIndex} " +
+                                            "playbackParagraph=${seekUiTarget.paragraphIndex} " +
+                                            "playbackSentence=${seekUiTarget.sentenceIndexInParagraph}"
+                                    )
+                                }
                                 onSeekSentence(safeCommitIndex)
                             }
                         },
@@ -5349,6 +5505,29 @@ private fun buildReaderSentences(
     return result
 }
 
+private fun buildReadyReaderSentences(
+    source: List<BookReaderEntrySentence>,
+    startInclusive: Int,
+    endExclusive: Int,
+): List<ReaderSentence> {
+    if (source.isEmpty()) return emptyList()
+    val safeStart: Int = startInclusive.coerceIn(0, source.size)
+    val safeEnd: Int = endExclusive.coerceIn(safeStart, source.size)
+    val result = mutableListOf<ReaderSentence>()
+    for (sourceIndex in safeStart until safeEnd) {
+        val sentence: BookReaderEntrySentence = source[sourceIndex]
+        if (sentence.text.isNotBlank()) {
+            result += ReaderSentence(
+                text = sentence.text,
+                paragraphIndex = sentence.paragraphIndex,
+                sentenceIndexInParagraph = sentence.sentenceIndex,
+                chapterSentenceIndex = result.size,
+            )
+        }
+    }
+    return result
+}
+
 private fun splitParagraphIntoSentences(paragraph: String): List<String> {
     val trimmed = paragraph.trim()
     if (trimmed.isBlank()) return emptyList()
@@ -5432,6 +5611,56 @@ internal class BookReaderProgressSeekInteraction {
     }
 
     fun tap(index: Int): Int = index
+}
+
+internal data class BookReaderProgressSeekUiTarget(
+    val localIndex: Int,
+    val paragraphIndex: Int,
+    val sentenceIndexInParagraph: Int,
+    val chapterSentenceIndex: Int,
+) {
+    companion object {
+        fun fromReaderSentenceFields(
+            localIndex: Int,
+            paragraphIndex: Int,
+            sentenceIndexInParagraph: Int,
+            chapterSentenceIndex: Int,
+        ): BookReaderProgressSeekUiTarget {
+            return BookReaderProgressSeekUiTarget(
+                localIndex = localIndex.coerceAtLeast(0),
+                paragraphIndex = paragraphIndex,
+                sentenceIndexInParagraph = sentenceIndexInParagraph,
+                chapterSentenceIndex = chapterSentenceIndex,
+            )
+        }
+
+        fun fromViewportFields(
+            paragraphIndex: Int,
+            sentenceIndexInParagraph: Int,
+            chapterSentenceIndex: Int,
+        ): BookReaderProgressSeekUiTarget {
+            return fromReaderSentenceFields(
+                localIndex = chapterSentenceIndex,
+                paragraphIndex = paragraphIndex,
+                sentenceIndexInParagraph = sentenceIndexInParagraph,
+                chapterSentenceIndex = chapterSentenceIndex,
+            )
+        }
+
+        fun shouldSuppressViewport(
+            pending: BookReaderProgressSeekUiTarget?,
+            viewport: BookReaderProgressSeekUiTarget,
+        ): Boolean {
+            if (pending == null) return false
+            return !pending.sameReaderTarget(viewport)
+        }
+    }
+
+    fun sameReaderTarget(other: BookReaderProgressSeekUiTarget): Boolean {
+        return paragraphIndex == other.paragraphIndex &&
+            sentenceIndexInParagraph == other.sentenceIndexInParagraph &&
+            chapterSentenceIndex == other.chapterSentenceIndex
+    }
 }
 
 private fun formatDuration(totalSeconds: Int): String {

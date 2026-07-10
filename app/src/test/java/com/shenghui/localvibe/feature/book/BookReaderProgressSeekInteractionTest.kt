@@ -1,7 +1,9 @@
 package com.shenghui.localvibe.feature.book
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BookReaderProgressSeekInteractionTest {
@@ -42,5 +44,39 @@ class BookReaderProgressSeekInteractionTest {
         val interaction = BookReaderProgressSeekInteraction()
 
         assertEquals(42, interaction.tap(42))
+    }
+
+    @Test
+    fun seekCommitSuppressesStaleViewportUntilTargetAligns() {
+        val pending = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+            localIndex = 27,
+            paragraphIndex = 743,
+            sentenceIndexInParagraph = 1,
+            chapterSentenceIndex = 27,
+        )
+        val staleViewport = BookReaderProgressSeekUiTarget.fromViewportFields(
+            paragraphIndex = 758,
+            sentenceIndexInParagraph = 1,
+            chapterSentenceIndex = 77,
+        )
+        val alignedViewport = BookReaderProgressSeekUiTarget.fromViewportFields(
+            paragraphIndex = 743,
+            sentenceIndexInParagraph = 1,
+            chapterSentenceIndex = 27,
+        )
+
+        assertTrue(BookReaderProgressSeekUiTarget.shouldSuppressViewport(pending, staleViewport))
+        assertFalse(BookReaderProgressSeekUiTarget.shouldSuppressViewport(pending, alignedViewport))
+    }
+
+    @Test
+    fun noPendingSeekDoesNotSuppressViewport() {
+        val viewport = BookReaderProgressSeekUiTarget.fromViewportFields(
+            paragraphIndex = 758,
+            sentenceIndexInParagraph = 1,
+            chapterSentenceIndex = 77,
+        )
+
+        assertFalse(BookReaderProgressSeekUiTarget.shouldSuppressViewport(null, viewport))
     }
 }

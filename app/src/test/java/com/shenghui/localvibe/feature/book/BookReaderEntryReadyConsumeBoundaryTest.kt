@@ -196,6 +196,74 @@ class BookReaderEntryReadyConsumeBoundaryTest {
         assertFalse(repeatedPlan.shouldLogRestoreScrollSkipped)
     }
 
+    @Test
+    fun readyWindowMappingBoundsHugeReadyStateToSmallWindow() {
+        val plan = planBookReaderReadyWindowMapping(
+            totalSentenceCount = 515_608,
+            targetGlobalSentenceIndex = 2_659,
+        )
+
+        assertEquals(2_593, plan.windowStartInclusive)
+        assertEquals(2_726, plan.windowEndExclusive)
+        assertEquals(66, plan.targetIndexInWindow)
+        assertEquals(133, plan.windowSize)
+    }
+
+    @Test
+    fun readyWindowMappingContainsTargetNearStartAndEnd() {
+        val nearStart = planBookReaderReadyWindowMapping(
+            totalSentenceCount = 515_608,
+            targetGlobalSentenceIndex = 4,
+        )
+        val nearEnd = planBookReaderReadyWindowMapping(
+            totalSentenceCount = 515_608,
+            targetGlobalSentenceIndex = 515_600,
+        )
+
+        assertEquals(0, nearStart.windowStartInclusive)
+        assertEquals(133, nearStart.windowEndExclusive)
+        assertEquals(4, nearStart.targetIndexInWindow)
+        assertEquals(515_475, nearEnd.windowStartInclusive)
+        assertEquals(515_608, nearEnd.windowEndExclusive)
+        assertEquals(125, nearEnd.targetIndexInWindow)
+    }
+
+    @Test
+    fun readyWindowFakeChapterStartCoversFrontHalfSeekTarget() {
+        val plan = planBookReaderReadyWindowMapping(
+            totalSentenceCount = 515_608,
+            targetGlobalSentenceIndex = 2_659,
+        )
+        val windowSentences = (plan.windowStartInclusive until plan.windowEndExclusive).map { index ->
+            BookReaderEntrySentence(
+                text = "Sentence $index.",
+                paragraphIndex = index - 1_887,
+                sentenceIndex = 0,
+                chapterSentenceIndex = index,
+            )
+        }
+        val fakeChapterStart = windowSentences.first().paragraphIndex
+        val frontHalfSeekTarget = windowSentences[22].paragraphIndex
+
+        assertTrue(fakeChapterStart <= frontHalfSeekTarget)
+        assertTrue(fakeChapterStart <= windowSentences[plan.targetIndexInWindow].paragraphIndex)
+    }
+
+    @Test
+    fun progressSeekSingleCommitHelperIsUnaffectedByReadyWindowMapping() {
+        planBookReaderReadyWindowMapping(
+            totalSentenceCount = 515_608,
+            targetGlobalSentenceIndex = 2_659,
+        )
+        val interaction = BookReaderProgressSeekInteraction()
+
+        interaction.preview(12)
+        interaction.preview(24)
+
+        assertEquals(24, interaction.finish())
+        assertNull(interaction.finish())
+    }
+
     private fun readyState(): BookReaderEntryReadyState {
         val sentences = listOf(
             BookReaderEntrySentence(
