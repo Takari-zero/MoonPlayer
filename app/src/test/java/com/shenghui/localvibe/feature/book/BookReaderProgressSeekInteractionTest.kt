@@ -205,6 +205,50 @@ class BookReaderProgressSeekInteractionTest {
     }
 
     @Test
+    fun resumeFreshPlayUsesPauseCapturedSentenceTargetOverParagraphFallback() {
+        val pauseCapturedTarget = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+            localIndex = 72,
+            paragraphIndex = 789,
+            sentenceIndexInParagraph = 1,
+            chapterSentenceIndex = 72,
+        )
+        val paragraphFallbackTarget = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+            localIndex = 71,
+            paragraphIndex = 789,
+            sentenceIndexInParagraph = 0,
+            chapterSentenceIndex = 71,
+        )
+
+        val resolved = resolveBookReaderResumeCommittedTarget(
+            capturedTarget = pauseCapturedTarget,
+            uiFallbackTarget = paragraphFallbackTarget,
+        )
+
+        assertEquals(789, resolved.paragraphIndex)
+        assertEquals(1, resolved.sentenceIndexInParagraph)
+        assertEquals(72, resolved.chapterSentenceIndex)
+        assertTrue(resolved.sameReaderTarget(pauseCapturedTarget))
+        assertFalse(resolved.sameReaderTarget(paragraphFallbackTarget))
+    }
+
+    @Test
+    fun resumeFreshPlayFallsBackToUiTargetWithoutPauseCapture() {
+        val uiTarget = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+            localIndex = 71,
+            paragraphIndex = 789,
+            sentenceIndexInParagraph = 0,
+            chapterSentenceIndex = 71,
+        )
+
+        val resolved = resolveBookReaderResumeCommittedTarget(
+            capturedTarget = null,
+            uiFallbackTarget = uiTarget,
+        )
+
+        assertEquals(uiTarget, resolved)
+    }
+
+    @Test
     fun progressDragFinishedCommitsLastPreviewOnce() {
         val interaction = BookReaderProgressSeekInteraction()
 

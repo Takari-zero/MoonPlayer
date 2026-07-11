@@ -389,6 +389,9 @@ fun BookListenScreen(
         runCatching { BookReadingTarget.valueOf(currentReadingTargetName) }
             .getOrDefault(BookReadingTarget.SENTENCE)
     }
+    var pauseCapturedCommittedTarget by remember(bookFile?.uri, usesEntryReadyState) {
+        mutableStateOf<BookReaderProgressSeekUiTarget?>(null)
+    }
     val readyWindowMappingPlan = remember(entryReadyFirstFrame) {
         val firstFrame = entryReadyFirstFrame
         if (firstFrame == null) {
@@ -1128,6 +1131,55 @@ fun BookListenScreen(
             return
         }
 
+        val capturedResumeTarget = pauseCapturedCommittedTarget
+        if (USE_FORMAL_BOOK_PLAYBACK_CONTROLLER && capturedResumeTarget != null) {
+            val uiChapterSentenceIndex = readyWindowSentences.indexOfFirst {
+                it.paragraphIndex == currentParagraphIndex &&
+                    it.sentenceIndexInParagraph == currentSentenceIndexInParagraph
+            }.let { index -> index.coerceAtLeast(0) }
+            val uiResumeTarget = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+                localIndex = uiChapterSentenceIndex,
+                paragraphIndex = currentParagraphIndex,
+                sentenceIndexInParagraph = currentSentenceIndexInParagraph,
+                chapterSentenceIndex = readyWindowSentences.getOrNull(uiChapterSentenceIndex)?.chapterSentenceIndex
+                    ?: uiChapterSentenceIndex,
+            )
+            val resumeTarget = resolveBookReaderResumeCommittedTarget(
+                capturedTarget = capturedResumeTarget,
+                uiFallbackTarget = uiResumeTarget,
+            )
+            if (!resumeTarget.sameReaderTarget(uiResumeTarget)) {
+                Log.d(
+                    FORMAL_BOOK_PLAYBACK_TAG,
+                    "phase5d resume ignored paragraph fallback " +
+                        "capturedParagraph=${resumeTarget.paragraphIndex} " +
+                        "capturedSentence=${resumeTarget.sentenceIndexInParagraph} " +
+                        "capturedChapterSentence=${resumeTarget.chapterSentenceIndex} " +
+                        "uiParagraph=${uiResumeTarget.paragraphIndex} " +
+                        "uiSentence=${uiResumeTarget.sentenceIndexInParagraph} " +
+                        "playParagraph=${resumeTarget.paragraphIndex} " +
+                        "playSentence=${resumeTarget.sentenceIndexInParagraph} " +
+                        "parity=true"
+                )
+            }
+            currentParagraphIndex = resumeTarget.paragraphIndex
+            currentSentenceIndexInParagraph = resumeTarget.sentenceIndexInParagraph
+            currentReadingTargetName = BookReadingTarget.SENTENCE.name
+            pauseCapturedCommittedTarget = null
+            Log.d(
+                FORMAL_BOOK_PLAYBACK_TAG,
+                "phase5d resume committed target restored " +
+                    "capturedParagraph=${resumeTarget.paragraphIndex} " +
+                    "capturedSentence=${resumeTarget.sentenceIndexInParagraph} " +
+                    "capturedChapterSentence=${resumeTarget.chapterSentenceIndex} " +
+                    "uiParagraph=${uiResumeTarget.paragraphIndex} " +
+                    "uiSentence=${uiResumeTarget.sentenceIndexInParagraph} " +
+                    "playParagraph=$currentParagraphIndex " +
+                    "playSentence=$currentSentenceIndexInParagraph " +
+                    "parity=${resumeTarget.paragraphIndex == currentParagraphIndex && resumeTarget.sentenceIndexInParagraph == currentSentenceIndexInParagraph}"
+            )
+        }
+
         val textToSpeak = currentSpeakText()
         if (!isReadableBookTtsText(textToSpeak.orEmpty())) {
             Log.d(
@@ -1454,6 +1506,17 @@ fun BookListenScreen(
         if (USE_FORMAL_BOOK_PLAYBACK_CONTROLLER) {
             val committedParagraphIndex = currentParagraphIndex
             val committedSentenceIndex = currentSentenceIndexInParagraph
+            val committedLocalIndex = readyWindowSentences.indexOfFirst {
+                it.paragraphIndex == committedParagraphIndex &&
+                    it.sentenceIndexInParagraph == committedSentenceIndex
+            }.let { index -> index.coerceAtLeast(0) }
+            pauseCapturedCommittedTarget = BookReaderProgressSeekUiTarget.fromReaderSentenceFields(
+                localIndex = committedLocalIndex,
+                paragraphIndex = committedParagraphIndex,
+                sentenceIndexInParagraph = committedSentenceIndex,
+                chapterSentenceIndex = readyWindowSentences.getOrNull(committedLocalIndex)?.chapterSentenceIndex
+                    ?: committedLocalIndex,
+            )
             val pauseDecision = resolveBookReaderPauseSessionBoundary(
                 hasActivePlayback = isPlaying || formalPlaybackController.state.isPlaying || formalPlaybackController.state.canResume,
                 committedParagraphIndex = committedParagraphIndex,
@@ -1488,6 +1551,18 @@ fun BookListenScreen(
                     "playbackParagraph=${pauseDecision.committedParagraphIndex} " +
                     "playbackSentence=${pauseDecision.committedSentenceIndex} parity=true"
             )
+            Log.d(
+                FORMAL_BOOK_PLAYBACK_TAG,
+                "phase5d resume target parity after pause " +
+                    "capturedParagraph=${pauseCapturedCommittedTarget?.paragraphIndex} " +
+                    "capturedSentence=${pauseCapturedCommittedTarget?.sentenceIndexInParagraph} " +
+                    "capturedChapterSentence=${pauseCapturedCommittedTarget?.chapterSentenceIndex} " +
+                    "uiParagraph=$currentParagraphIndex " +
+                    "uiSentence=$currentSentenceIndexInParagraph " +
+                    "playParagraph=${pauseCapturedCommittedTarget?.paragraphIndex} " +
+                    "playSentence=${pauseCapturedCommittedTarget?.sentenceIndexInParagraph} " +
+                    "parity=true"
+            )
             Log.d(FORMAL_BOOK_PLAYBACK_TAG, "reader pause formal")
             isPlaying = false
             saveProgress(currentParagraphIndex)
@@ -1511,6 +1586,7 @@ fun BookListenScreen(
     }
 
     fun stopReading() {
+        pauseCapturedCommittedTarget = null
         stopCurrentPlayback(reason = "stop_button", invalidateSession = true)
         currentParagraphIndex = 0
         currentSentenceIndexInParagraph = 0
@@ -1523,6 +1599,7 @@ fun BookListenScreen(
 
     fun jumpToParagraph(index: Int, autoPlay: Boolean = isPlaying) {
         if (paragraphs.isEmpty()) return
+        pauseCapturedCommittedTarget = null
         val nextIndex = index.coerceIn(0, paragraphs.lastIndex)
         stopCurrentPlayback(reason = "jump_to_paragraph", invalidateSession = true)
         currentParagraphIndex = nextIndex
@@ -1651,6 +1728,7 @@ fun BookListenScreen(
             if (target == null) {
                 Log.d(FORMAL_BOOK_PLAYBACK_TAG, "reader jump fallback to legacy reason=missing_target source=$source")
             } else {
+                pauseCapturedCommittedTarget = null
                 currentParagraphIndex = nextIndex
                 currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph.coerceAtLeast(0)
                 currentReadingTargetName = BookReadingTarget.SENTENCE.name
@@ -5882,6 +5960,13 @@ internal fun resolveBookReaderPauseSessionBoundary(
         invalidateSession = true,
         resumeShouldFreshPlay = true,
     )
+}
+
+internal fun resolveBookReaderResumeCommittedTarget(
+    capturedTarget: BookReaderProgressSeekUiTarget?,
+    uiFallbackTarget: BookReaderProgressSeekUiTarget,
+): BookReaderProgressSeekUiTarget {
+    return capturedTarget ?: uiFallbackTarget
 }
 
 internal data class BookReaderProgressSeekUiTarget(
