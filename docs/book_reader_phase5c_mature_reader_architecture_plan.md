@@ -183,3 +183,11 @@ After repeated real-device smoke passes, remove old restore snapshot traps, rout
 - Highlight follows playback.
 - Pause and resume work normally.
 - No black screen, crash, or fake reader content.
+
+## 8. Implemented Greenline
+
+Phase 5C.17 through Phase 5C.29 implemented and validated the Formal-only bookshelf preload and ready-state consumption path. The final Formal regression passed at commit `b54b578`, tagged locally as `local-greenline-moonplayer-phase5c29-final-formal-regression-b54b578`.
+
+The validated path uses a ready-state store hit, renders a bounded reader window, skips restore prompts and stable snapshots, keeps seek and playback targets aligned, isolates manual browsing from committed progress, and invalidates stale audio sessions on pause.
+
+The complete result and handoff are archived in `docs/book_reader_phase5c29_final_formal_regression_greenline.md`. The commit and tag remain local; pushed: no.

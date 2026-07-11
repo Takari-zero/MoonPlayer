@@ -51,3 +51,15 @@
 - Do not commit `test-results/` logs.
 - Review patch files before deciding whether any docs-only archive patch should be kept.
 - Treat `localvibe_fastspeech2_formal_phase4h1_before_true_instant_entry_fix.utf8.patch` as a temporary conversion artifact unless explicitly retained.
+
+## 6. Phase 5C.29 Greenline
+
+The mature reader preload and ready-state path completed final Formal real-device regression at:
+
+- Commit: `b54b578`
+- Local tag: `local-greenline-moonplayer-phase5c29-final-formal-regression-b54b578`
+- Pushed: no
+
+The validated store-hit path enters real reader content without the older restore placeholder, stable snapshot, or reader-level loading path described in the Phase 4H limits above. The reader uses a bounded 133-sentence window, keeps UI/playback/highlight/time/progress targets aligned, and invalidates active audio sessions on pause.
+
+See `docs/book_reader_phase5c29_final_formal_regression_greenline.md` for the Phase 5C.17-5C.29 result, real-device evidence summary, remaining notes, and continuation baseline.
