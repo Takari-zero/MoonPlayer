@@ -1,0 +1,428 @@
+﻿package com.shenghui.localvibe.feature.book.playback
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BookReaderPreloadRuntimeWiringTest {
+    @Test
+    fun formalPackageCanEnterObservePathWhenExplicitFlagIsFalse() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe.fastspeech2formal",
+            explicitPreloadFlag = false,
+        )
+
+        assertTrue(decision.formalPackage)
+        assertTrue(decision.observeEnabled)
+        assertFalse(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun mainPackageKeepsObservePathDisabled() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe",
+            explicitPreloadFlag = false,
+        )
+
+        assertFalse(decision.formalPackage)
+        assertFalse(decision.observeEnabled)
+        assertFalse(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun mainPackageCannotEnableBookshelfPreloadEvenWhenFlagIsTrue() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe",
+            explicitPreloadFlag = true,
+        )
+
+        assertFalse(decision.formalPackage)
+        assertFalse(decision.observeEnabled)
+        assertFalse(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun formalPackageCanEnableBookshelfPreloadOnlyWhenFlagIsTrue() {
+        val decision = BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = "com.shenghui.localvibe.fastspeech2formal",
+            explicitPreloadFlag = true,
+        )
+
+        assertTrue(decision.formalPackage)
+        assertTrue(decision.observeEnabled)
+        assertTrue(decision.preloadEnabled)
+        assertFalse(decision.preloadStarted)
+        assertFalse(decision.txtReadTriggered)
+    }
+
+    @Test
+    fun disabledWiringDoesNotCreateRuntimeFactoryOrStartPreload() {
+        var factoryCreations = 0
+        var sourceCreations = 0
+        var readCalls = 0
+
+        val plan = BookReaderPreloadRuntimeWiring.plan(
+            enabled = false,
+            runtimeFactory = {
+                factoryCreations++
+                BookReaderPreloadRuntimeFactory(
+                    paragraphSourceFactory = {
+                        sourceCreations++
+                        BookParagraphSource { request ->
+                            readCalls++
+                            BookParagraphLoadResult.success(
+                                key = request.key,
+                                paragraphs = listOf("Chapter 1", "First sentence."),
+                            )
+                        }
+                    },
+                    clock = IncrementingBookDocumentClock(start = 100L),
+                )
+            },
+        )
+
+        assertTrue(plan is BookReaderPreloadRuntimeWiringPlan.Disabled)
+        assertEquals(0, factoryCreations)
+        assertEquals(0, sourceCreations)
+        assertEquals(0, readCalls)
+        assertFalse(plan.preloadStarted)
+        assertTrue(plan.clickPlan() is BookReaderBookshelfClickPlan.LegacyOpen)
+    }
+
+    @Test
+    fun disabledWiringKeepsLegacyBookClickPlanEvenWhenReadyStateCouldExist() {
+        val plan = BookReaderPreloadRuntimeWiring.plan(
+            enabled = false,
+            runtimeFactory = {
+                BookReaderPreloadRuntimeFactory(
+                    paragraphSourceFactory = {
+                        BookParagraphSource { request ->
+                            BookParagraphLoadResult.success(
+                                key = request.key,
+                                paragraphs = listOf("Chapter 1", "First sentence."),
+                            )
+                        }
+                    },
+                )
+            },
+        )
+
+        val clickPlan = plan.clickPlan(readyStateAvailable = true)
+
+        assertTrue(clickPlan is BookReaderBookshelfClickPlan.LegacyOpen)
+    }
+
+    @Test
+    fun enabledWiringCreatesRuntimeOnlyWhenExplicitlyRequested() {
+        var factoryCreations = 0
+        var sourceCreations = 0
+        var readCalls = 0
+        val plan = BookReaderPreloadRuntimeWiring.plan(
+            enabled = true,
+            runtimeFactory = {
+                factoryCreations++
+                BookReaderPreloadRuntimeFactory(
+                    paragraphSourceFactory = {
+                        sourceCreations++
+                        BookParagraphSource { request ->
+                            readCalls++
+                            BookParagraphLoadResult.success(
+                                key = request.key,
+                                paragraphs = listOf("Chapter 1", "First sentence."),
+                            )
+                        }
+                    },
+                    clock = IncrementingBookDocumentClock(start = 100L),
+                )
+            },
+        )
+
+        assertTrue(plan is BookReaderPreloadRuntimeWiringPlan.Enabled)
+        assertEquals(0, factoryCreations)
+        assertEquals(0, sourceCreations)
+        assertEquals(0, readCalls)
+
+        val runtime = (plan as BookReaderPreloadRuntimeWiringPlan.Enabled).createRuntime()
+
+        assertEquals(1, factoryCreations)
+        assertEquals(1, sourceCreations)
+        assertEquals(0, readCalls)
+        assertFalse(runtime.readyStateStore.get(request().key).isReady)
+    }
+
+    @Test
+    fun enabledWiringCanPlanBookshelfPreparingOrReadyOpenWithoutTriggeringRead() {
+        var readCalls = 0
+        val plan = BookReaderPreloadRuntimeWiring.plan(
+            enabled = true,
+            runtimeFactory = {
+                BookReaderPreloadRuntimeFactory(
+                    paragraphSourceFactory = {
+                        BookParagraphSource { request ->
+                            readCalls++
+                            BookParagraphLoadResult.success(
+                                key = request.key,
+                                paragraphs = listOf("Chapter 1", "First sentence."),
+                            )
+                        }
+                    },
+                    clock = IncrementingBookDocumentClock(start = 100L),
+                )
+            },
+        )
+
+        assertTrue(plan.clickPlan(readyStateAvailable = false) is BookReaderBookshelfClickPlan.PrepareOnBookshelf)
+        assertTrue(plan.clickPlan(readyStateAvailable = true) is BookReaderBookshelfClickPlan.OpenReadyReader)
+        assertEquals(0, readCalls)
+    }
+
+    @Test
+    fun explicitRuntimePreloadIsTheOnlyPathThatReadsSource() {
+        var readCalls = 0
+        val plan = BookReaderPreloadRuntimeWiring.plan(
+            enabled = true,
+            runtimeFactory = {
+                BookReaderPreloadRuntimeFactory(
+                    paragraphSourceFactory = {
+                        BookParagraphSource { request ->
+                            readCalls++
+                            BookParagraphLoadResult.success(
+                                key = request.key,
+                                paragraphs = listOf("Chapter 1", "First sentence."),
+                            )
+                        }
+                    },
+                    clock = IncrementingBookDocumentClock(start = 100L),
+                )
+            },
+        ) as BookReaderPreloadRuntimeWiringPlan.Enabled
+        val runtime = plan.createRuntime()
+
+        val result = runtime.preloadManager.preload(request())
+
+        assertEquals(1, readCalls)
+        assertTrue(result.isReady)
+        assertTrue(runtime.readyStateStore.get(request().key).isReady)
+    }
+
+    @Test
+    fun scheduledPreloadReadsSourceAndStoresReadyStateOnlyWhenExplicitlyScheduled() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val request = request()
+        val candidate = BookReaderBookshelfPreloadCandidate(request)
+
+        val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+            runtime = runtime,
+            candidates = listOf(candidate),
+            recentBookKeys = listOf(request.key),
+            currentBookKey = null,
+            maxPreloadCount = 1,
+        )
+
+        assertTrue(result.scheduled)
+        assertFalse(result.uiBlocked)
+        assertFalse(result.txtReadOnMain)
+        assertEquals(1, readCalls)
+        assertTrue(result.results.single().isReady)
+        assertTrue(runtime.readyStateStore.get(request.key).isReady)
+    }
+
+    @Test
+    fun scheduledPreloadFailureDoesNotMarkStoreReady() {
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    BookParagraphLoadResult.failed(
+                        key = request.key,
+                        message = "parse failed",
+                        cause = IllegalStateException("parse failed"),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val request = request()
+
+        val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+            runtime = runtime,
+            candidates = listOf(BookReaderBookshelfPreloadCandidate(request)),
+            recentBookKeys = listOf(request.key),
+            currentBookKey = null,
+            maxPreloadCount = 1,
+        )
+
+        assertTrue(result.scheduled)
+        assertFalse(result.results.single().isReady)
+        assertFalse(runtime.readyStateStore.get(request.key).isReady)
+    }
+
+    @Test
+    fun emptyPreloadPlanDoesNotReadSourceOrStartPreload() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+
+        val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+            runtime = runtime,
+            candidates = emptyList(),
+            recentBookKeys = emptyList(),
+            currentBookKey = null,
+            maxPreloadCount = 1,
+        )
+
+        assertFalse(result.scheduled)
+        assertFalse(result.uiBlocked)
+        assertFalse(result.txtReadOnMain)
+        assertEquals(0, readCalls)
+        assertTrue(result.results.isEmpty())
+    }
+
+    @Test
+    fun formalStoreHitSelectsReadyReaderWithoutSyncPreload() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val preloadResult = runtime.preloadManager.preload(request())
+        assertTrue(preloadResult.isReady)
+        readCalls = 0
+
+        val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+            plan = BookReaderPreloadRuntimeWiring.plan(
+                enabled = true,
+                runtimeFactory = {
+                    error("click must not create a runtime or parse text")
+                },
+            ),
+            key = request().key,
+            readyStateStore = runtime.readyStateStore,
+        )
+
+        assertTrue(clickResult.clickPlan is BookReaderBookshelfClickPlan.OpenReadyReader)
+        assertEquals(runtime.readyStateStore.getReadyState(request().key), clickResult.readyState)
+        assertFalse(clickResult.syncPreloadStarted)
+        assertFalse(clickResult.txtReadTriggered)
+        assertEquals(0, readCalls)
+        val readyState = requireNotNull(clickResult.readyState)
+        assertEquals(readyState.canonicalTarget.paragraphIndex, readyState.playbackSeed.paragraphIndex)
+        assertEquals(readyState.canonicalTarget.sentenceIndex, readyState.playbackSeed.sentenceIndex)
+        assertEquals(readyState.canonicalTarget.chapterSentenceIndex, readyState.progressSnapshot.chapterSentenceIndex)
+    }
+
+    @Test
+    fun formalStoreMissFallsBackLegacyWithoutSyncParse() {
+        var readCalls = 0
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    readCalls++
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+
+        val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+            plan = BookReaderPreloadRuntimeWiring.plan(
+                enabled = true,
+                runtimeFactory = {
+                    error("click must not create a runtime or parse text")
+                },
+            ),
+            key = request().key,
+            readyStateStore = runtime.readyStateStore,
+        )
+
+        assertTrue(clickResult.clickPlan is BookReaderBookshelfClickPlan.LegacyOpen)
+        assertEquals(null, clickResult.readyState)
+        assertFalse(clickResult.syncPreloadStarted)
+        assertFalse(clickResult.txtReadTriggered)
+        assertEquals(0, readCalls)
+    }
+
+    @Test
+    fun mainPackageDisabledPlanAlwaysUsesLegacyEvenIfStoreHasReadyState() {
+        val runtime = BookReaderPreloadRuntimeFactory(
+            paragraphSourceFactory = {
+                BookParagraphSource { request ->
+                    BookParagraphLoadResult.success(
+                        key = request.key,
+                        paragraphs = listOf("Chapter 1", "First sentence."),
+                    )
+                }
+            },
+            clock = IncrementingBookDocumentClock(start = 100L),
+        ).create()
+        val preloadResult = runtime.preloadManager.preload(request())
+        assertTrue(preloadResult.isReady)
+
+        val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+            plan = BookReaderPreloadRuntimeWiring.plan(
+                enabled = false,
+                runtimeFactory = {
+                    error("disabled click must not create a runtime")
+                },
+            ),
+            key = request().key,
+            readyStateStore = runtime.readyStateStore,
+        )
+
+        assertTrue(clickResult.clickPlan is BookReaderBookshelfClickPlan.LegacyOpen)
+        assertEquals(null, clickResult.readyState)
+        assertFalse(clickResult.syncPreloadStarted)
+        assertFalse(clickResult.txtReadTriggered)
+    }
+
+    private fun request(): BookDocumentPreloadRequest {
+        return BookDocumentPreloadRequest(
+            key = BookDocumentCacheKey("content://book/demo.txt"),
+            title = "Demo Book",
+            savedParagraphIndex = 1,
+            savedSentenceIndex = 0,
+            chapterTitle = "Chapter 1",
+            chapterStartIndex = 0,
+            speechRate = 1f,
+        )
+    }
+}

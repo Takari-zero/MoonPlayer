@@ -1,4 +1,4 @@
-﻿package com.shenghui.localvibe
+package com.shenghui.localvibe
 
 import android.Manifest
 import android.app.Activity
@@ -99,6 +99,7 @@ import com.shenghui.localvibe.core.media.VideoMetadata
 import com.shenghui.localvibe.core.media.VideoThumbnailPrewarmer
 import com.shenghui.localvibe.core.media.VideoThumbnailStore
 import com.shenghui.localvibe.core.media.videoMetadataCacheKey
+import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.player.AudioPlayMode
 import com.shenghui.localvibe.core.player.MusicPlaybackService
 import com.shenghui.localvibe.core.scanner.FolderScanner
@@ -112,8 +113,27 @@ import com.shenghui.localvibe.feature.audio.AudioPlayerScreen
 import com.shenghui.localvibe.feature.audio.AudioLibraryScreen
 import com.shenghui.localvibe.feature.audio.AudioLibrarySection
 import com.shenghui.localvibe.feature.audio.AudioSortMode
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyPackageGate
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyPath
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteLoader
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteInput
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteReadyStateLoader
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadow
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteShadowPlan
+import com.shenghui.localvibe.feature.book.BookReaderEntryReadyRouteState
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
+import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiringPlan
+import com.shenghui.localvibe.feature.book.playback.BookReaderBookshelfPreloadCandidate
+import com.shenghui.localvibe.feature.book.playback.BookDocumentPreloadRequest
+import com.shenghui.localvibe.feature.book.playback.BookDocumentCacheKey
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyState
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateStore
+import com.shenghui.localvibe.feature.book.playback.BookReaderEntryReadyStateWiringAdapter
+import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeFactory
+import com.shenghui.localvibe.feature.book.playback.BookReaderPreloadRuntimeWiring
+import com.shenghui.localvibe.feature.book.playback.BookReaderRestoreCacheSource
+import com.shenghui.localvibe.feature.book.playback.toEntryRestoreSnapshotInput
 import com.shenghui.localvibe.feature.folder.FolderScreen
 import com.shenghui.localvibe.feature.home.model.MediaFolderUiModel
 import com.shenghui.localvibe.feature.profile.ProfileScreen
@@ -130,6 +150,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
+private const val ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW = false
+private const val ENABLE_BOOK_READER_READY_PATH = true
+private const val ENABLE_BOOKSHELF_READER_PRELOAD = true
+private const val BOOK_READER_ROUTE_SHADOW_TAG = "LV_BOOK_FORMAL"
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -145,6 +170,39 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocalVibeApp() {
     val context = LocalContext.current
+    val bookshelfReaderReadyStateStore = remember { BookReaderEntryReadyStateStore() }
+    val bookshelfReaderPreloadObserveDecision = remember(BuildConfig.APPLICATION_ID) {
+        BookReaderPreloadRuntimeWiring.observeDecision(
+            packageName = BuildConfig.APPLICATION_ID,
+            explicitPreloadFlag = ENABLE_BOOKSHELF_READER_PRELOAD,
+        )
+    }
+    @Suppress("UNUSED_VARIABLE")
+    val bookshelfReaderPreloadWiringPlan = remember(
+        context,
+        bookshelfReaderReadyStateStore,
+        bookshelfReaderPreloadObserveDecision.preloadEnabled,
+    ) {
+        BookReaderPreloadRuntimeWiring.plan(
+            enabled = bookshelfReaderPreloadObserveDecision.preloadEnabled,
+            runtimeFactory = {
+                BookReaderPreloadRuntimeFactory.fromContext(
+                    context = context.applicationContext,
+                    readyStateStoreFactory = { bookshelfReaderReadyStateStore },
+                )
+            },
+        )
+    }
+    LaunchedEffect(bookshelfReaderPreloadObserveDecision) {
+        Log.d(
+            BOOK_READER_ROUTE_SHADOW_TAG,
+            "phase5c bookshelf preload observe " +
+                "formalPackage=${bookshelfReaderPreloadObserveDecision.formalPackage} " +
+                "preloadEnabled=${bookshelfReaderPreloadObserveDecision.preloadEnabled} " +
+                "preloadStarted=${bookshelfReaderPreloadObserveDecision.preloadStarted} " +
+                "txtReadTriggered=${bookshelfReaderPreloadObserveDecision.txtReadTriggered}"
+        )
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val navController = rememberNavController()
     val coroutineScope = rememberCoroutineScope()
@@ -197,6 +255,7 @@ private fun LocalVibeApp() {
     var selectedVideoUri by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAudioUri by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedBookUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedBookEntryReadyState by remember { mutableStateOf<BookReaderEntryReadyState?>(null) }
     var recentVideoFile by remember { mutableStateOf<LocalMediaFile?>(null) }
     var recentVideoUri by remember { mutableStateOf<String?>(null) }
     var recentAudioUri by remember { mutableStateOf<String?>(null) }
@@ -2475,6 +2534,93 @@ private fun LocalVibeApp() {
                             "final bookFiles count=${bookFiles.size}, imported=${importedBookFiles.size}, folderIgnored=${folderBookFiles.size}, uris=${bookFiles.joinToString { it.uri }}"
                         )
                     }
+                    LaunchedEffect(
+                        bookshelfReaderPreloadObserveDecision.preloadEnabled,
+                        bookFiles.map { it.normalizedBookKey() },
+                    ) {
+                        if (!bookshelfReaderPreloadObserveDecision.preloadEnabled) {
+                            Log.d(
+                                BOOK_READER_ROUTE_SHADOW_TAG,
+                                "phase5c bookshelf preload skipped main package " +
+                                    "formalPackage=${bookshelfReaderPreloadObserveDecision.formalPackage} " +
+                                    "preloadEnabled=${bookshelfReaderPreloadObserveDecision.preloadEnabled}"
+                            )
+                            return@LaunchedEffect
+                        }
+                        val preloadRequests = bookFiles
+                            .take(2)
+                            .map { file ->
+                                val progress = bookProgressMap[file.uri]
+                                BookDocumentPreloadRequest(
+                                    key = BookDocumentCacheKey(file.normalizedBookKey()),
+                                    title = file.name.substringBeforeLast('.', file.name).ifBlank { file.name },
+                                    savedParagraphIndex = progress?.paragraphIndex?.coerceAtLeast(0) ?: 0,
+                                    savedSentenceIndex = 0,
+                                    chapterTitle = "??",
+                                    chapterStartIndex = 0,
+                                    speechRate = 1f,
+                                )
+                            }
+                        if (preloadRequests.isEmpty()) {
+                            Log.d(
+                                BOOK_READER_ROUTE_SHADOW_TAG,
+                                "phase5c bookshelf preload scheduled count=0 uiBlocked=false"
+                            )
+                            return@LaunchedEffect
+                        }
+                        Log.d(
+                            BOOK_READER_ROUTE_SHADOW_TAG,
+                            "phase5c bookshelf preload scheduled count=${preloadRequests.size} uiBlocked=false"
+                        )
+                        withContext(Dispatchers.IO) {
+                            val enabledPlan = bookshelfReaderPreloadWiringPlan as? BookReaderPreloadRuntimeWiringPlan.Enabled
+                            if (enabledPlan == null) {
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c bookshelf preload skipped main package " +
+                                        "formalPackage=${bookshelfReaderPreloadObserveDecision.formalPackage} " +
+                                        "preloadEnabled=${bookshelfReaderPreloadObserveDecision.preloadEnabled}"
+                                )
+                                return@withContext
+                            }
+                            val runtime = enabledPlan.createRuntime()
+                            Log.d(
+                                BOOK_READER_ROUTE_SHADOW_TAG,
+                                "phase5c bookshelf preload start count=${preloadRequests.size} " +
+                                    "uiBlocked=false txtReadOnMain=false"
+                            )
+                            val result = BookReaderPreloadRuntimeWiring.schedulePreload(
+                                runtime = runtime,
+                                candidates = preloadRequests.map { request ->
+                                    BookReaderBookshelfPreloadCandidate(request)
+                                },
+                                recentBookKeys = preloadRequests.map { request -> request.key },
+                                currentBookKey = null,
+                                maxPreloadCount = 2,
+                            )
+                            result.results.forEach { preloadResult ->
+                                if (preloadResult.isReady) {
+                                    Log.d(
+                                        BOOK_READER_ROUTE_SHADOW_TAG,
+                                        "phase5c bookshelf preload success " +
+                                            "bookId=${preloadResult.key.bookId}"
+                                    )
+                                    Log.d(
+                                        BOOK_READER_ROUTE_SHADOW_TAG,
+                                        "phase5c readyState stored " +
+                                            "bookId=${preloadResult.key.bookId}"
+                                    )
+                                } else {
+                                    Log.w(
+                                        BOOK_READER_ROUTE_SHADOW_TAG,
+                                        "phase5c bookshelf preload failed " +
+                                            "bookId=${preloadResult.key.bookId} " +
+                                            "reason=${preloadResult.message.orEmpty()}"
+                                    )
+                                }
+                            }
+                        }
+                    }
                     BookLibraryScreen(
                         bookFiles = bookFiles,
                         bookProgressPercentMap = bookFiles.associate { file ->
@@ -2501,8 +2647,32 @@ private fun LocalVibeApp() {
                             permanentlyDeleteMedia(files)
                         },
                         onOpenBook = { file ->
+                            val clickResult = BookReaderPreloadRuntimeWiring.selectClickReadyState(
+                                plan = bookshelfReaderPreloadWiringPlan,
+                                key = BookDocumentCacheKey(file.normalizedBookKey()),
+                                readyStateStore = bookshelfReaderReadyStateStore,
+                            )
                             selectedMediaFile = file
                             selectedBookUri = file.uri
+                            selectedBookEntryReadyState = clickResult.readyState
+                            if (clickResult.readyState != null) {
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c click readyState store hit " +
+                                        "bookId=${clickResult.readyState.bookId}"
+                                )
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c navigate with stored readyState " +
+                                        "bookId=${clickResult.readyState.bookId}"
+                                )
+                            } else {
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5c click readyState store miss legacy fallback " +
+                                        "bookId=${file.normalizedBookKey()}"
+                                )
+                            }
                             navController.navigate(LocalVibeRoute.BookListen)
                         },
                         modifier = contentModifier
@@ -2518,32 +2688,183 @@ private fun LocalVibeApp() {
                     ?: selectedBookUri?.let { uri ->
                         allBookFiles.firstOrNull { it.uri == uri }
                     }
-                BookListenScreen(
+                val initialBookParagraphIndex = resolvedBookFile?.let { file ->
+                    bookProgressMap[file.uri]?.paragraphIndex ?: 0
+                } ?: 0
+                val entryReadyRouteInput = BookReaderEntryReadyRouteInput(
                     bookFile = resolvedBookFile,
-                    initialParagraphIndex = resolvedBookFile?.let { file ->
-                        bookProgressMap[file.uri]?.paragraphIndex ?: 0
-                    } ?: 0,
-                    onProgressChanged = { uri, paragraphIndex, totalParagraphs ->
-                        val progress = PersistedBookProgress(
-                            uri = uri,
-                            paragraphIndex = paragraphIndex,
-                            totalParagraphs = totalParagraphs,
-                            updatedAt = System.currentTimeMillis()
-                        )
-                        bookProgressMap[uri] = progress
-                        coroutineScope.launch {
-                            appStateStore.saveBookProgress(progress)
-                        }
-                    },
-                    onBeforeSpeak = {
-                        val controller = musicController
-                        if (controller?.isPlaying == true) {
-                            controller.pause()
-                            Toast.makeText(context, "已暂停音乐播放", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onBack = { navController.popBackStack() }
+                    initialParagraphIndex = initialBookParagraphIndex,
+                    speechRate = 1f,
                 )
+                val storedBookEntryReadyState = selectedBookEntryReadyState
+                    ?.takeIf { readyState ->
+                        resolvedBookFile?.normalizedBookKey() == readyState.bookId
+                    }
+                if (storedBookEntryReadyState != null) {
+                    Log.d(
+                        BOOK_READER_ROUTE_SHADOW_TAG,
+                        "phase5c route received stored readyState " +
+                            "bookId=${storedBookEntryReadyState.bookId}"
+                    )
+                }
+                val isFormalBookReaderPackage = BookReaderEntryReadyPackageGate.isFormalPackage(
+                    packageName = BuildConfig.APPLICATION_ID,
+                )
+                val isBookReaderReadyPathEnabled = BookReaderEntryReadyPackageGate.shouldEnable(
+                    packageName = BuildConfig.APPLICATION_ID,
+                    explicitFlag = ENABLE_BOOK_READER_READY_PATH,
+                )
+                var entryReadyRouteState by remember(
+                    resolvedBookFile?.uri,
+                    initialBookParagraphIndex,
+                    isBookReaderReadyPathEnabled,
+                ) {
+                    mutableStateOf<BookReaderEntryReadyRouteState?>(null)
+                }
+                val entryReadyRouteShadowPlan = BookReaderEntryReadyRouteShadow.plan(
+                    enabled = ENABLE_BOOK_READER_ENTRY_READY_ROUTE_SHADOW,
+                    input = entryReadyRouteInput
+                )
+                if (entryReadyRouteShadowPlan is BookReaderEntryReadyRouteShadowPlan.Enabled) {
+                    LaunchedEffect(entryReadyRouteShadowPlan.loadRequest) {
+                        val request = entryReadyRouteShadowPlan.loadRequest
+                        Log.d(
+                            BOOK_READER_ROUTE_SHADOW_TAG,
+                            "phase5b route shadow wiring enabled " +
+                                "bookId=${request.bookId} " +
+                                "bookTitle=${request.bookTitle} " +
+                                "routeInitialParagraphIndex=$initialBookParagraphIndex " +
+                                "chapterStartIndex=${request.chapterStartIndex} " +
+                                "speechRate=${request.speechRate}"
+                        )
+                    }
+                }
+                LaunchedEffect(BuildConfig.APPLICATION_ID, isBookReaderReadyPathEnabled, initialBookParagraphIndex) {
+                    Log.d(
+                        BOOK_READER_ROUTE_SHADOW_TAG,
+                        "phase5b formal ready path enabled=$isBookReaderReadyPathEnabled " +
+                            "formalPackage=$isFormalBookReaderPackage " +
+                            "packageName=${BuildConfig.APPLICATION_ID} " +
+                            "paragraphIndex=$initialBookParagraphIndex"
+                    )
+                }
+                val shouldLoadReadyStateInRoute = false
+                if (isBookReaderReadyPathEnabled && shouldLoadReadyStateInRoute) {
+                    LaunchedEffect(resolvedBookFile?.uri, initialBookParagraphIndex) {
+                        entryReadyRouteState = BookReaderEntryReadyRouteState.Preparing(entryReadyRouteInput)
+                        val loadedState = withContext(Dispatchers.IO) {
+                            BookReaderEntryReadyRouteLoader.loadIfEnabled(
+                                enabled = true,
+                                input = entryReadyRouteInput,
+                                loader = BookReaderEntryReadyRouteReadyStateLoader { request ->
+                                    TxtBookReader
+                                        .readParagraphs(context.applicationContext, request.bookId)
+                                        .mapCatching { loadedParagraphs ->
+                                            val restoreSnapshot = BookReaderRestoreCacheSource
+                                                .load(context.applicationContext, request.bookId)
+                                                ?.toEntryRestoreSnapshotInput()
+                                            BookReaderEntryReadyStateWiringAdapter
+                                                .load(
+                                                    BookReaderEntryReadyStateWiringAdapter.Input(
+                                                        bookId = request.bookId,
+                                                        bookTitle = request.bookTitle,
+                                                        paragraphs = loadedParagraphs,
+                                                        restoreSnapshot = restoreSnapshot,
+                                                        chapterIndex = request.chapterIndex,
+                                                        chapterTitle = request.chapterTitle,
+                                                        chapterStartIndex = request.chapterStartIndex,
+                                                        chapterEndExclusive = request.chapterEndExclusive,
+                                                        speechRate = request.speechRate,
+                                                    )
+                                                )
+                                                .getOrThrow()
+                                        }
+                                },
+                            )
+                        }
+                        entryReadyRouteState = loadedState
+                        when (loadedState) {
+                            is BookReaderEntryReadyRouteState.Ready -> {
+                                val readyState = loadedState.readyState
+                                Log.d(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5b formal ready path readyState loaded " +
+                                        "bookId=${readyState.bookId} " +
+                                        "firstFrame target=${readyState.canonicalTarget.paragraphIndex}/" +
+                                        "${readyState.canonicalTarget.sentenceIndex}/" +
+                                        "${readyState.canonicalTarget.chapterSentenceIndex} " +
+                                        "playback seed target=${readyState.playbackSeed.paragraphIndex}/" +
+                                        "${readyState.playbackSeed.sentenceIndex}"
+                                )
+                            }
+                            is BookReaderEntryReadyRouteState.Failed -> {
+                                Log.w(
+                                    BOOK_READER_ROUTE_SHADOW_TAG,
+                                    "phase5b formal ready path readyState load failed fallback " +
+                                        "reason=${loadedState.message}",
+                                    loadedState.cause,
+                                )
+                            }
+                            else -> Unit
+                        }
+                    }
+                }
+                val effectiveEntryReadyRouteState = storedBookEntryReadyState?.let { readyState ->
+                    BookReaderEntryReadyRouteState.Ready(
+                        input = entryReadyRouteInput,
+                        readyState = readyState,
+                    )
+                } ?: entryReadyRouteState
+                val entryReadyPathPlan = BookReaderEntryReadyPath.plan(
+                    enabled = isBookReaderReadyPathEnabled,
+                    routeState = effectiveEntryReadyRouteState,
+                )
+                val shouldWaitForFormalReadyState = false
+                if (shouldWaitForFormalReadyState) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0F1115))
+                    )
+                } else {
+                    val screenReadyState = entryReadyPathPlan.entryReadyStateForScreen()
+                    if (screenReadyState != null) {
+                        Log.d(
+                            BOOK_READER_ROUTE_SHADOW_TAG,
+                            "phase5b formal ready path BookListenScreen entryReadyState non-null " +
+                                "firstFrame target=${screenReadyState.canonicalTarget.paragraphIndex}/" +
+                                "${screenReadyState.canonicalTarget.sentenceIndex}/" +
+                                "${screenReadyState.canonicalTarget.chapterSentenceIndex} " +
+                                "playback seed target=${screenReadyState.playbackSeed.paragraphIndex}/" +
+                                "${screenReadyState.playbackSeed.sentenceIndex}"
+                        )
+                    }
+                    BookListenScreen(
+                        bookFile = resolvedBookFile,
+                        initialParagraphIndex = initialBookParagraphIndex,
+                        entryReadyState = screenReadyState,
+                        onProgressChanged = { uri, paragraphIndex, totalParagraphs ->
+                            val progress = PersistedBookProgress(
+                                uri = uri,
+                                paragraphIndex = paragraphIndex,
+                                totalParagraphs = totalParagraphs,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                            bookProgressMap[uri] = progress
+                            coroutineScope.launch {
+                                appStateStore.saveBookProgress(progress)
+                            }
+                        },
+                        onBeforeSpeak = {
+                            val controller = musicController
+                            if (controller?.isPlaying == true) {
+                                controller.pause()
+                                Toast.makeText(context, "已暂停音乐播放", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onBack = { navController.popBackStack() }
+                    )
+                }
             }
             composable(LocalVibeRoute.Profile) {
                 MainTabScaffold(navController = navController) { contentModifier ->
