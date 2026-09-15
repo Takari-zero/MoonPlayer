@@ -6,6 +6,8 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.speech.tts.TextToSpeech
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -49,7 +51,6 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -76,6 +77,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -100,12 +104,16 @@ import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
 import com.shenghui.localvibe.core.tts.BookTtsVoice
+import com.shenghui.localvibe.core.tts.PcmAudioChunk
 import com.shenghui.localvibe.core.tts.StreamingPcmAudioPlayer
 import com.shenghui.localvibe.core.tts.StreamingTtsParams
 import com.shenghui.localvibe.core.tts.StreamingTtsResult
 import com.shenghui.localvibe.core.tts.ToneStreamingTtsEngine
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -124,6 +132,41 @@ fun BookListenScreen(
     val initialReadStateCache = remember(bookFile?.uri) {
         loadBookReadStateCache(context.applicationContext, bookFile?.uri)
     }
+    LaunchedEffect(bookFile?.uri, initialReadStateCache) {
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "screen enter book listen bookUri=${bookFile?.uri} snapshotHit=${initialReadStateCache != null}"
+        )
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "screen enter prepared cache dump ${BookAishell3PreparedAudioCache.dumpSummary()}"
+        )
+        val state = initialReadStateCache
+        if (state != null) {
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "snapshot hit currentChapterSentenceIndex=${state.lastChapterSentenceIndex} " +
+                    "cachedStart=${state.cachedStartChapterSentenceIndex} cachedSize=${state.cachedSentences.size} " +
+                    "firstVisible=${state.lastVisibleFirstItemIndex} offset=${state.lastVisibleFirstItemScrollOffset} " +
+                    "elapsed=${state.cachedElapsedSeconds} remaining=${state.cachedRemainingSeconds} " +
+                    "progress=${state.cachedProgressFraction}"
+            )
+            Log.d(
+                BOOK_RESTORE_TAG,
+                "restore saved position bookUri=${bookFile?.uri} " +
+                    "paragraph=${state.lastParagraphIndex} " +
+                    "sentence=${state.lastSentenceIndexInParagraph} " +
+                    "chapterSentence=${state.lastChapterSentenceIndex} " +
+                    "target=${state.lastReadingTargetName} " +
+                    "chapterTitle=${state.lastChapterTitle}"
+            )
+        } else {
+            Log.d(
+                BOOK_RESTORE_TAG,
+                "restore saved position missing bookUri=${bookFile?.uri} fallbackParagraph=$initialParagraphIndex"
+            )
+        }
+    }
     var cachedReadState by remember(bookFile?.uri) { mutableStateOf(initialReadStateCache) }
     var paragraphs by remember(bookFile?.uri) { mutableStateOf(emptyList<String>()) }
     var currentParagraphIndex by remember(bookFile?.uri) {
@@ -138,7 +181,13 @@ fun BookListenScreen(
     var isLoading by remember(bookFile?.uri) { mutableStateOf(bookFile != null) }
     var loadError by remember(bookFile?.uri) { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
+    var wasPlayingBeforeSliderSeek by remember { mutableStateOf(false) }
     var playbackSessionId by remember { mutableLongStateOf(0L) }
+    var pendingPlaySessionId by remember { mutableLongStateOf(-1L) }
+    var pendingPlayTargetChapterSentenceIndex by remember { mutableIntStateOf(-1) }
+    var lastPlaybackRequestTarget by remember { mutableIntStateOf(-1) }
+    var lastPlaybackRequestTrigger by remember { mutableStateOf("") }
+    var lastPlaybackRequestAtMs by remember { mutableLongStateOf(0L) }
     var activePlaybackEngineName by remember { mutableStateOf(BookPlaybackEngine.NONE.name) }
     var isTtsReady by remember { mutableStateOf(false) }
     var isTtsChecking by remember { mutableStateOf(true) }
@@ -204,15 +253,54 @@ fun BookListenScreen(
     val builtInOfflineTtsEngine = remember { BuiltInOfflineTtsEngine() }
     val aishell3TtsEngine = remember { Aishell3SegmentedStreamingTtsEngine(context.applicationContext) }
     var aishell3Player by remember { mutableStateOf<StreamingPcmAudioPlayer?>(null) }
+    val aishell3StopJobRef = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.Job?>(null) }
     var isAishell3Paused by remember { mutableStateOf(false) }
     var isBuiltInOfflineTtsInitializing by remember { mutableStateOf(false) }
     var builtInOfflineTtsError by remember { mutableStateOf<String?>(null) }
+    val screenDisposed = remember(bookFile?.uri) { java.util.concurrent.atomic.AtomicBoolean(false) }
 
     DisposableEffect(Unit) {
         onDispose {
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "dispose begin sessionId=$playbackSessionId paragraph=$currentParagraphIndex " +
+                    "sentence=$currentSentenceIndexInParagraph"
+            )
+            screenDisposed.set(true)
+            playbackSessionId += 1
+            pendingPlaySessionId = -1L
+            pendingPlayTargetChapterSentenceIndex = -1
+            Log.i(BOOK_HOT_TTS_TAG, "play intent cancelled session=$playbackSessionId reason=dispose")
+            Log.i(BOOK_HOT_TTS_TAG, "dispose cancel playback jobs sessionId=$playbackSessionId")
+            Log.i(BOOK_HOT_TTS_TAG, "dispose stop audio")
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "prepared cache dump before dispose ${BookAishell3PreparedAudioCache.dumpSummary()}"
+            )
+            isAishell3Paused = false
+            aishell3TtsEngine.stop()
+            val player = aishell3Player
+            aishell3Player = null
+            if (player != null) {
+                val stopJob = CoroutineScope(Dispatchers.IO).launch {
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "audio output stop old requested trigger=dispose session=$playbackSessionId main=${Looper.myLooper() == Looper.getMainLooper()}"
+                    )
+                    player.stop()
+                    player.release()
+                    Log.i(BOOK_HOT_TTS_TAG, "audio output release done session=$playbackSessionId trigger=dispose")
+                }
+                aishell3StopJobRef.set(stopJob)
+            }
+            ttsController?.stop()
             builtInOfflineTtsEngine.release()
-            aishell3TtsEngine.release()
-            aishell3Player?.release()
+            Log.i(BOOK_HOT_TTS_TAG, "dispose does not release native engine sessionId=$playbackSessionId")
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "prepared cache dump after dispose ${BookAishell3PreparedAudioCache.dumpSummary()}"
+            )
+            Log.i(BOOK_HOT_TTS_TAG, "dispose end")
         }
     }
 
@@ -222,12 +310,625 @@ fun BookListenScreen(
         onProgressChanged(file.uri, index.coerceIn(0, total - 1), total)
     }
 
-    fun stopAishell3Playback() {
+    fun stopAishell3Playback(trigger: String = "unknown"): kotlinx.coroutines.Job? {
         isAishell3Paused = false
         aishell3TtsEngine.stop()
-        aishell3Player?.stop()
-        aishell3Player?.release()
+        val player = aishell3Player
         aishell3Player = null
+        return if (player != null) {
+            val stopJob = CoroutineScope(Dispatchers.IO).launch {
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "audio output stop old requested trigger=$trigger session=$playbackSessionId main=${Looper.myLooper() == Looper.getMainLooper()}"
+                )
+                player.stop()
+                player.release()
+                Log.i(BOOK_HOT_TTS_TAG, "audio output release done session=$playbackSessionId trigger=$trigger")
+            }
+            aishell3StopJobRef.set(stopJob)
+            stopJob
+        } else {
+            null
+        }
+    }
+
+    suspend fun awaitAishell3OutputSwitch(trigger: String, sessionId: Long) {
+        val stopJob = aishell3StopJobRef.get()
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "audio output switch begin trigger=$trigger newSession=$sessionId " +
+                "hasStopJob=${stopJob != null} stopActive=${stopJob?.isActive == true}"
+        )
+        if (stopJob != null && stopJob.isActive) {
+            withContext(Dispatchers.IO) {
+                stopJob.join()
+            }
+        }
+        Log.i(BOOK_HOT_TTS_TAG, "audio output new session start allowed trigger=$trigger session=$sessionId")
+    }
+
+    fun aishell3PreparedKey(chapterSentenceIndex: Int, text: String): String {
+        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|${text.hashCode()}|${speechRate.coerceIn(0.5f, 2.0f)}|$pitch"
+    }
+
+    fun aishell3SegmentKey(chapterSentenceIndex: Int, segmentIndex: Int, segmentText: String): String {
+        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|seg=$segmentIndex|${segmentText.hashCode()}|${speechRate.coerceIn(0.5f, 2.0f)}|$pitch"
+    }
+
+    fun isPlausibleChapterSentenceIndex(index: Int): Boolean {
+        return index in 0..50_000
+    }
+
+    fun shouldIgnoreDuplicatePlaybackRequest(target: Int, trigger: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        val duplicate = target == lastPlaybackRequestTarget &&
+            trigger == lastPlaybackRequestTrigger &&
+            now - lastPlaybackRequestAtMs < 500L
+        if (duplicate) {
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "duplicate playback request ignored trigger=$trigger target=$target"
+            )
+            return true
+        }
+        lastPlaybackRequestTarget = target
+        lastPlaybackRequestTrigger = trigger
+        lastPlaybackRequestAtMs = now
+        return false
+    }
+
+    fun trimPreparedAishell3Cache(keepKeys: Set<String>) {
+        BookAishell3PreparedAudioCache.trim(keepKeys)
+    }
+
+    suspend fun waitForPreparedAishell3Audio(key: String, timeoutMs: Long = 2_000L): List<PcmAudioChunk>? {
+        val startedAt = SystemClock.elapsedRealtime()
+        while (SystemClock.elapsedRealtime() - startedAt < timeoutMs) {
+            BookAishell3PreparedAudioCache.get(key)?.let { return it }
+            if (!BookAishell3PreparedAudioCache.isPrewarming(key)) return null
+            delay(40L)
+        }
+        return BookAishell3PreparedAudioCache.get(key)
+    }
+
+    suspend fun waitForAishell3Segment(key: String, timeoutMs: Long = 2_000L): PcmAudioChunk? {
+        val startedAt = SystemClock.elapsedRealtime()
+        while (SystemClock.elapsedRealtime() - startedAt < timeoutMs) {
+            BookAishell3SegmentAudioCache.get(key)?.let { return it }
+            if (!BookAishell3SegmentAudioCache.isPrewarming(key)) return null
+            delay(40L)
+        }
+        return BookAishell3SegmentAudioCache.get(key)
+    }
+
+    suspend fun synthesizeAishell3SegmentForCache(
+        key: String,
+        segmentText: String,
+        segmentIndex: Int,
+        isFinal: Boolean,
+        source: String,
+        waitTimeoutMs: Long = 6_000L
+    ): PcmAudioChunk? {
+        if (BookAishell3SegmentAudioCache.get(key) != null) {
+            Log.i(BOOK_HOT_TTS_TAG, "segment cache hit key=$key source=$source")
+            return BookAishell3SegmentAudioCache.get(key)
+        }
+        if (!BookAishell3SegmentAudioCache.markPrewarming(key)) {
+            if (segmentIndex == 0) {
+                Log.i(BOOK_HOT_TTS_TAG, "segment0 in-flight wait session=$source key=$key")
+            }
+            Log.i(BOOK_HOT_TTS_TAG, "play wait in-flight segment$segmentIndex key=$key")
+            val waitStartedAt = SystemClock.elapsedRealtime()
+            val waited = waitForAishell3Segment(key, timeoutMs = waitTimeoutMs)
+            if (waited != null) {
+                if (segmentIndex == 0) {
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "play auto start after segment0 ready session=$source waitMs=${SystemClock.elapsedRealtime() - waitStartedAt}"
+                    )
+                }
+                Log.i(BOOK_HOT_TTS_TAG, "play hit after wait segment$segmentIndex key=$key")
+            }
+            return waited
+        }
+        val startedAt = System.currentTimeMillis()
+        if (segmentIndex == 0) {
+            Log.i(BOOK_HOT_TTS_TAG, "segment0 urgent request session=$source key=$key")
+            Log.i(BOOK_HOT_TTS_TAG, "segment0 cache miss session=$source key=$key")
+        }
+        Log.i(BOOK_HOT_TTS_TAG, "first segment synth start key=$key index=$segmentIndex source=$source")
+        val result = aishell3TtsEngine.synthesizeSegmentToChunk(
+            segmentText = segmentText,
+            params = StreamingTtsParams(
+                voiceId = "aishell3-speaker-10",
+                speed = speechRate.coerceIn(0.5f, 2.0f),
+                pitch = pitch,
+                volume = 1f
+            ),
+            sessionLabel = source,
+            segmentIndex = segmentIndex,
+            isFinal = isFinal
+        )
+        BookAishell3SegmentAudioCache.unmarkPrewarming(key)
+        return result
+            .onSuccess { chunk ->
+                BookAishell3SegmentAudioCache.put(key, chunk, source = source)
+                if (segmentIndex == 0) {
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "segment0 ready session=$source costMs=${System.currentTimeMillis() - startedAt} key=$key"
+                    )
+                }
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "first segment ready costMs=${System.currentTimeMillis() - startedAt} key=$key index=$segmentIndex"
+                )
+            }
+            .onFailure { error ->
+                Log.i(BOOK_HOT_TTS_TAG, "segment synth failed key=$key index=$segmentIndex error=${error.message}")
+            }
+            .getOrNull()
+    }
+
+    fun prewarmAishell3Audio(
+        key: String,
+        text: String,
+        label: String,
+        keepKeys: Set<String> = setOf(key),
+        onReady: (() -> Unit)? = null
+    ) {
+        if (!isReadableBookTtsText(text)) return
+        if (!BookAishell3PreparedAudioCache.markPrewarming(key)) {
+            val alreadyPrepared = BookAishell3PreparedAudioCache.contains(key)
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "prewarm $label skip key=$key prepared=$alreadyPrepared " +
+                    "running=${BookAishell3PreparedAudioCache.isPrewarming(key)} " +
+                    "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+            )
+            if (alreadyPrepared) {
+                Log.i(BOOK_HOT_TTS_TAG, "prepared cache restore hit key=$key label=$label")
+                onReady?.invoke()
+            }
+            return
+        }
+        val startedAt = System.currentTimeMillis()
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "prewarm start key=$key label=$label textPreview=${text.take(32)}"
+        )
+        coroutineScope.launch {
+            if (screenDisposed.get()) {
+                Log.i(BOOK_HOT_TTS_TAG, "ignored callback after dispose prewarm key=$key")
+                BookAishell3PreparedAudioCache.unmarkPrewarming(key)
+                return@launch
+            }
+            val result = aishell3TtsEngine.synthesizeToChunks(
+                text = text,
+                params = StreamingTtsParams(
+                    voiceId = "aishell3-speaker-10",
+                    speed = speechRate.coerceIn(0.5f, 2.0f),
+                    pitch = pitch,
+                    volume = 1f
+                )
+            )
+            BookAishell3PreparedAudioCache.unmarkPrewarming(key)
+            result
+                .onSuccess { chunks ->
+                    if (chunks.isNotEmpty()) {
+                        BookAishell3PreparedAudioCache.put(key, chunks, source = "prewarm")
+                        trimPreparedAishell3Cache(keepKeys + key)
+                        Log.d(
+                            "BookReaderPlayback",
+                            "tts prewarm $label done costMs=${System.currentTimeMillis() - startedAt} " +
+                                "chunks=${chunks.size} bytes=${chunks.sumOf { it.data.size }} " +
+                                "prepared cache size=${BookAishell3PreparedAudioCache.size()} " +
+                                "prepared cache survives screen dispose=true"
+                        )
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "prewarm done key=$key label=$label costMs=${System.currentTimeMillis() - startedAt} " +
+                                "chunks=${chunks.size} bytes=${chunks.sumOf { it.data.size }} " +
+                                "prepared cache size=${BookAishell3PreparedAudioCache.size()} " +
+                                "prepared cache survives screen dispose=true"
+                        )
+                        onReady?.invoke()
+                    }
+                }
+                .onFailure { error ->
+                    Log.w("BookReaderPlayback", "tts prewarm $label failed costMs=${System.currentTimeMillis() - startedAt}", error)
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "prewarm failed key=$key label=$label error=${error.message}"
+                    )
+                }
+        }
+    }
+
+    fun prewarmAishell3Segments(
+        chapterSentenceIndex: Int,
+        text: String,
+        label: String,
+        onCurrentFirstReady: (() -> Unit)? = null
+    ) {
+        if (!isReadableBookTtsText(text)) return
+        val segments = aishell3TtsEngine.splitTextSegments(text)
+        if (segments.isEmpty()) return
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "segment split sentence=$chapterSentenceIndex segmentCount=${segments.size} firstLen=${segments.first().length}"
+        )
+        Log.i(BOOK_HOT_TTS_TAG, "segment[0] preview=${segments.first().take(24)}")
+        coroutineScope.launch {
+            val priorityReadyIndex = if (segments.size > 1) 1 else 0
+            segments.forEachIndexed { index, segmentText ->
+                if (screenDisposed.get()) {
+                    Log.i(BOOK_HOT_TTS_TAG, "ignored callback after dispose segment prewarm sentence=$chapterSentenceIndex")
+                    return@launch
+                }
+                val key = aishell3SegmentKey(chapterSentenceIndex, index, segmentText)
+                val cacheLabel = if (index == 0) "$label segment0" else "$label segment$index"
+                if (BookAishell3SegmentAudioCache.contains(key)) {
+                    Log.i(BOOK_HOT_TTS_TAG, "segment cache hit key=$key label=$cacheLabel")
+                    if (index == priorityReadyIndex) onCurrentFirstReady?.invoke()
+                    return@forEachIndexed
+                }
+                if (!BookAishell3SegmentAudioCache.markPrewarming(key)) {
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "prewarm $cacheLabel skip key=$key running=${BookAishell3SegmentAudioCache.isPrewarming(key)}"
+                    )
+                    if (index == priorityReadyIndex) {
+                        waitForAishell3Segment(key, timeoutMs = 6_000L)?.let {
+                            onCurrentFirstReady?.invoke()
+                        }
+                    }
+                    return@forEachIndexed
+                }
+                val startedAt = System.currentTimeMillis()
+                if (index == 0) {
+                    Log.i(BOOK_HOT_TTS_TAG, "prewarm current segment0 priority key=$key")
+                } else {
+                    Log.i(BOOK_HOT_TTS_TAG, "prewarm $cacheLabel key=$key")
+                }
+                val result = aishell3TtsEngine.synthesizeSegmentToChunk(
+                    segmentText = segmentText,
+                    params = StreamingTtsParams(
+                        voiceId = "aishell3-speaker-10",
+                        speed = speechRate.coerceIn(0.5f, 2.0f),
+                        pitch = pitch,
+                        volume = 1f
+                    ),
+                    sessionLabel = "prewarm",
+                    segmentIndex = index,
+                    isFinal = index == segments.lastIndex
+                )
+                BookAishell3SegmentAudioCache.unmarkPrewarming(key)
+                result
+                    .onSuccess { chunk ->
+                        BookAishell3SegmentAudioCache.put(key, chunk, source = "prewarm")
+                        if (index == 0) {
+                            Log.i(
+                                BOOK_HOT_TTS_TAG,
+                                "prewarm current segment0 done costMs=${System.currentTimeMillis() - startedAt} key=$key"
+                            )
+                        } else {
+                            Log.i(
+                                BOOK_HOT_TTS_TAG,
+                                "prewarm $cacheLabel done costMs=${System.currentTimeMillis() - startedAt} key=$key"
+                            )
+                        }
+                        if (index == priorityReadyIndex) {
+                            onCurrentFirstReady?.invoke()
+                        }
+                    }
+                    .onFailure { error ->
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "prewarm failed key=$key label=$cacheLabel error=${error.message}"
+                        )
+                    }
+            }
+        }
+    }
+
+    fun playPreparedAishell3Audio(
+        sessionId: Long,
+        key: String,
+        chunks: List<PcmAudioChunk>,
+        paragraphIndex: Int,
+        onSuccess: () -> Unit
+    ) {
+        coroutineScope.launch {
+            awaitAishell3OutputSwitch(trigger = "prepared playback", sessionId = sessionId)
+            if (sessionId != playbackSessionId || screenDisposed.get()) {
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "audio output write ignored old session=$sessionId trigger=prepared playback"
+                )
+                return@launch
+            }
+            val player = StreamingPcmAudioPlayer()
+            aishell3Player = player
+            val clickStartMs = System.currentTimeMillis()
+
+            suspend fun isPreparedSessionActive(): Boolean = withContext(Dispatchers.Main.immediate) {
+                sessionId == playbackSessionId && !screenDisposed.get()
+            }
+
+            suspend fun releasePreparedPlayer() {
+                withContext(Dispatchers.IO) {
+                    player.release()
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (aishell3Player === player) {
+                        aishell3Player = null
+                    }
+                }
+            }
+
+            try {
+                val completed = withContext(Dispatchers.IO) {
+                    var playbackDurationMs = 0L
+                    var playbackStartedAtMs = 0L
+                    var playbackStarted = false
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "prepared audio write start session=$sessionId main=${Looper.myLooper() == Looper.getMainLooper()} chunks=${chunks.size}"
+                    )
+                    for ((index, chunk) in chunks.withIndex()) {
+                        if (!isPreparedSessionActive()) {
+                            Log.i(
+                                BOOK_HOT_TTS_TAG,
+                                "prepared audio write ignored old session=$sessionId key=$key index=$index"
+                            )
+                            player.release()
+                            return@withContext false
+                        }
+                        if (!playbackStarted) {
+                            val startResult = player.startSession(sessionId, chunk.format)
+                            if (startResult.isFailure) {
+                                throw IllegalStateException(startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败")
+                            }
+                            playbackStarted = true
+                            playbackStartedAtMs = System.currentTimeMillis()
+                            withContext(Dispatchers.Main.immediate) {
+                                if (sessionId == playbackSessionId && !screenDisposed.get()) {
+                                    activePlaybackEngineName = BookPlaybackEngine.AISHELL3.name
+                                    isAishell3Paused = false
+                                    isPlaying = true
+                                    saveProgress(paragraphIndex)
+                                }
+                            }
+                            Log.d(
+                                "BookReaderPlayback",
+                                "audio track play start prepared key=$key costMs=${System.currentTimeMillis() - clickStartMs}"
+                            )
+                        }
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "prepared audio write chunk session=$sessionId main=${Looper.myLooper() == Looper.getMainLooper()} size=${chunk.data.size}"
+                        )
+                        val writeResult = player.write(sessionId, chunk.copy(isFinal = index == chunks.lastIndex))
+                        if (writeResult.isFailure) {
+                            throw IllegalStateException(writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败")
+                        }
+                        playbackDurationMs += chunk.data.size * 1000L / (chunk.format.sampleRate * 2L)
+                    }
+                    val drained = player.awaitSessionPlaybackComplete(sessionId)
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "prepared audio playback drained session=$sessionId drained=$drained " +
+                            "estimatedDurationMs=$playbackDurationMs elapsedMs=${System.currentTimeMillis() - playbackStartedAtMs}"
+                    )
+                    if (!drained) {
+                        player.release()
+                        return@withContext false
+                    }
+                    player.release()
+                    Log.i(BOOK_HOT_TTS_TAG, "prepared audio write end session=$sessionId")
+                    true
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (aishell3Player === player) {
+                        aishell3Player = null
+                    }
+                }
+                if (completed && isPreparedSessionActive()) {
+                    onSuccess()
+                }
+            } catch (error: Throwable) {
+                releasePreparedPlayer()
+                withContext(Dispatchers.Main.immediate) {
+                    isPlaying = false
+                    activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                }
+                Log.e("BookReaderPlayback", "prepared playback failed key=$key", error)
+            }
+        }
+    }
+
+    fun playSegmentedAishell3Audio(
+        sessionId: Long,
+        sentenceKey: String,
+        chapterSentenceIndex: Int,
+        text: String,
+        paragraphIndex: Int,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        coroutineScope.launch {
+            val segments = aishell3TtsEngine.splitTextSegments(text)
+            if (segments.isEmpty()) {
+                onError("text is blank")
+                return@launch
+            }
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "sentence segmented playback start current=$chapterSentenceIndex segments=${segments.size}"
+            )
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "segment split sentence=$chapterSentenceIndex segmentCount=${segments.size} firstLen=${segments.first().length}"
+            )
+            Log.i(BOOK_HOT_TTS_TAG, "segment[0] preview=${segments.first().take(24)}")
+            awaitAishell3OutputSwitch(trigger = "segmented playback", sessionId = sessionId)
+            if (sessionId != playbackSessionId || screenDisposed.get()) {
+                Log.i(BOOK_HOT_TTS_TAG, "segmented playback ignored old session=$sessionId")
+                return@launch
+            }
+
+            val player = StreamingPcmAudioPlayer()
+            aishell3Player = player
+            val clickStartMs = System.currentTimeMillis()
+            var playbackDurationMs = 0L
+            var playbackStartedAtMs = 0L
+            var playbackStarted = false
+            val synthesizedChunks = mutableListOf<PcmAudioChunk>()
+
+            suspend fun isSegmentSessionActive(): Boolean = withContext(Dispatchers.Main.immediate) {
+                sessionId == playbackSessionId && !screenDisposed.get()
+            }
+
+            suspend fun hasPendingSegmentPlayIntent(): Boolean = withContext(Dispatchers.Main.immediate) {
+                pendingPlaySessionId == sessionId &&
+                    pendingPlayTargetChapterSentenceIndex == chapterSentenceIndex &&
+                    !screenDisposed.get()
+            }
+
+            try {
+                for ((index, segmentText) in segments.withIndex()) {
+                    if (!isSegmentSessionActive()) {
+                        Log.i(BOOK_HOT_TTS_TAG, "segmented playback ignored old session=$sessionId index=$index")
+                        break
+                    }
+                    val segmentKey = aishell3SegmentKey(chapterSentenceIndex, index, segmentText)
+                    val cached = BookAishell3SegmentAudioCache.get(segmentKey)
+                    val chunk = if (cached != null) {
+                        if (index == 0) {
+                            Log.i(BOOK_HOT_TTS_TAG, "segment0 cache hit session=$sessionId key=$segmentKey")
+                        }
+                        Log.i(BOOK_HOT_TTS_TAG, "segment cache hit key=$segmentKey")
+                        cached.copy(isFinal = index == segments.lastIndex)
+                    } else {
+                        if (index == 0) {
+                            Log.i(BOOK_HOT_TTS_TAG, "segment0 cache miss session=$sessionId key=$segmentKey")
+                        }
+                        Log.i(BOOK_HOT_TTS_TAG, "segment cache miss key=$segmentKey")
+                        synthesizeAishell3SegmentForCache(
+                            key = segmentKey,
+                            segmentText = segmentText,
+                            segmentIndex = index,
+                            isFinal = index == segments.lastIndex,
+                            source = "play session=$sessionId",
+                            waitTimeoutMs = if (index == 0) 15_000L else 6_000L
+                        ) ?: throw IllegalStateException("segment synth failed index=$index")
+                    }
+
+                    if (!isSegmentSessionActive()) {
+                        Log.i(BOOK_HOT_TTS_TAG, "segment write ignored old session=$sessionId index=$index")
+                        break
+                    }
+                    if (index == 0 && !hasPendingSegmentPlayIntent()) {
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "play intent ignored old session=$sessionId target=$chapterSentenceIndex"
+                        )
+                        break
+                    }
+
+                    synthesizedChunks += chunk
+                    if (!playbackStarted) {
+                        val startResult = withContext(Dispatchers.IO) {
+                            player.startSession(sessionId, chunk.format)
+                        }
+                        if (startResult.isFailure) {
+                            throw IllegalStateException(startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败")
+                        }
+                        playbackStarted = true
+                        playbackStartedAtMs = System.currentTimeMillis()
+                        withContext(Dispatchers.Main.immediate) {
+                            if (sessionId == playbackSessionId && !screenDisposed.get()) {
+                                activePlaybackEngineName = BookPlaybackEngine.AISHELL3.name
+                                isAishell3Paused = false
+                                isPlaying = true
+                                saveProgress(paragraphIndex)
+                            }
+                        }
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "first audio start costMs=${System.currentTimeMillis() - clickStartMs} current=$chapterSentenceIndex"
+                        )
+                    }
+                    if (index == 0) {
+                        Log.i(BOOK_HOT_TTS_TAG, "segment0 enqueue audio session=$sessionId key=$segmentKey")
+                    }
+
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "next segment ready index=$index costMs=${System.currentTimeMillis() - clickStartMs}"
+                    )
+                    val writeResult = withContext(Dispatchers.IO) {
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "prepared audio write start main=${Looper.myLooper() == Looper.getMainLooper()} session=$sessionId segment=$index"
+                        )
+                        player.write(sessionId, chunk.copy(isFinal = index == segments.lastIndex))
+                    }
+                    if (writeResult.isFailure) {
+                        throw IllegalStateException(writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败")
+                    }
+                    playbackDurationMs += chunk.data.size * 1000L / (chunk.format.sampleRate * 2L)
+                    if (index + 1 < segments.size) {
+                        Log.i(BOOK_HOT_TTS_TAG, "next segment synth queued index=${index + 1}")
+                    }
+                }
+
+                if (playbackStarted) {
+                    val drained = player.awaitSessionPlaybackComplete(sessionId)
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "segmented playback drained session=$sessionId drained=$drained " +
+                            "estimatedDurationMs=$playbackDurationMs elapsedMs=${System.currentTimeMillis() - playbackStartedAtMs}"
+                    )
+                    if (!drained) {
+                        withContext(Dispatchers.IO) {
+                            player.release()
+                        }
+                        return@launch
+                    }
+                }
+
+                withContext(Dispatchers.IO) {
+                    player.release()
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (aishell3Player === player) {
+                        aishell3Player = null
+                    }
+                }
+                if (synthesizedChunks.isNotEmpty()) {
+                    BookAishell3PreparedAudioCache.put(sentenceKey, synthesizedChunks.toList(), source = "auto-play")
+                }
+                if (isSegmentSessionActive()) {
+                    Log.i(BOOK_HOT_TTS_TAG, "sentence segmented playback end current=$chapterSentenceIndex")
+                    onSuccess()
+                }
+            } catch (error: Throwable) {
+                withContext(Dispatchers.IO) {
+                    player.release()
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (aishell3Player === player) {
+                        aishell3Player = null
+                    }
+                    isPlaying = false
+                    activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                }
+                Log.e("BookReaderPlayback", "segmented playback failed key=$sentenceKey", error)
+                onError(error.message ?: error::class.java.simpleName)
+            }
+        }
     }
 
     fun stopCurrentPlayback(reason: String, invalidateSession: Boolean = true) {
@@ -238,7 +939,7 @@ fun BookListenScreen(
             "BookReaderPlayback",
             "stop current session reason=$reason sessionId=$playbackSessionId engine=$activePlaybackEngineName"
         )
-        stopAishell3Playback()
+        stopAishell3Playback(trigger = reason)
         ttsController?.stop()
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
     }
@@ -483,14 +1184,32 @@ fun BookListenScreen(
             Log.d("BookReaderPlayback", "discard stale session sessionId=$sessionId current=$playbackSessionId")
             return
         }
+        val fromParagraph = currentParagraphIndex
+        val fromSentence = currentSentenceIndexInParagraph
         val moved = moveAfterSpokenTarget()
         Log.d(
             "BookReaderPlayback",
-            "advance next target sessionId=$sessionId moved=$moved targetType=$currentReadingTargetName " +
+            "playback advance begin sessionId=$sessionId moved=$moved " +
+                "fromParagraph=$fromParagraph fromSentence=$fromSentence " +
                 "paragraphIndex=$currentParagraphIndex sentenceIndexInParagraph=$currentSentenceIndexInParagraph"
         )
         if (moved && isPlaying) {
-            requestSpeakCurrent()
+            Log.d(
+                "BookReaderPlayback",
+                "move current sentence reason=playback advance " +
+                    "paragraphIndex=$currentParagraphIndex sentenceIndexInParagraph=$currentSentenceIndexInParagraph " +
+                    "targetType=$currentReadingTargetName"
+            )
+            coroutineScope.launch {
+                yield()
+                withFrameNanos { }
+                Log.d(
+                    "BookReaderPlayback",
+                    "highlight updated paragraphIndex=$currentParagraphIndex " +
+                        "sentenceIndexInParagraph=$currentSentenceIndexInParagraph"
+                )
+                requestSpeakCurrent()
+            }
         } else {
             isPlaying = false
             activePlaybackEngineName = BookPlaybackEngine.NONE.name
@@ -664,7 +1383,7 @@ fun BookListenScreen(
         }
     }
 
-    fun speakCurrentSentence() {
+    fun speakCurrentSentence(skipPreparedWait: Boolean = false) {
         if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && isAishell3Paused) {
             Log.d("BookReaderPlayback", "resume paused aishell3 sessionId=$playbackSessionId")
             aishell3Player?.resume()
@@ -706,17 +1425,139 @@ fun BookListenScreen(
         val targetParagraphIndex = currentParagraphIndex
         val targetSentenceIndex = currentSentenceIndexInParagraph
         val targetChapterIndex = currentChapterIndexFor(targetParagraphIndex)
+        val targetChapterSentences = if (paragraphs.isNotEmpty()) {
+            val chapterStart = chapterStartFor(targetParagraphIndex, chapters)
+            val chapterEnd = chapterEndExclusiveFor(targetParagraphIndex, paragraphs.size, chapters)
+            buildReaderSentences(paragraphs, chapterStart, chapterEnd, chapters.getOrNull(targetChapterIndex)?.title)
+        } else {
+            emptyList()
+        }
+        val targetChapterSentenceIndex = if (targetType == BookReadingTarget.CHAPTER_TITLE.name) {
+            0
+        } else {
+            targetChapterSentences.indexOfFirst {
+                it.paragraphIndex == targetParagraphIndex &&
+                    it.sentenceIndexInParagraph == targetSentenceIndex
+            }.coerceAtLeast(0)
+        }
+        val validInFull = targetType == BookReadingTarget.CHAPTER_TITLE.name ||
+            targetChapterSentences.any { it.chapterSentenceIndex == targetChapterSentenceIndex }
+        if (!isPlausibleChapterSentenceIndex(targetChapterSentenceIndex) || !validInFull) {
+            Log.w(
+                BOOK_HOT_TTS_TAG,
+                "reject invalid playback index currentIndex=$targetChapterSentenceIndex " +
+                    "reason=not_chapter_sentence_index fullSize=${targetChapterSentences.size} " +
+                    "paragraph=$targetParagraphIndex sentence=$targetSentenceIndex"
+            )
+            isPlaying = false
+            activePlaybackEngineName = BookPlaybackEngine.NONE.name
+            return
+        }
+        if (!skipPreparedWait && shouldIgnoreDuplicatePlaybackRequest(targetChapterSentenceIndex, "play button")) {
+            return
+        }
+        val preparedKey = aishell3PreparedKey(targetChapterSentenceIndex, textToSpeak.orEmpty())
+        pendingPlaySessionId = sessionId
+        pendingPlayTargetChapterSentenceIndex = targetChapterSentenceIndex
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "play intent latched session=$sessionId target=$targetChapterSentenceIndex"
+        )
         val textPreview = textToSpeak.orEmpty().replace('\n', ' ').take(40)
+        val containsPlayKey = BookAishell3PreparedAudioCache.contains(preparedKey)
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "play click currentIndex=$targetChapterSentenceIndex targetType=$targetType " +
+                "textPreview=$textPreview"
+        )
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "play click key=$preparedKey cache contains play key=$containsPlayKey " +
+                BookAishell3PreparedAudioCache.dumpSummary()
+        )
         Log.d(
             "BookReaderPlayback",
             "playbackRequested sessionId=$sessionId targetType=$targetType " +
                 "paragraphIndex=$targetParagraphIndex sentenceIndexInParagraph=$targetSentenceIndex " +
-                "chapterIndex=$targetChapterIndex textPreview=$textPreview"
+                "chapterIndex=$targetChapterIndex currentChapterSentenceIndex=$targetChapterSentenceIndex " +
+                "textPreview=$textPreview"
         )
-        stopAishell3Playback()
+        stopAishell3Playback(trigger = "play button")
         ttsController?.stop()
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
         onBeforeSpeak()
+
+        Log.i(BOOK_HOT_TTS_TAG, "play prepared path enter key=$preparedKey")
+        BookAishell3PreparedAudioCache.get(preparedKey)?.let { chunks ->
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "prepared hit key=$preparedKey currentIndex=$targetChapterSentenceIndex " +
+                    "chunks=${chunks.size} prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+            )
+            Log.d(
+                "BookReaderPlayback",
+                "play prepared audio hit costMs=0 key=$preparedKey " +
+                    "currentChapterSentenceIndex=$targetChapterSentenceIndex chunks=${chunks.size} " +
+                    "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+            )
+            playPreparedAishell3Audio(
+                sessionId = sessionId,
+                key = preparedKey,
+                chunks = chunks,
+                paragraphIndex = targetParagraphIndex,
+                onSuccess = { continuePlaybackAfterCurrentTarget(sessionId) }
+            )
+            return
+        }
+        val missReason = if (BookAishell3PreparedAudioCache.isPrewarming(preparedKey)) {
+            "prewarm_in_progress"
+        } else {
+            "cache_empty_or_key_not_ready"
+        }
+        if (!skipPreparedWait && missReason == "prewarm_in_progress") {
+            Log.i(BOOK_HOT_TTS_TAG, "prepared wait in-flight key=$preparedKey")
+            coroutineScope.launch {
+                val waitStartedAt = SystemClock.elapsedRealtime()
+                val waitedChunks = waitForPreparedAishell3Audio(preparedKey)
+                val waitMs = SystemClock.elapsedRealtime() - waitStartedAt
+                if (sessionId != playbackSessionId) return@launch
+                if (waitedChunks != null) {
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "prepared hit after wait key=$preparedKey currentIndex=$targetChapterSentenceIndex " +
+                            "chunks=${waitedChunks.size} waitMs=$waitMs"
+                    )
+                    playPreparedAishell3Audio(
+                        sessionId = sessionId,
+                        key = preparedKey,
+                        chunks = waitedChunks,
+                        paragraphIndex = targetParagraphIndex,
+                        onSuccess = { continuePlaybackAfterCurrentTarget(sessionId) }
+                    )
+                    return@launch
+                }
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "prepared miss key=$preparedKey reason=prewarm_timeout currentIndex=$targetChapterSentenceIndex waitMs=$waitMs"
+                )
+                Log.i(BOOK_HOT_TTS_TAG, "prepared wait timeout retry without wait key=$preparedKey")
+                speakCurrentSentence(skipPreparedWait = true)
+            }
+            return
+        }
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "prepared miss key=$preparedKey reason=$missReason currentIndex=$targetChapterSentenceIndex " +
+                "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+        )
+        Log.i(BOOK_HOT_TTS_TAG, "fallback synth start key=$preparedKey")
+        Log.d(
+            "BookReaderPlayback",
+            "play prepared audio miss synth costMs=0 key=$preparedKey " +
+                "currentChapterSentenceIndex=$targetChapterSentenceIndex " +
+                "prewarming=${BookAishell3PreparedAudioCache.isPrewarming(preparedKey)} " +
+                "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+        )
 
         fun fallbackToSystemTts(reason: String): Boolean {
             Log.d("BookReaderPlayback", "fallback reason=$reason sessionId=$sessionId")
@@ -751,125 +1592,26 @@ fun BookListenScreen(
             }
         }
 
-        coroutineScope.launch {
-            val player = StreamingPcmAudioPlayer()
-            aishell3Player = player
-            var playbackDurationMs = 0L
-            var playbackStartedAtMs = 0L
-            var playbackStarted = false
-            var chunkIndex = 0
-
-            val result = aishell3TtsEngine.speak(
-                text = textToSpeak.orEmpty(),
-                params = StreamingTtsParams(
-                    voiceId = "aishell3-speaker-10",
-                    speed = speechRate.coerceIn(0.5f, 2.0f),
-                    pitch = pitch,
-                    volume = 1f
-                ),
-                onStart = {
-                    Log.d("BookReaderPlayback", "aishell3 onStart sessionId=$sessionId")
-                },
-                onChunk = onChunk@ { chunk ->
-                    val isCurrent = withContext(Dispatchers.Main) {
-                        sessionId == playbackSessionId
-                    }
-                    if (!isCurrent) {
-                        Log.d("BookReaderPlayback", "discard stale session sessionId=$sessionId current=$playbackSessionId")
-                        return@onChunk
-                    }
-
-                    Log.d(
-                        "BookReaderPlayback",
-                        "sessionId=$sessionId segmentIndex=$chunkIndex chunkBytes=${chunk.data.size} " +
-                            "sampleRate=${chunk.format.sampleRate}"
-                    )
-
-                    if (!playbackStarted) {
-                        val startResult = player.start(chunk.format)
-                        if (startResult.isFailure) {
-                            val message = startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败"
-                            throw IllegalStateException(message)
-                        }
-                        playbackStarted = true
-                        playbackStartedAtMs = System.currentTimeMillis()
-                        withContext(Dispatchers.Main) {
-                            if (sessionId == playbackSessionId) {
-                                activePlaybackEngineName = BookPlaybackEngine.AISHELL3.name
-                                isAishell3Paused = false
-                                isPlaying = true
-                                saveProgress(targetParagraphIndex)
-                            }
-                        }
-                    }
-
-                    val writeResult = player.write(chunk)
-                    if (writeResult.isFailure) {
-                        val message = writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败"
-                        throw IllegalStateException(message)
-                    }
-                    playbackDurationMs += chunk.data.size * 1000L / (chunk.format.sampleRate * 2L)
-                    chunkIndex += 1
-                },
-                onDone = {
-                    Log.d(
-                        "BookReaderPlayback",
-                        "aishell3 onDone sessionId=$sessionId playbackDurationMs=$playbackDurationMs"
-                    )
-                },
-                onError = { error ->
-                    Log.e("BookReaderPlayback", "aishell3 error sessionId=$sessionId error=$error")
-                }
-            )
-
-            if (playbackStarted) {
-                val elapsedSinceStart = (System.currentTimeMillis() - playbackStartedAtMs).coerceAtLeast(0L)
-                var remainingWaitMs = (playbackDurationMs - elapsedSinceStart + 160L).coerceIn(0L, 2_000L)
-                Log.d(
-                    "BookReaderPlayback",
-                    "sessionId=$sessionId remainingPlaybackWaitMs=$remainingWaitMs " +
-                        "playbackDurationMs=$playbackDurationMs elapsedSinceStart=$elapsedSinceStart"
-                )
-                while (remainingWaitMs > 0L && sessionId == playbackSessionId) {
-                    if (isAishell3Paused) {
-                        delay(80L)
-                    } else {
-                        val step = remainingWaitMs.coerceAtMost(80L)
-                        delay(step)
-                        remainingWaitMs -= step
-                    }
+        playSegmentedAishell3Audio(
+            sessionId = sessionId,
+            sentenceKey = preparedKey,
+            chapterSentenceIndex = targetChapterSentenceIndex,
+            text = textToSpeak.orEmpty(),
+            paragraphIndex = targetParagraphIndex,
+            onSuccess = { continuePlaybackAfterCurrentTarget(sessionId) },
+            onError = { error ->
+                val didFallback = fallbackToSystemTts(error)
+                if (!didFallback) {
+                    Log.d("BookReaderPlayback", "all engines unavailable sessionId=$sessionId")
                 }
             }
-            player.release()
-            if (aishell3Player === player) {
-                aishell3Player = null
-            }
-
-            withContext(Dispatchers.Main) {
-                if (sessionId != playbackSessionId) {
-                    Log.d("BookReaderPlayback", "discard stale session sessionId=$sessionId current=$playbackSessionId")
-                    return@withContext
-                }
-                when (result) {
-                    StreamingTtsResult.Success -> {
-                        continuePlaybackAfterCurrentTarget(sessionId)
-                    }
-                    StreamingTtsResult.Stopped -> {
-                        isPlaying = false
-                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
-                    }
-                    is StreamingTtsResult.Error -> {
-                        val didFallback = fallbackToSystemTts(result.message)
-                        if (!didFallback) {
-                            Log.d("BookReaderPlayback", "all engines unavailable sessionId=$sessionId")
-                        }
-                    }
-                }
-            }
-        }
+        )
     }
 
     fun pauseReading() {
+        pendingPlaySessionId = -1L
+        pendingPlayTargetChapterSentenceIndex = -1
+        Log.i(BOOK_HOT_TTS_TAG, "play intent cancelled session=$playbackSessionId reason=pause")
         if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && aishell3Player != null) {
             Log.d("BookReaderPlayback", "pause aishell3 sessionId=$playbackSessionId")
             aishell3Player?.pause()
@@ -879,7 +1621,7 @@ fun BookListenScreen(
             return
         }
         playbackSessionId += 1
-        stopAishell3Playback()
+        stopAishell3Playback(trigger = "pause")
         ttsController?.pause()
         ttsController?.stop()
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
@@ -944,13 +1686,43 @@ fun BookListenScreen(
 
     fun jumpToSentence(sentence: ReaderSentence, autoPlay: Boolean = isPlaying) {
         if (paragraphs.isEmpty()) return
+        val chapterStart = chapterStartFor(sentence.paragraphIndex, chapters)
+        val chapterEnd = chapterEndExclusiveFor(sentence.paragraphIndex, paragraphs.size, chapters)
+        val targetChapterIndex = currentChapterIndexFor(sentence.paragraphIndex)
+        val validChapterSentences = buildReaderSentences(
+            paragraphs = paragraphs,
+            startIndex = chapterStart,
+            endExclusive = chapterEnd,
+            chapterTitle = chapters.getOrNull(targetChapterIndex)?.title
+        )
+        val validTarget = validChapterSentences.any {
+            it.chapterSentenceIndex == sentence.chapterSentenceIndex &&
+                it.paragraphIndex == sentence.paragraphIndex &&
+                it.sentenceIndexInParagraph == sentence.sentenceIndexInParagraph
+        }
+        if (!isPlausibleChapterSentenceIndex(sentence.chapterSentenceIndex) || !validTarget) {
+            Log.w(
+                BOOK_HOT_TTS_TAG,
+                "sentence tap invalid target=${sentence.chapterSentenceIndex} " +
+                    "fullSize=${validChapterSentences.size} cachedSize=${cachedReadState?.cachedSentences?.size ?: 0}"
+            )
+            return
+        }
         val nextIndex = sentence.paragraphIndex.coerceIn(0, paragraphs.lastIndex)
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "sentence tap index=${sentence.chapterSentenceIndex} paragraph=${sentence.paragraphIndex} " +
+                "sentence=${sentence.sentenceIndexInParagraph} autoPlay=$autoPlay"
+        )
+        Log.i(BOOK_HOT_TTS_TAG, "sentence tap cancel previous playback")
         stopCurrentPlayback(reason = "jump_to_sentence", invalidateSession = true)
         currentParagraphIndex = nextIndex
         currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph.coerceAtLeast(0)
         currentReadingTargetName = BookReadingTarget.SENTENCE.name
+        Log.i(BOOK_HOT_TTS_TAG, "sentence tap move current done index=${sentence.chapterSentenceIndex}")
         saveProgress(nextIndex)
         if (autoPlay) {
+            Log.i(BOOK_HOT_TTS_TAG, "sentence tap start audio index=${sentence.chapterSentenceIndex}")
             isPlaying = false
             speakCurrentSentence()
         }
@@ -959,6 +1731,7 @@ fun BookListenScreen(
     requestSpeakCurrent = { speakCurrentSentence() }
 
     LaunchedEffect(bookFile?.uri) {
+        val restoreStartMs = System.currentTimeMillis()
         if (bookFile == null) {
             isLoading = false
             loadError = "未选择小说文件"
@@ -975,11 +1748,22 @@ fun BookListenScreen(
         result
             .onSuccess { loaded ->
                 paragraphs = loaded
-                currentParagraphIndex = currentParagraphIndex.coerceIn(
+                val restoredParagraphIndex = currentParagraphIndex.coerceIn(
                     0,
                     (loaded.size - 1).coerceAtLeast(0)
                 )
+                currentParagraphIndex = restoredParagraphIndex
                 currentSentenceIndexInParagraph = currentSentenceIndexInParagraph.coerceAtLeast(0)
+                val detectedChapters = BookChapterDetector.detect(loaded)
+                val restoredChapterIndex = detectedChapters.indexOfLast {
+                    it.paragraphIndex <= restoredParagraphIndex
+                }
+                Log.d(
+                    BOOK_RESTORE_TAG,
+                    "initial target chapter=$restoredChapterIndex paragraph=$restoredParagraphIndex " +
+                        "sentence=$currentSentenceIndexInParagraph target=$currentReadingTargetName " +
+                        "total=${loaded.size}"
+                )
                 if (loaded.isEmpty()) {
                     loadError = "小说内容为空"
                 }
@@ -990,6 +1774,12 @@ fun BookListenScreen(
                 Toast.makeText(context, "小说读取失败", Toast.LENGTH_SHORT).show()
             }
         isLoading = false
+        Log.d(
+            BOOK_RESTORE_TAG,
+            "initial restore done costMs=${System.currentTimeMillis() - restoreStartMs} " +
+                "paragraph=$currentParagraphIndex sentence=$currentSentenceIndexInParagraph " +
+                "target=$currentReadingTargetName"
+        )
     }
 
     LaunchedEffect(speechRate, pitch) {
@@ -1038,7 +1828,7 @@ fun BookListenScreen(
     fun shouldShowCachedReaderWhileLoading(): Boolean {
         val state = cachedReadState ?: return false
         return state.bookUri == bookFile?.uri &&
-            state.cachedVisibleText.isNotEmpty() &&
+            (state.cachedSentences.isNotEmpty() || state.cachedVisibleText.isNotEmpty()) &&
             state.updatedAt > 0L
     }
 
@@ -1075,8 +1865,7 @@ fun BookListenScreen(
 
             when {
                 isLoading &&
-                    shouldShowCachedReaderWhileLoading() &&
-                    cachedReadState?.cachedVisibleText.orEmpty().isNotEmpty() -> {
+                    shouldShowCachedReaderWhileLoading() -> {
                     val cachedState = cachedReadState
                     val cachedTarget = remember(cachedState?.lastReadingTargetName) {
                         runCatching {
@@ -1087,91 +1876,695 @@ fun BookListenScreen(
                     }
                     val cachedSentences = remember(cachedState) {
                         val state = cachedState
-                        state?.cachedVisibleText
-                            .orEmpty()
-                            .filter { it.isNotBlank() }
-                            .mapIndexed { index, text ->
+                        val cachedStartChapterSentenceIndex = state?.cachedStartChapterSentenceIndex ?: 0
+                        val sentenceWindow = state?.cachedSentences.orEmpty()
+                        if (sentenceWindow.isNotEmpty()) {
+                            sentenceWindow.map { sentence ->
                                 ReaderSentence(
-                                    text = text,
-                                    paragraphIndex = state?.lastParagraphIndex ?: 0,
-                                    sentenceIndexInParagraph = (state?.lastSentenceIndexInParagraph ?: 0) + index,
-                                    chapterSentenceIndex = index
+                                    text = sentence.text,
+                                    paragraphIndex = sentence.paragraphIndex,
+                                    sentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
+                                    chapterSentenceIndex = sentence.chapterSentenceIndex
                                 )
                             }
+                        } else {
+                            state?.cachedVisibleText
+                                .orEmpty()
+                                .filter { it.isNotBlank() }
+                                .mapIndexed { index, text ->
+                                    ReaderSentence(
+                                        text = text,
+                                        paragraphIndex = state?.lastParagraphIndex ?: 0,
+                                        sentenceIndexInParagraph = (state?.lastSentenceIndexInParagraph ?: 0) + index,
+                                        chapterSentenceIndex = cachedStartChapterSentenceIndex + index
+                                    )
+                                }
+                        }
                     }
-                    val cachedIndex = 0
-                    BookListenContent(
-                        chapterTitle = cachedState?.lastChapterTitle.orEmpty().ifBlank { "正在恢复上次阅读" },
-                        chapterSentences = cachedSentences,
-                        currentChapterSentenceIndex = cachedIndex,
-                        isChapterTitleCurrent = cachedTarget == BookReadingTarget.CHAPTER_TITLE,
-                        currentParagraphIndex = cachedSentences
-                            .getOrNull(cachedIndex)
-                            ?.paragraphIndex
-                            ?: (cachedState?.lastParagraphIndex ?: currentParagraphIndex),
-                        currentSentenceIndexInParagraph = cachedSentences
-                            .getOrNull(cachedIndex)
-                            ?.sentenceIndexInParagraph
-                            ?: currentSentenceIndexInParagraph,
-                        listenedTimeLabel = estimateSentenceTimeLabel(cachedSentences, 0, cachedIndex, speechRate),
-                        remainingTimeLabel = estimateSentenceTimeLabel(
+                    val cachedStartChapterSentenceIndex = cachedState?.cachedStartChapterSentenceIndex ?: 0
+                    val cachedIndex = if (cachedSentences.isEmpty()) {
+                        0
+                    } else {
+                        ((cachedState?.lastChapterSentenceIndex ?: cachedStartChapterSentenceIndex) -
+                            cachedStartChapterSentenceIndex)
+                            .coerceIn(0, cachedSentences.lastIndex)
+                    }
+                    val cachedInitialFirstVisibleItemIndex = cachedState
+                        ?.lastVisibleFirstChapterSentenceIndex
+                        ?.takeIf { it >= 0 }
+                        ?.let { anchor ->
+                            (anchor - cachedStartChapterSentenceIndex + 1)
+                                .coerceIn(0, cachedSentences.size)
+                        }
+                        ?: cachedState
+                            ?.lastVisibleFirstItemIndex
+                            ?.takeIf { it >= 0 }
+                            ?.let { savedFirstVisible ->
+                                if (savedFirstVisible <= 0) {
+                                    0
+                                } else {
+                                    (savedFirstVisible - cachedStartChapterSentenceIndex)
+                                        .coerceIn(0, cachedSentences.size)
+                                }
+                            }
+                    val cachedInitialFirstVisibleOffset = cachedState
+                        ?.lastVisibleFirstItemScrollOffset
+                        ?: 0
+                    Log.d(
+                        BOOK_RESTORE_TAG,
+                        "Book restore window snapshot hit firstVisible=$cachedInitialFirstVisibleItemIndex " +
+                            "offset=$cachedInitialFirstVisibleOffset size=${cachedSentences.size}"
+                    )
+                    Log.d(
+                        BOOK_RESTORE_TAG,
+                        "Book restore window targetChapterSentence=${cachedState?.lastChapterSentenceIndex ?: cachedIndex}"
+                    )
+                    val cachedElapsedSeconds = cachedState?.cachedElapsedSeconds ?: -1
+                    val cachedRemainingSeconds = cachedState?.cachedRemainingSeconds ?: -1
+                    val cachedProgressFraction = cachedState?.cachedProgressFraction ?: -1f
+                    val cachedBottomSnapshotHit = cachedElapsedSeconds >= 0 &&
+                        cachedRemainingSeconds >= 0 &&
+                        cachedProgressFraction in 0f..1f
+                    if (cachedBottomSnapshotHit) {
+                        Log.d(
+                            BOOK_RESTORE_TAG,
+                            "bottom snapshot hit elapsed=$cachedElapsedSeconds remaining=$cachedRemainingSeconds " +
+                                "progress=$cachedProgressFraction"
+                        )
+                    } else {
+                        Log.d(BOOK_RESTORE_TAG, "bottom snapshot miss")
+                    }
+                    val cachedListenedTimeLabel = if (cachedBottomSnapshotHit) {
+                        formatDuration(cachedElapsedSeconds)
+                    } else {
+                        estimateSentenceTimeLabel(cachedSentences, 0, cachedIndex, speechRate)
+                    }
+                    val cachedRemainingTimeLabel = if (cachedBottomSnapshotHit) {
+                        formatDuration(cachedRemainingSeconds)
+                    } else {
+                        estimateSentenceTimeLabel(
                             cachedSentences,
                             cachedIndex,
                             cachedSentences.size,
                             speechRate
-                        ),
-                        isPlaying = false,
-                        isTtsReady = isTtsReady,
-                        isTtsChecking = isTtsChecking,
-                        ttsError = ttsError,
-                        currentVoiceName = selectedVoiceName,
-                        speechRate = speechRate,
-                        pitch = pitch,
-                        readerFontSizeSp = readerFontSizeSp,
-                        onPlayPause = { Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show() },
-                        onStop = { },
-                        onPrevious = {
-                            Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show()
-                        },
-                        onNext = {
-                            Toast.makeText(context, "正在恢复小说内容", Toast.LENGTH_SHORT).show()
-                        },
-                        onSeekSentence = { sentenceIndex ->
-                            cachedSentences.getOrNull(sentenceIndex)?.let { sentence ->
-                                currentParagraphIndex = sentence.paragraphIndex
-                                currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
-                                currentReadingTargetName = BookReadingTarget.SENTENCE.name
-                            }
-                        },
-                        onSentenceClick = { sentence ->
-                            currentParagraphIndex = sentence.paragraphIndex
-                            currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
-                            currentReadingTargetName = BookReadingTarget.SENTENCE.name
-                        },
-                        onSpeechRateChange = { speechRate = it },
-                        onPitchChange = { pitch = it },
-                        onReaderFontSizeChange = { readerFontSizeSp = it },
-                        onOpenCatalog = { Toast.makeText(context, "正在恢复目录", Toast.LENGTH_SHORT).show() },
-                        sleepTimerEnabled = sleepTimerEnabled,
-                        onOpenSleepTimer = { showSleepTimerSheet = true },
-                        playbackModeLabel = playbackMode.label,
-                        onTogglePlaybackMode = {
-                            val nextMode = playbackMode.next()
-                            playbackModeName = nextMode.name
-                            Toast.makeText(context, "已切换为${nextMode.label}", Toast.LENGTH_SHORT).show()
-                        },
-                        onInstallVoiceData = ::openVoiceDataInstaller,
-                        onOpenVoicePackageSettings = { showVoicePackageSheet = true },
-                        onOpenVoiceSettings = {
-                            openIntentSafely(
-                                Intent("com.android.settings.TTS_SETTINGS")
-                                    .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
-                                "无法打开语音设置"
-                            )
-                        },
-                        onRetryTts = { restartTtsCheck() },
-                        modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Log.d(
+                        BOOK_RESTORE_TAG,
+                        "hot resume snapshot hit currentChapterSentenceIndex=${cachedState?.lastChapterSentenceIndex ?: cachedIndex} " +
+                            "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size} " +
+                            "firstVisible=$cachedInitialFirstVisibleItemIndex " +
+                            "firstVisibleChapterSentenceIndex=${cachedState?.lastVisibleFirstChapterSentenceIndex} " +
+                            "offset=$cachedInitialFirstVisibleOffset " +
+                            "elapsed=$cachedElapsedSeconds remaining=$cachedRemainingSeconds progress=$cachedProgressFraction " +
+                            "fullContentReady=${paragraphs.isNotEmpty() && !isLoading} isPlaying=$isPlaying"
                     )
+
+                    fun saveCachedPreviewSnapshot(reason: String, targetWindowIndex: Int, target: BookReadingTarget) {
+                        val file = bookFile ?: return
+                        val state = cachedState ?: return
+                        val safeIndex = targetWindowIndex.coerceIn(0, cachedSentences.lastIndex)
+                        val sentence = cachedSentences.getOrNull(safeIndex) ?: return
+                        val baseElapsed = if (state.cachedElapsedSeconds >= 0) {
+                            val elapsedInsideWindow = estimateSentenceDurationSeconds(
+                                sentences = cachedSentences,
+                                fromIndex = 0,
+                                toIndex = cachedIndex.coerceIn(0, cachedSentences.size),
+                                speechRate = speechRate
+                            )
+                            (state.cachedElapsedSeconds - elapsedInsideWindow).coerceAtLeast(0)
+                        } else {
+                            0
+                        }
+                        val elapsedSeconds = baseElapsed + estimateSentenceDurationSeconds(
+                            sentences = cachedSentences,
+                            fromIndex = 0,
+                            toIndex = safeIndex,
+                            speechRate = speechRate
+                        )
+                        val fallbackRemaining = estimateSentenceDurationSeconds(
+                            sentences = cachedSentences,
+                            fromIndex = safeIndex,
+                            toIndex = cachedSentences.size,
+                            speechRate = speechRate
+                        )
+                        val chapterDuration = state.cachedChapterEstimatedDurationSeconds
+                            .takeIf { it > 0 }
+                            ?: (elapsedSeconds + fallbackRemaining)
+                        val remainingSeconds = (chapterDuration - elapsedSeconds).coerceAtLeast(fallbackRemaining)
+                        val progressFraction = if (chapterDuration > 0) {
+                            elapsedSeconds.toFloat() / chapterDuration.toFloat()
+                        } else {
+                            0f
+                        }.coerceIn(0f, 1f)
+                        val visibleFirstIndex = if (target == BookReadingTarget.CHAPTER_TITLE) {
+                            0
+                        } else {
+                            (cachedStartChapterSentenceIndex + safeIndex - 1).coerceAtLeast(0)
+                        }
+                        val visibleFirstChapterSentenceIndex = if (target == BookReadingTarget.CHAPTER_TITLE) {
+                            sentence.chapterSentenceIndex
+                        } else {
+                            (cachedStartChapterSentenceIndex + safeIndex - 1).coerceAtLeast(0)
+                        }
+                        val updatedSentences = cachedSentences.mapIndexed { index, item ->
+                            BookCachedSentence(
+                                text = item.text,
+                                paragraphIndex = item.paragraphIndex,
+                                sentenceIndexInParagraph = item.sentenceIndexInParagraph,
+                                chapterSentenceIndex = item.chapterSentenceIndex,
+                                isCurrent = index == safeIndex
+                            )
+                        }
+                        val updatedState = BookReadStateCache(
+                            bookUri = file.uri,
+                            bookTitle = file.displayTitle(),
+                            lastParagraphIndex = sentence.paragraphIndex,
+                            lastSentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
+                            lastChapterSentenceIndex = sentence.chapterSentenceIndex,
+                            lastReadingTargetName = target.name,
+                            lastChapterTitle = state.lastChapterTitle,
+                            lastVisibleFirstItemIndex = visibleFirstIndex,
+                            lastVisibleFirstChapterSentenceIndex = visibleFirstChapterSentenceIndex,
+                            lastVisibleFirstItemScrollOffset = 0,
+                            cachedStartChapterSentenceIndex = cachedStartChapterSentenceIndex,
+                            cachedElapsedSeconds = elapsedSeconds,
+                            cachedRemainingSeconds = remainingSeconds,
+                            cachedProgressFraction = progressFraction,
+                            cachedChapterEstimatedDurationSeconds = chapterDuration,
+                            cachedSentences = updatedSentences,
+                            cachedVisibleText = updatedSentences.map { it.text },
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        cachedReadState = updatedState
+                        currentParagraphIndex = sentence.paragraphIndex
+                        currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                        currentReadingTargetName = target.name
+                        saveBookReadStateCache(context.applicationContext, updatedState)
+                        Log.d(
+                            BOOK_RESTORE_TAG,
+                            "save snapshot reason=$reason currentChapterSentenceIndex=${sentence.chapterSentenceIndex} " +
+                                "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size} " +
+                                "firstVisible=$visibleFirstIndex firstVisibleChapterSentenceIndex=$visibleFirstChapterSentenceIndex " +
+                                "offset=0 elapsed=$elapsedSeconds " +
+                                "remaining=$remainingSeconds progress=$progressFraction " +
+                                "fullContentReady=${paragraphs.isNotEmpty() && !isLoading} isPlaying=$isPlaying"
+                        )
+                    }
+
+                    fun nextReadableCachedIndex(afterIndex: Int): Int {
+                        for (index in (afterIndex + 1)..cachedSentences.lastIndex) {
+                            if (isReadableBookTtsText(cachedSentences[index].text)) return index
+                        }
+                        return -1
+                    }
+
+                    fun playCachedPreviewAt(
+                        targetWindowIndex: Int,
+                        target: BookReadingTarget,
+                        skipPreparedWait: Boolean = false
+                    ) {
+                        if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && isAishell3Paused) {
+                            Log.d("BookReaderPlayback", "resume paused aishell3 sessionId=$playbackSessionId")
+                            aishell3Player?.resume()
+                            isAishell3Paused = false
+                            isPlaying = true
+                            return
+                        }
+                        val safeIndex = targetWindowIndex.coerceIn(0, cachedSentences.lastIndex)
+                        val sentence = cachedSentences.getOrNull(safeIndex) ?: return
+                        val speakText = if (target == BookReadingTarget.CHAPTER_TITLE) {
+                            cachedState?.lastChapterTitle.orEmpty().ifBlank { sentence.text }
+                        } else {
+                            sentence.text
+                        }.trim()
+                        if (!isReadableBookTtsText(speakText)) {
+                            val nextIndex = nextReadableCachedIndex(safeIndex)
+                            if (nextIndex >= 0) {
+                                saveCachedPreviewSnapshot("playback sentence change", nextIndex, BookReadingTarget.SENTENCE)
+                                playCachedPreviewAt(nextIndex, BookReadingTarget.SENTENCE)
+                            }
+                            return
+                        }
+                        val validInCached = cachedSentences.any {
+                            it.chapterSentenceIndex == sentence.chapterSentenceIndex
+                        }
+                        if (!isPlausibleChapterSentenceIndex(sentence.chapterSentenceIndex) || !validInCached) {
+                            Log.w(
+                                BOOK_HOT_TTS_TAG,
+                                "reject invalid playback index currentIndex=${sentence.chapterSentenceIndex} " +
+                                    "reason=not_chapter_sentence_index cachedStart=$cachedStartChapterSentenceIndex " +
+                                    "cachedSize=${cachedSentences.size}"
+                            )
+                            isPlaying = false
+                            activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                            return
+                        }
+                        if (!skipPreparedWait &&
+                            shouldIgnoreDuplicatePlaybackRequest(sentence.chapterSentenceIndex, "cached preview")
+                        ) {
+                            return
+                        }
+                        saveCachedPreviewSnapshot("playback sentence change", safeIndex, target)
+                        playbackSessionId += 1
+                        val sessionId = playbackSessionId
+                        pendingPlaySessionId = sessionId
+                        pendingPlayTargetChapterSentenceIndex = sentence.chapterSentenceIndex
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "play intent latched session=$sessionId target=${sentence.chapterSentenceIndex}"
+                        )
+                        Log.d(
+                            "BookReaderPlayback",
+                            "hot resume play from cached sentence sessionId=$sessionId " +
+                                "targetType=$target currentChapterSentenceIndex=${sentence.chapterSentenceIndex} " +
+                                "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size} " +
+                                "textPreview=${speakText.take(40)}"
+                        )
+                        stopAishell3Playback(trigger = "cached preview play")
+                        ttsController?.stop()
+                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                        onBeforeSpeak()
+                        val preparedKey = aishell3PreparedKey(sentence.chapterSentenceIndex, speakText)
+                        fun continueCachedPreviewAfterSuccess() {
+                            if (sessionId != playbackSessionId) {
+                                Log.d("BookReaderPlayback", "discard stale cached session sessionId=$sessionId current=$playbackSessionId")
+                                return
+                            }
+                            if (paragraphs.isNotEmpty() && !isLoading) {
+                                Log.d(BOOK_RESTORE_TAG, "full content attached keep playback state currentChapterSentenceIndex=${sentence.chapterSentenceIndex}")
+                                continuePlaybackAfterCurrentTarget(sessionId)
+                                return
+                            }
+                            val nextIndex = if (target == BookReadingTarget.CHAPTER_TITLE) {
+                                safeIndex
+                            } else {
+                                nextReadableCachedIndex(safeIndex)
+                            }
+                            if (nextIndex >= 0) {
+                                Log.d(
+                                    BOOK_RESTORE_TAG,
+                                    "cached playback advance currentChapterSentenceIndex=${cachedSentences[nextIndex].chapterSentenceIndex} " +
+                                        "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size}"
+                                )
+                                saveCachedPreviewSnapshot("playback sentence change", nextIndex, BookReadingTarget.SENTENCE)
+                                coroutineScope.launch {
+                                    yield()
+                                    withFrameNanos { }
+                                    Log.d(
+                                        BOOK_RESTORE_TAG,
+                                        "highlight updated index=${cachedSentences[nextIndex].chapterSentenceIndex}"
+                                    )
+                                    playCachedPreviewAt(nextIndex, BookReadingTarget.SENTENCE)
+                                }
+                            } else {
+                                Log.d(
+                                    BOOK_RESTORE_TAG,
+                                    "cached playback window exhausted waiting full content currentChapterSentenceIndex=${sentence.chapterSentenceIndex} " +
+                                        "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size}"
+                                )
+                                isPlaying = false
+                                activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                            }
+                        }
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "play click currentIndex=${sentence.chapterSentenceIndex} targetType=$target " +
+                                "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size}"
+                        )
+                        Log.i(BOOK_HOT_TTS_TAG, "play prepared path enter key=$preparedKey")
+                        BookAishell3PreparedAudioCache.get(preparedKey)?.let { chunks ->
+                            Log.i(
+                                BOOK_HOT_TTS_TAG,
+                                "prepared hit key=$preparedKey currentIndex=${sentence.chapterSentenceIndex} " +
+                                    "chunks=${chunks.size} prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+                            )
+                            playPreparedAishell3Audio(
+                                sessionId = sessionId,
+                                key = preparedKey,
+                                chunks = chunks,
+                                paragraphIndex = sentence.paragraphIndex,
+                                onSuccess = { continueCachedPreviewAfterSuccess() }
+                            )
+                            return
+                        }
+                        val missReason = if (BookAishell3PreparedAudioCache.isPrewarming(preparedKey)) {
+                            "prewarm_in_progress"
+                        } else {
+                            "cache_empty_or_key_not_ready"
+                        }
+                        if (!skipPreparedWait && missReason == "prewarm_in_progress") {
+                            Log.i(BOOK_HOT_TTS_TAG, "prepared wait prewarm key=$preparedKey")
+                            coroutineScope.launch {
+                                val waitedChunks = waitForPreparedAishell3Audio(preparedKey)
+                                if (sessionId != playbackSessionId) return@launch
+                                if (waitedChunks != null) {
+                                    Log.i(
+                                        BOOK_HOT_TTS_TAG,
+                                        "prepared hit after wait key=$preparedKey currentIndex=${sentence.chapterSentenceIndex} " +
+                                            "chunks=${waitedChunks.size}"
+                                    )
+                                    playPreparedAishell3Audio(
+                                        sessionId = sessionId,
+                                        key = preparedKey,
+                                        chunks = waitedChunks,
+                                        paragraphIndex = sentence.paragraphIndex,
+                                        onSuccess = { continueCachedPreviewAfterSuccess() }
+                                    )
+                                    return@launch
+                                }
+                                Log.i(
+                                    BOOK_HOT_TTS_TAG,
+                                    "prepared miss key=$preparedKey reason=prewarm_timeout currentIndex=${sentence.chapterSentenceIndex}"
+                                )
+                                Log.i(BOOK_HOT_TTS_TAG, "prepared wait timeout retry without wait key=$preparedKey")
+                                playCachedPreviewAt(safeIndex, target, skipPreparedWait = true)
+                            }
+                            return
+                        }
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "prepared miss key=$preparedKey reason=$missReason currentIndex=${sentence.chapterSentenceIndex} " +
+                                "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
+                        )
+                        Log.i(BOOK_HOT_TTS_TAG, "fallback synth start key=$preparedKey")
+                        coroutineScope.launch {
+                            val player = StreamingPcmAudioPlayer()
+                            aishell3Player = player
+                            var playbackDurationMs = 0L
+                            var playbackStartedAtMs = 0L
+                            var playbackStarted = false
+                            val synthesizedChunks = mutableListOf<PcmAudioChunk>()
+                            val result = aishell3TtsEngine.speak(
+                                text = speakText,
+                                params = StreamingTtsParams(
+                                    voiceId = "aishell3-speaker-10",
+                                    speed = speechRate.coerceIn(0.5f, 2.0f),
+                                    pitch = pitch,
+                                    volume = 1f
+                                ),
+                                onStart = {
+                                    Log.d("BookReaderPlayback", "cached aishell3 onStart sessionId=$sessionId")
+                                },
+                                onChunk = onChunk@ { chunk ->
+                                    val isCurrent = withContext(Dispatchers.Main) {
+                                        sessionId == playbackSessionId && !screenDisposed.get()
+                                    }
+                                    if (!isCurrent) {
+                                        Log.d("BookReaderPlayback", "discard stale cached session sessionId=$sessionId current=$playbackSessionId")
+                                        return@onChunk
+                                    }
+                                    synthesizedChunks += chunk
+                                    if (!playbackStarted) {
+                                        val startResult = player.startSession(sessionId, chunk.format)
+                                        if (startResult.isFailure) {
+                                            throw IllegalStateException(startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败")
+                                        }
+                                        playbackStarted = true
+                                        playbackStartedAtMs = System.currentTimeMillis()
+                                        withContext(Dispatchers.Main) {
+                                            if (sessionId == playbackSessionId && !screenDisposed.get()) {
+                                                activePlaybackEngineName = BookPlaybackEngine.AISHELL3.name
+                                                isAishell3Paused = false
+                                                isPlaying = true
+                                                saveProgress(sentence.paragraphIndex)
+                                            }
+                                        }
+                                    }
+                                    val writeResult = player.write(sessionId, chunk)
+                                    if (writeResult.isFailure) {
+                                        throw IllegalStateException(writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败")
+                                    }
+                                    playbackDurationMs += chunk.data.size * 1000L / (chunk.format.sampleRate * 2L)
+                                },
+                                onDone = {
+                                    Log.d("BookReaderPlayback", "cached aishell3 onDone sessionId=$sessionId playbackDurationMs=$playbackDurationMs")
+                                },
+                                onError = { error ->
+                                    Log.e("BookReaderPlayback", "cached aishell3 error sessionId=$sessionId error=$error")
+                                }
+                            )
+                            if (playbackStarted) {
+                                val drained = player.awaitSessionPlaybackComplete(sessionId)
+                                Log.i(
+                                    BOOK_HOT_TTS_TAG,
+                                    "cached fallback playback drained session=$sessionId drained=$drained " +
+                                        "estimatedDurationMs=$playbackDurationMs elapsedMs=${System.currentTimeMillis() - playbackStartedAtMs}"
+                                )
+                                if (!drained) {
+                                    player.release()
+                                    return@launch
+                                }
+                            }
+                            player.release()
+                            if (aishell3Player === player) {
+                                aishell3Player = null
+                            }
+                            withContext(Dispatchers.Main) {
+                                when (result) {
+                                    StreamingTtsResult.Success -> {
+                                        if (synthesizedChunks.isNotEmpty()) {
+                                            BookAishell3PreparedAudioCache.put(
+                                                preparedKey,
+                                                synthesizedChunks.toList(),
+                                                source = "fallback"
+                                            )
+                                        }
+                                        continueCachedPreviewAfterSuccess()
+                                    }
+                                    StreamingTtsResult.Stopped -> {
+                                        isPlaying = false
+                                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                                    }
+                                    is StreamingTtsResult.Error -> {
+                                        isPlaying = false
+                                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                                        Log.e("BookReaderPlayback", "cached playback error sessionId=$sessionId error=${result.message}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    LaunchedEffect(
+                        cachedState?.updatedAt,
+                        cachedIndex,
+                        cachedSentences.size,
+                        speechRate,
+                        pitch
+                    ) {
+                        val currentSentence = cachedSentences.getOrNull(cachedIndex)
+                        val nextSentence = cachedSentences
+                            .drop(cachedIndex + 1)
+                            .firstOrNull { isReadableBookTtsText(it.text) }
+                        val currentText = if (cachedTarget == BookReadingTarget.CHAPTER_TITLE) {
+                            cachedState?.lastChapterTitle.orEmpty().ifBlank { currentSentence?.text.orEmpty() }
+                        } else {
+                            currentSentence?.text.orEmpty()
+                        }
+                        val currentKey = currentSentence?.let {
+                            aishell3PreparedKey(it.chapterSentenceIndex, currentText)
+                        }
+                        val nextKey = nextSentence?.let {
+                            aishell3PreparedKey(it.chapterSentenceIndex, it.text)
+                        }
+                        val keepKeys = listOfNotNull(currentKey, nextKey).toSet()
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "current cached sentence resolved index=${currentSentence?.chapterSentenceIndex} " +
+                                "cachedStart=$cachedStartChapterSentenceIndex cachedSize=${cachedSentences.size} " +
+                                "textEmpty=${currentText.isBlank()}"
+                        )
+                        currentKey?.let { key ->
+                            Log.i(
+                                BOOK_HOT_TTS_TAG,
+                                "prepared cache restore ${if (BookAishell3PreparedAudioCache.contains(key)) "hit" else "miss"} " +
+                                    "key=$key ${BookAishell3PreparedAudioCache.dumpSummary()}"
+                            )
+                            Log.i(BOOK_HOT_TTS_TAG, "prewarm current priority key=$key")
+                            fun queueNextAfterCurrent() {
+                                nextSentence?.let { sentence ->
+                                    nextKey?.let { next ->
+                                        Log.i(BOOK_HOT_TTS_TAG, "prewarm next segment0 queued key=$next")
+                                        prewarmAishell3Segments(
+                                            chapterSentenceIndex = sentence.chapterSentenceIndex,
+                                            text = sentence.text,
+                                            label = "next"
+                                        )
+                                    }
+                                }
+                            }
+                            prewarmAishell3Segments(
+                                chapterSentenceIndex = currentSentence?.chapterSentenceIndex ?: cachedIndex,
+                                text = currentText,
+                                label = "current",
+                                onCurrentFirstReady = ::queueNextAfterCurrent
+                            )
+                        }
+                    }
+
+                    key("cached-${bookFile?.uri}-${cachedState?.updatedAt}") {
+                        BookListenContent(
+                            chapterTitle = cachedState?.lastChapterTitle.orEmpty().ifBlank {
+                                bookFile?.displayTitle().orEmpty()
+                            },
+                            chapterSentences = cachedSentences,
+                            currentChapterSentenceIndex = cachedIndex,
+                            isChapterTitleCurrent = cachedTarget == BookReadingTarget.CHAPTER_TITLE,
+                            currentParagraphIndex = cachedSentences
+                                .getOrNull(cachedIndex)
+                                ?.paragraphIndex
+                                ?: (cachedState?.lastParagraphIndex ?: currentParagraphIndex),
+                            currentSentenceIndexInParagraph = cachedSentences
+                                .getOrNull(cachedIndex)
+                                ?.sentenceIndexInParagraph
+                                ?: currentSentenceIndexInParagraph,
+                            listenedTimeLabel = cachedListenedTimeLabel,
+                            remainingTimeLabel = cachedRemainingTimeLabel,
+                            isPlaying = false,
+                            isTtsReady = isTtsReady,
+                            isTtsChecking = isTtsChecking,
+                            ttsError = ttsError,
+                            currentVoiceName = selectedVoiceName,
+                            speechRate = speechRate,
+                            pitch = pitch,
+                            readerFontSizeSp = readerFontSizeSp,
+                            onPlayPause = {
+                                val playableIndex = cachedSentences
+                                    .indexOfFirst {
+                                        it.chapterSentenceIndex == (cachedState?.lastChapterSentenceIndex ?: -1)
+                                    }
+                                    .takeIf { it >= 0 }
+                                    ?: cachedState?.cachedSentences.orEmpty().indexOfFirst { it.isCurrent }.takeIf { it >= 0 }
+                                    ?: cachedIndex.takeIf { it in cachedSentences.indices }
+                                    ?: 0
+                                Log.d(
+                                    BOOK_RESTORE_TAG,
+                                    "hot resume playable cached sentence found index=$playableIndex " +
+                                        "currentChapterSentenceIndex=${cachedSentences.getOrNull(playableIndex)?.chapterSentenceIndex} " +
+                                        "fullContentReady=${paragraphs.isNotEmpty() && !isLoading}"
+                                )
+                                cachedSentences.getOrNull(playableIndex)?.let { sentence ->
+                                    currentParagraphIndex = sentence.paragraphIndex
+                                    currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                                    currentReadingTargetName = cachedTarget.name
+                                }
+                                if (paragraphs.isNotEmpty() && !isLoading) {
+                                    if (isPlaying) pauseReading() else speakCurrentSentence()
+                                } else {
+                                    if (isPlaying) {
+                                        pauseReading()
+                                    } else {
+                                        playCachedPreviewAt(playableIndex, cachedTarget)
+                                    }
+                                }
+                            },
+                            onStop = { if (paragraphs.isNotEmpty()) stopReading() },
+                            onPrevious = {
+                                if (paragraphs.isNotEmpty()) {
+                                    jumpToChapter(-1)
+                                } else {
+                                    Log.d(BOOK_RESTORE_TAG, "cached preview previous ignored until parser attaches silently")
+                                }
+                            },
+                            onNext = {
+                                if (paragraphs.isNotEmpty()) {
+                                    jumpToChapter(1)
+                                } else {
+                                    Log.d(BOOK_RESTORE_TAG, "cached preview next ignored until parser attaches silently")
+                                }
+                            },
+                            onSeekSentence = { sentenceIndex ->
+                                cachedSentences.getOrNull(sentenceIndex)?.let { sentence ->
+                                    currentParagraphIndex = sentence.paragraphIndex
+                                    currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                                    currentReadingTargetName = BookReadingTarget.SENTENCE.name
+                                    saveCachedPreviewSnapshot("slider seek", sentenceIndex, BookReadingTarget.SENTENCE)
+                                    Log.i(
+                                        BOOK_HOT_TTS_TAG,
+                                        "snapshot save reason=slider seek current=${sentence.chapterSentenceIndex}"
+                                    )
+                                    if (wasPlayingBeforeSliderSeek) {
+                                        wasPlayingBeforeSliderSeek = false
+                                        playCachedPreviewAt(sentenceIndex, BookReadingTarget.SENTENCE)
+                                    }
+                                }
+                            },
+                            onSeekStart = {
+                                Log.i(BOOK_HOT_TTS_TAG, "slider seek start cachedPreview=true isPlaying=$isPlaying")
+                                wasPlayingBeforeSliderSeek = isPlaying
+                                if (isPlaying) {
+                                    pauseReading()
+                                } else {
+                                    stopCurrentPlayback(reason = "slider_seek_start", invalidateSession = true)
+                                }
+                            },
+                            onSentenceClick = { sentence ->
+                                val validTarget = isPlausibleChapterSentenceIndex(sentence.chapterSentenceIndex) &&
+                                    cachedSentences.any {
+                                        it.chapterSentenceIndex == sentence.chapterSentenceIndex &&
+                                            it.paragraphIndex == sentence.paragraphIndex &&
+                                            it.sentenceIndexInParagraph == sentence.sentenceIndexInParagraph
+                                    }
+                                if (!validTarget) {
+                                    Log.w(
+                                        BOOK_HOT_TTS_TAG,
+                                        "sentence tap invalid target=${sentence.chapterSentenceIndex} " +
+                                            "fullSize=${paragraphs.size} cachedSize=${cachedSentences.size}"
+                                    )
+                                } else {
+                                    val wasPlaying = isPlaying
+                                    Log.i(
+                                        BOOK_HOT_TTS_TAG,
+                                        "sentence tap index=${sentence.chapterSentenceIndex} paragraph=${sentence.paragraphIndex} " +
+                                            "sentence=${sentence.sentenceIndexInParagraph} cachedPreview=true"
+                                    )
+                                    Log.i(BOOK_HOT_TTS_TAG, "sentence tap cancel previous playback")
+                                    stopCurrentPlayback(reason = "cached_sentence_tap", invalidateSession = true)
+                                    currentParagraphIndex = sentence.paragraphIndex
+                                    currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+                                    currentReadingTargetName = BookReadingTarget.SENTENCE.name
+                                    val sentenceIndex = cachedSentences.indexOfFirst {
+                                        it.chapterSentenceIndex == sentence.chapterSentenceIndex
+                                    }.coerceAtLeast(0)
+                                    Log.i(BOOK_HOT_TTS_TAG, "sentence tap move current done index=${sentence.chapterSentenceIndex}")
+                                    saveCachedPreviewSnapshot("sentence tap", sentenceIndex, BookReadingTarget.SENTENCE)
+                                    if (wasPlaying) {
+                                        Log.i(BOOK_HOT_TTS_TAG, "sentence tap start audio index=${sentence.chapterSentenceIndex}")
+                                        playCachedPreviewAt(sentenceIndex, BookReadingTarget.SENTENCE)
+                                    }
+                                }
+                            },
+                            onSpeechRateChange = { speechRate = it },
+                            onPitchChange = { pitch = it },
+                            onReaderFontSizeChange = { readerFontSizeSp = it },
+                            onOpenCatalog = { if (chapters.isNotEmpty()) showChapterSheet = true },
+                            sleepTimerEnabled = sleepTimerEnabled,
+                            onOpenSleepTimer = { showSleepTimerSheet = true },
+                            playbackModeLabel = playbackMode.label,
+                            onTogglePlaybackMode = {
+                                val nextMode = playbackMode.next()
+                                playbackModeName = nextMode.name
+                                Toast.makeText(context, "已切换为${nextMode.label}", Toast.LENGTH_SHORT).show()
+                            },
+                            onInstallVoiceData = ::openVoiceDataInstaller,
+                            onOpenVoicePackageSettings = { showVoicePackageSheet = true },
+                            onOpenVoiceSettings = {
+                                openIntentSafely(
+                                    Intent("com.android.settings.TTS_SETTINGS")
+                                        .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+                                    "无法打开语音设置"
+                                )
+                            },
+                            onRetryTts = { restartTtsCheck() },
+                            restoreGateLabel = "cached preview",
+                            initialFirstVisibleItemIndex = cachedInitialFirstVisibleItemIndex,
+                            initialFirstVisibleItemScrollOffset = cachedInitialFirstVisibleOffset,
+                            progressFractionOverride = cachedProgressFraction.takeIf { cachedBottomSnapshotHit },
+                            onVisibleWindowSnapshot = { },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
 
                 isLoading -> {
@@ -1182,14 +2575,7 @@ fun BookListenScreen(
                             .padding(horizontal = 18.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = Color(0xFF4D8DFF))
-                            Text(
-                                text = "正在恢复上次阅读...",
-                                color = Color.White.copy(alpha = 0.72f),
-                                modifier = Modifier.padding(top = 14.dp)
-                            )
-                        }
+                        Spacer(modifier = Modifier.height(1.dp))
                     }
                 }
 
@@ -1254,67 +2640,165 @@ fun BookListenScreen(
                         toIndex = currentChapterSentenceIndex,
                         speechRate = speechRate
                     )
+                    val listenedSeconds = estimateSentenceDurationSeconds(
+                        sentences = chapterSentences,
+                        fromIndex = 0,
+                        toIndex = currentChapterSentenceIndex,
+                        speechRate = speechRate
+                    )
                     val remainingTimeLabel = estimateSentenceTimeLabel(
                         sentences = chapterSentences,
                         fromIndex = currentChapterSentenceIndex,
                         toIndex = chapterSentences.size,
                         speechRate = speechRate
                     )
+                    val remainingSeconds = estimateSentenceDurationSeconds(
+                        sentences = chapterSentences,
+                        fromIndex = currentChapterSentenceIndex,
+                        toIndex = chapterSentences.size,
+                        speechRate = speechRate
+                    )
+                    val chapterEstimatedDurationSeconds = listenedSeconds + remainingSeconds
+                    val progressFraction = if (chapterSentences.size <= 1) {
+                        0f
+                    } else {
+                        currentChapterSentenceIndex.toFloat() / (chapterSentences.size - 1).coerceAtLeast(1)
+                    }.coerceIn(0f, 1f)
+                    val fullAnchorChapterSentenceIndex = cachedReadState
+                        ?.lastVisibleFirstChapterSentenceIndex
+                        ?.takeIf { it >= 0 }
+                    if (fullAnchorChapterSentenceIndex != null &&
+                        chapterSentences.none { it.chapterSentenceIndex == fullAnchorChapterSentenceIndex }
+                    ) {
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "restore snapshot invalid current=${cachedReadState?.lastChapterSentenceIndex} " +
+                                "anchor=$fullAnchorChapterSentenceIndex fallback=${currentChapterSentenceIndex.coerceIn(0, chapterSentences.lastIndex)}"
+                        )
+                    }
+                    val fullInitialFirstVisibleItemIndex = fullAnchorChapterSentenceIndex
+                        ?.let { anchor ->
+                            chapterSentences.indexOfFirst { it.chapterSentenceIndex == anchor }
+                                .takeIf { it >= 0 }
+                                ?.let { sentenceIndex -> sentenceIndex + 1 }
+                        }
+                        ?: cachedReadState
+                            ?.lastVisibleFirstItemIndex
+                            ?.takeIf { it >= 0 }
+                    val fullInitialFirstVisibleOffset = cachedReadState
+                        ?.lastVisibleFirstItemScrollOffset
+                        ?: 0
+                    Log.d(
+                        BOOK_RESTORE_TAG,
+                        "bottom full content swap keep elapsed=$listenedSeconds remaining=$remainingSeconds " +
+                            "progress=$progressFraction"
+                    )
+                    Log.d(
+                        BOOK_RESTORE_TAG,
+                        "full content attach anchor fullIndex=$fullInitialFirstVisibleItemIndex " +
+                            "firstVisibleChapterSentenceIndex=$fullAnchorChapterSentenceIndex " +
+                            "offset=$fullInitialFirstVisibleOffset"
+                    )
                     LaunchedEffect(
                         bookFile?.uri,
                         chapterTitle,
-                        currentParagraphIndex,
-                        currentSentenceIndexInParagraph,
                         currentChapterSentenceIndex,
-                        chapterSentences
+                        chapterSentences.size,
+                        speechRate,
+                        pitch
                     ) {
-                        val state = BookReadStateCache(
-                            bookUri = bookFile?.uri.orEmpty(),
-                            bookTitle = bookFile?.displayTitle().orEmpty(),
-                            lastParagraphIndex = currentParagraphIndex,
-                            lastSentenceIndexInParagraph = currentSentenceIndexInParagraph,
-                            lastChapterSentenceIndex = currentChapterSentenceIndex,
-                            lastReadingTargetName = currentReadingTarget.name,
-                            lastChapterTitle = chapterTitle,
-                            cachedVisibleText = chapterSentences
-                                .drop(currentChapterSentenceIndex)
-                                .take(24)
-                                .map { it.text },
-                            updatedAt = System.currentTimeMillis()
+                        val currentSentence = chapterSentences.getOrNull(currentChapterSentenceIndex)
+                        val nextSentence = chapterSentences
+                            .drop(currentChapterSentenceIndex + 1)
+                            .firstOrNull { isReadableBookTtsText(it.text) }
+                        val currentText = if (currentReadingTarget == BookReadingTarget.CHAPTER_TITLE) {
+                            chapterTitle.ifBlank { currentSentence?.text.orEmpty() }
+                        } else {
+                            currentSentence?.text.orEmpty()
+                        }
+                        val currentKey = currentSentence?.let {
+                            aishell3PreparedKey(it.chapterSentenceIndex, currentText)
+                        }
+                        val nextKey = nextSentence?.let {
+                            aishell3PreparedKey(it.chapterSentenceIndex, it.text)
+                        }
+                        val keepKeys = listOfNotNull(currentKey, nextKey).toSet()
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "current cached sentence resolved index=${currentSentence?.chapterSentenceIndex} " +
+                                "fullContentReady=true textEmpty=${currentText.isBlank()}"
                         )
-                        cachedReadState = state
-                        saveBookReadStateCache(context.applicationContext, state)
+                        currentKey?.let { key ->
+                            Log.i(
+                                BOOK_HOT_TTS_TAG,
+                                "prepared cache restore ${if (BookAishell3PreparedAudioCache.contains(key)) "hit" else "miss"} " +
+                                    "key=$key ${BookAishell3PreparedAudioCache.dumpSummary()}"
+                            )
+                            Log.i(BOOK_HOT_TTS_TAG, "prewarm current priority key=$key")
+                            fun queueNextAfterCurrent() {
+                                nextSentence?.let { sentence ->
+                                    nextKey?.let { next ->
+                                        Log.i(BOOK_HOT_TTS_TAG, "prewarm next segment0 queued key=$next")
+                                        prewarmAishell3Segments(
+                                            chapterSentenceIndex = sentence.chapterSentenceIndex,
+                                            text = sentence.text,
+                                            label = "next"
+                                        )
+                                    }
+                                }
+                            }
+                            prewarmAishell3Segments(
+                                chapterSentenceIndex = currentSentence?.chapterSentenceIndex ?: currentChapterSentenceIndex,
+                                text = currentText,
+                                label = "current",
+                                onCurrentFirstReady = ::queueNextAfterCurrent
+                            )
+                        }
                     }
-                    BookListenContent(
-                        chapterTitle = chapterTitle,
-                        chapterSentences = chapterSentences,
-                        currentChapterSentenceIndex = currentChapterSentenceIndex,
-                        isChapterTitleCurrent = currentReadingTarget == BookReadingTarget.CHAPTER_TITLE,
-                        currentParagraphIndex = currentParagraphIndex,
-                        currentSentenceIndexInParagraph = currentSentenceIndexInParagraph,
-                        listenedTimeLabel = listenedTimeLabel,
-                        remainingTimeLabel = remainingTimeLabel,
-                        isPlaying = isPlaying,
-                        isTtsReady = isTtsReady,
-                        isTtsChecking = isTtsChecking,
-                        ttsError = ttsError,
-                        currentVoiceName = selectedVoiceName,
-                        speechRate = speechRate,
-                        pitch = pitch,
-                        readerFontSizeSp = readerFontSizeSp,
-                        onPlayPause = {
-                            if (isPlaying) pauseReading() else speakCurrentSentence()
-                        },
-                        onStop = { stopReading() },
-                        onPrevious = {
-                            jumpToChapter(-1)
-                        },
-                        onNext = {
-                            jumpToChapter(1)
-                        },
+                    key("full-${bookFile?.uri}-$chapterStartIndex") {
+                        BookListenContent(
+                            chapterTitle = chapterTitle,
+                            chapterSentences = chapterSentences,
+                            currentChapterSentenceIndex = currentChapterSentenceIndex,
+                            isChapterTitleCurrent = currentReadingTarget == BookReadingTarget.CHAPTER_TITLE,
+                            currentParagraphIndex = currentParagraphIndex,
+                            currentSentenceIndexInParagraph = currentSentenceIndexInParagraph,
+                            listenedTimeLabel = listenedTimeLabel,
+                            remainingTimeLabel = remainingTimeLabel,
+                            isPlaying = isPlaying,
+                            isTtsReady = isTtsReady,
+                            isTtsChecking = isTtsChecking,
+                            ttsError = ttsError,
+                            currentVoiceName = selectedVoiceName,
+                            speechRate = speechRate,
+                            pitch = pitch,
+                            readerFontSizeSp = readerFontSizeSp,
+                            onPlayPause = {
+                                if (isPlaying) pauseReading() else speakCurrentSentence()
+                            },
+                            onStop = { stopReading() },
+                            onPrevious = {
+                                jumpToChapter(-1)
+                            },
+                            onNext = {
+                                jumpToChapter(1)
+                            },
                         onSeekSentence = { sentenceIndex ->
                             chapterSentences.getOrNull(sentenceIndex)?.let { sentence ->
-                                jumpToSentence(sentence)
+                                Log.i(
+                                    BOOK_HOT_TTS_TAG,
+                                    "snapshot save reason=slider seek current=${sentence.chapterSentenceIndex}"
+                                )
+                                jumpToSentence(sentence, autoPlay = wasPlayingBeforeSliderSeek)
+                                wasPlayingBeforeSliderSeek = false
+                            }
+                        },
+                        onSeekStart = {
+                            Log.i(BOOK_HOT_TTS_TAG, "slider seek start isPlaying=$isPlaying")
+                            wasPlayingBeforeSliderSeek = isPlaying
+                            if (isPlaying) {
+                                stopCurrentPlayback(reason = "slider_seek_start", invalidateSession = true)
+                                isPlaying = false
                             }
                         },
                         onSentenceClick = { sentence ->
@@ -1334,19 +2818,66 @@ fun BookListenScreen(
                         },
                         onInstallVoiceData = ::openVoiceDataInstaller,
                         onOpenVoicePackageSettings = { showVoicePackageSheet = true },
-                        onOpenVoiceSettings = {
-                            openIntentSafely(
-                                Intent("com.android.settings.TTS_SETTINGS")
-                                    .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
-                                "无法打开语音设置"
-                            )
-                        },
-                        onRetryTts = { restartTtsCheck() },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                            onOpenVoiceSettings = {
+                                openIntentSafely(
+                                    Intent("com.android.settings.TTS_SETTINGS")
+                                        .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+                                    "无法打开语音设置"
+                                )
+                            },
+                            onRetryTts = { restartTtsCheck() },
+                            restoreGateLabel = "full content",
+                            initialFirstVisibleItemIndex = fullInitialFirstVisibleItemIndex,
+                            initialFirstVisibleItemScrollOffset = fullInitialFirstVisibleOffset,
+                            progressFractionOverride = null,
+                            onVisibleWindowSnapshot = { snapshot ->
+                                val currentCachedSentence = snapshot.sentences
+                                    .firstOrNull { it.isCurrent }
+                                    ?: snapshot.sentences.firstOrNull {
+                                        it.chapterSentenceIndex == snapshot.currentChapterSentenceIndex
+                                    }
+                                val state = BookReadStateCache(
+                                    bookUri = bookFile?.uri.orEmpty(),
+                                    bookTitle = bookFile?.displayTitle().orEmpty(),
+                                    lastParagraphIndex = currentCachedSentence?.paragraphIndex ?: currentParagraphIndex,
+                                    lastSentenceIndexInParagraph = currentCachedSentence?.sentenceIndexInParagraph
+                                        ?: currentSentenceIndexInParagraph,
+                                    lastChapterSentenceIndex = snapshot.currentChapterSentenceIndex,
+                                    lastReadingTargetName = currentReadingTarget.name,
+                                    lastChapterTitle = chapterTitle,
+                                    lastVisibleFirstItemIndex = snapshot.firstVisibleItemIndex,
+                                    lastVisibleFirstChapterSentenceIndex = snapshot.firstVisibleChapterSentenceIndex,
+                                    lastVisibleFirstItemScrollOffset = snapshot.firstVisibleItemScrollOffset,
+                                    cachedStartChapterSentenceIndex = snapshot.cachedStartChapterSentenceIndex,
+                                    cachedElapsedSeconds = snapshot.cachedElapsedSeconds,
+                                    cachedRemainingSeconds = snapshot.cachedRemainingSeconds,
+                                    cachedProgressFraction = snapshot.cachedProgressFraction,
+                                    cachedChapterEstimatedDurationSeconds = snapshot.cachedChapterEstimatedDurationSeconds,
+                                    cachedSentences = snapshot.sentences,
+                                    cachedVisibleText = snapshot.sentences.map { it.text },
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                                cachedReadState = state
+                                saveBookReadStateCache(context.applicationContext, state)
+                                Log.d(
+                                    BOOK_RESTORE_TAG,
+                                    "Book restore snapshot saved start=${snapshot.cachedStartChapterSentenceIndex} " +
+                                        "current=${snapshot.currentChapterSentenceIndex} " +
+                                        "firstVisibleChapterSentenceIndex=${snapshot.firstVisibleChapterSentenceIndex} " +
+                                        "size=${snapshot.sentences.size}"
+                                )
+                                Log.d(
+                                    BOOK_RESTORE_TAG,
+                                    "bottom snapshot saved elapsed=${snapshot.cachedElapsedSeconds} " +
+                                        "remaining=${snapshot.cachedRemainingSeconds} progress=${snapshot.cachedProgressFraction}"
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
             }
         }
+    }
     }
 
     if (showChapterSheet) {
@@ -1744,6 +3275,7 @@ private fun BookListenContent(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekSentence: (Int) -> Unit,
+    onSeekStart: () -> Unit,
     onSentenceClick: (ReaderSentence) -> Unit,
     onSpeechRateChange: (Float) -> Unit,
     onPitchChange: (Float) -> Unit,
@@ -1757,6 +3289,11 @@ private fun BookListenContent(
     onOpenVoicePackageSettings: () -> Unit,
     onOpenVoiceSettings: () -> Unit,
     onRetryTts: () -> Unit,
+    restoreGateLabel: String,
+    initialFirstVisibleItemIndex: Int?,
+    initialFirstVisibleItemScrollOffset: Int,
+    progressFractionOverride: Float?,
+    onVisibleWindowSnapshot: (BookVisibleWindowSnapshot) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showVoiceControls by remember { mutableStateOf(false) }
@@ -1770,21 +3307,206 @@ private fun BookListenContent(
     } else {
         (currentChapterSentenceIndex - 1).coerceAtLeast(0)
     }
-    val sentenceListState = rememberLazyListState(initialFirstVisibleItemIndex = initialSentenceListIndex)
+    val safeInitialFirstVisibleItemIndex = (initialFirstVisibleItemIndex ?: initialSentenceListIndex)
+        .coerceIn(0, chapterSentences.size)
+    val safeInitialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset.coerceAtLeast(0)
+    val sentenceListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = safeInitialFirstVisibleItemIndex,
+        initialFirstVisibleItemScrollOffset = safeInitialFirstVisibleItemScrollOffset
+    )
+    val latestCurrentChapterSentenceIndex by rememberUpdatedState(currentChapterSentenceIndex)
+    val latestCurrentParagraphIndex by rememberUpdatedState(currentParagraphIndex)
+    val latestCurrentSentenceIndexInParagraph by rememberUpdatedState(currentSentenceIndexInParagraph)
+    val latestIsPlaying by rememberUpdatedState(isPlaying)
+    var suppressScrollIdleSaveUntilMs by remember { mutableLongStateOf(0L) }
     val seekEndIndex = (chapterSentences.size - 1).coerceAtLeast(0)
     val sliderEndIndex = seekEndIndex.coerceAtLeast(1)
+    var isSliderSeeking by remember { mutableStateOf(false) }
+    var sliderTempValue by remember { mutableFloatStateOf(0f) }
     val seekValue = if (isChapterTitleCurrent) {
         0f
+    } else if (progressFractionOverride != null) {
+        (progressFractionOverride.coerceIn(0f, 1f) * sliderEndIndex).coerceIn(0f, sliderEndIndex.toFloat())
     } else {
         currentChapterSentenceIndex.coerceIn(0, seekEndIndex).toFloat()
     }
+    val displayedSeekValue = if (isSliderSeeking) {
+        sliderTempValue.coerceIn(0f, sliderEndIndex.toFloat())
+    } else {
+        seekValue
+    }
 
-    LaunchedEffect(chapterTitle, currentChapterSentenceIndex, chapterSentences.size, isChapterTitleCurrent) {
-        if (isChapterTitleCurrent) {
-            sentenceListState.scrollToItem(0)
-        } else if (chapterSentences.isNotEmpty()) {
-            sentenceListState.scrollToItem((currentChapterSentenceIndex - 1).coerceAtLeast(0))
+    LaunchedEffect(chapterTitle, chapterSentences.size, safeInitialFirstVisibleItemIndex, safeInitialFirstVisibleItemScrollOffset) {
+        Log.d(
+            BOOK_RESTORE_TAG,
+            "Book restore window firstVisible=$safeInitialFirstVisibleItemIndex " +
+                "offset=$safeInitialFirstVisibleItemScrollOffset label=$restoreGateLabel"
+        )
+        Log.d(
+            BOOK_RESTORE_TAG,
+            "Book restore window rendered immediately label=$restoreGateLabel"
+        )
+        Log.d(
+            BOOK_RESTORE_TAG,
+            "bottom initial render elapsed=$listenedTimeLabel remaining=$remainingTimeLabel " +
+                "progress=${progressFractionOverride ?: (seekValue / sliderEndIndex.toFloat().coerceAtLeast(1f))} " +
+                "label=$restoreGateLabel"
+        )
+        if (restoreGateLabel == "full content") {
+            Log.d(BOOK_RESTORE_TAG, "Book restore full content swapped keep position")
         }
+        Log.d(
+            BOOK_RESTORE_TAG,
+            "first visible sentence after restore firstVisible=${sentenceListState.firstVisibleItemIndex} " +
+                "initialFirstVisible=$initialSentenceListIndex targetIndex=$currentChapterSentenceIndex " +
+                "isChapterTitleCurrent=$isChapterTitleCurrent chapterTitle=$chapterTitle"
+        )
+    }
+
+    var lastAutoScrollTarget by remember(chapterTitle, chapterSentences.size) {
+        mutableStateOf(currentChapterSentenceIndex to isChapterTitleCurrent)
+    }
+    LaunchedEffect(chapterTitle, currentChapterSentenceIndex, chapterSentences.size, isChapterTitleCurrent) {
+        val currentTarget = currentChapterSentenceIndex to isChapterTitleCurrent
+        if (currentTarget != lastAutoScrollTarget) {
+            if (isChapterTitleCurrent) {
+                suppressScrollIdleSaveUntilMs = SystemClock.elapsedRealtime() + 1_000L
+                sentenceListState.scrollToItem(0)
+            } else if (chapterSentences.isNotEmpty()) {
+                suppressScrollIdleSaveUntilMs = SystemClock.elapsedRealtime() + 1_000L
+                sentenceListState.scrollToItem((currentChapterSentenceIndex - 1).coerceAtLeast(0))
+            }
+            lastAutoScrollTarget = currentTarget
+        }
+    }
+
+    fun saveVisibleWindowSnapshot(reason: String) {
+        if (restoreGateLabel != "full content" || chapterSentences.isEmpty()) return
+        if (reason == "scroll idle") {
+            val now = SystemClock.elapsedRealtime()
+            if (now < suppressScrollIdleSaveUntilMs) {
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "snapshot skip scroll idle suppressed current=$latestCurrentChapterSentenceIndex"
+                )
+                return
+            }
+            if (latestIsPlaying) {
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "snapshot skip scroll idle playing current=$latestCurrentChapterSentenceIndex"
+                )
+                return
+            }
+        }
+        val firstVisibleItemIndex = sentenceListState.firstVisibleItemIndex
+        val firstVisibleSentenceIndex = (firstVisibleItemIndex - 1).coerceAtLeast(0)
+        val currentIndex = latestCurrentChapterSentenceIndex.coerceIn(0, chapterSentences.lastIndex)
+        val windowStart = (minOf(firstVisibleSentenceIndex, currentIndex) - 8).coerceAtLeast(0)
+        val windowEnd = maxOf(firstVisibleSentenceIndex + 31, currentIndex + 31)
+            .coerceAtMost(chapterSentences.size)
+        val elapsedSeconds = estimateSentenceDurationSeconds(chapterSentences, 0, currentIndex, speechRate)
+        val remainingSeconds = estimateSentenceDurationSeconds(
+            chapterSentences,
+            currentIndex,
+            chapterSentences.size,
+            speechRate
+        )
+        val chapterEstimatedDurationSeconds = elapsedSeconds + remainingSeconds
+        val progressFraction = if (chapterSentences.size <= 1) {
+            0f
+        } else {
+            currentIndex.toFloat() / (chapterSentences.size - 1).coerceAtLeast(1)
+        }.coerceIn(0f, 1f)
+        val sentences = buildBookCachedSentences(
+            sentences = chapterSentences,
+            startIndex = windowStart,
+            endIndex = windowEnd,
+            currentChapterSentenceIndex = currentIndex
+        )
+        if (sentences.isEmpty()) return
+        val firstVisibleChapterSentenceIndex = if (firstVisibleItemIndex <= 0) {
+            currentIndex
+        } else {
+            chapterSentences
+                .getOrNull(firstVisibleSentenceIndex.coerceIn(0, chapterSentences.lastIndex))
+                ?.chapterSentenceIndex
+                ?: currentIndex
+        }
+        Log.d(
+            BOOK_RESTORE_TAG,
+            "save snapshot reason=$reason currentChapterSentenceIndex=$currentIndex " +
+                "firstVisible=$firstVisibleItemIndex firstVisibleChapterSentenceIndex=$firstVisibleChapterSentenceIndex " +
+                "offset=${sentenceListState.firstVisibleItemScrollOffset} " +
+                "elapsed=$elapsedSeconds remaining=$remainingSeconds progress=$progressFraction"
+        )
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "snapshot save reason=$reason current=$currentIndex firstVisible=$firstVisibleItemIndex " +
+                "firstVisibleChapterSentenceIndex=$firstVisibleChapterSentenceIndex"
+        )
+        onVisibleWindowSnapshot(
+            BookVisibleWindowSnapshot(
+                firstVisibleItemIndex = firstVisibleItemIndex,
+                firstVisibleChapterSentenceIndex = firstVisibleChapterSentenceIndex,
+                firstVisibleItemScrollOffset = sentenceListState.firstVisibleItemScrollOffset,
+                currentChapterSentenceIndex = currentIndex,
+                cachedStartChapterSentenceIndex = windowStart,
+                cachedElapsedSeconds = elapsedSeconds,
+                cachedRemainingSeconds = remainingSeconds,
+                cachedProgressFraction = progressFraction,
+                cachedChapterEstimatedDurationSeconds = chapterEstimatedDurationSeconds,
+                sentences = sentences
+            )
+        )
+    }
+
+    LaunchedEffect(chapterTitle, chapterSentences.size, currentChapterSentenceIndex, currentParagraphIndex, currentSentenceIndexInParagraph) {
+        yield()
+        withFrameNanos { }
+        val expectedFirstVisible = if (isChapterTitleCurrent) {
+            0
+        } else {
+            (currentChapterSentenceIndex - 1).coerceAtLeast(0)
+        }
+        val currentFirstVisible = sentenceListState.firstVisibleItemIndex
+        if (currentFirstVisible !in (expectedFirstVisible - 2)..(expectedFirstVisible + 2)) {
+            if (isChapterTitleCurrent) {
+                sentenceListState.scrollToItem(0)
+            } else {
+                sentenceListState.scrollToItem(expectedFirstVisible)
+            }
+            withFrameNanos { }
+        }
+        saveVisibleWindowSnapshot("playback sentence change")
+    }
+
+    val latestSaveVisibleWindowSnapshot by rememberUpdatedState<(String) -> Unit>({ reason ->
+        saveVisibleWindowSnapshot(reason)
+    })
+    DisposableEffect(chapterTitle, chapterSentences.size) {
+        onDispose {
+            latestSaveVisibleWindowSnapshot("dispose")
+        }
+    }
+
+    LaunchedEffect(chapterTitle, chapterSentences.size, sentenceListState) {
+        snapshotFlow {
+            Triple(
+                sentenceListState.firstVisibleItemIndex,
+                sentenceListState.firstVisibleItemScrollOffset,
+                sentenceListState.isScrollInProgress
+            )
+        }
+            .distinctUntilChanged()
+            .collect { (_, _, isScrollInProgress) ->
+                if (!isScrollInProgress) {
+                    delay(250L)
+                    if (!sentenceListState.isScrollInProgress) {
+                        saveVisibleWindowSnapshot("scroll idle")
+                    }
+                }
+            }
     }
 
     Column(
@@ -1908,9 +3630,29 @@ private fun BookListenContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(24.dp),
-                    value = seekValue,
+                    value = displayedSeekValue,
                     maxValue = sliderEndIndex.toFloat(),
-                    onValueChange = { onSeekSentence(it.roundToInt().coerceIn(0, seekEndIndex)) }
+                    onValueChangeStarted = {
+                        isSliderSeeking = true
+                        sliderTempValue = seekValue
+                        suppressScrollIdleSaveUntilMs = SystemClock.elapsedRealtime() + 1_000L
+                        Log.i(BOOK_HOT_TTS_TAG, "slider seek start current=$latestCurrentChapterSentenceIndex")
+                        onSeekStart()
+                    },
+                    onValueChange = {
+                        sliderTempValue = it.coerceIn(0f, sliderEndIndex.toFloat())
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "slider seek progress temp=${sliderTempValue.roundToInt().coerceIn(0, seekEndIndex)}"
+                        )
+                    },
+                    onValueChangeFinished = {
+                        val targetIndex = sliderTempValue.roundToInt().coerceIn(0, seekEndIndex)
+                        suppressScrollIdleSaveUntilMs = SystemClock.elapsedRealtime() + 1_000L
+                        Log.i(BOOK_HOT_TTS_TAG, "slider seek finish target=$targetIndex")
+                        isSliderSeeking = false
+                        onSeekSentence(targetIndex)
+                    }
                 )
             }
 
@@ -2021,13 +3763,17 @@ private fun BookListenContent(
 private fun ReaderChapterProgressBar(
     value: Float,
     maxValue: Float,
+    onValueChangeStarted: () -> Unit,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     ThinMoonSlider(
         value = value,
         valueRange = 0f..maxValue.coerceAtLeast(1f),
+        onValueChangeStarted = onValueChangeStarted,
         onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
         modifier = modifier,
         trackHeight = 3.dp,
         thumbSize = 11.dp
@@ -2038,7 +3784,9 @@ private fun ReaderChapterProgressBar(
 private fun ThinMoonSlider(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
+    onValueChangeStarted: () -> Unit = {},
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit = {},
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     activeColor: Color = Color(0xFF8B5CFF),
@@ -2068,15 +3816,24 @@ private fun ThinMoonSlider(
                 if (enabled) {
                     Modifier
                         .pointerInput(valueRange.start, valueRange.endInclusive) {
-                            detectTapGestures { offset -> updateFromX(offset.x) }
+                            detectTapGestures { offset ->
+                                onValueChangeStarted()
+                                updateFromX(offset.x)
+                                onValueChangeFinished()
+                            }
                         }
                         .pointerInput(valueRange.start, valueRange.endInclusive) {
                             detectDragGestures(
-                                onDragStart = { offset -> updateFromX(offset.x) },
+                                onDragStart = { offset ->
+                                    onValueChangeStarted()
+                                    updateFromX(offset.x)
+                                },
                                 onDrag = { change, _ ->
                                     updateFromX(change.position.x)
                                     change.consume()
-                                }
+                                },
+                                onDragEnd = { onValueChangeFinished() },
+                                onDragCancel = { onValueChangeFinished() }
                             )
                         }
                 } else {
@@ -3758,6 +5515,27 @@ private data class ReaderSentence(
     val chapterSentenceIndex: Int
 )
 
+private data class BookCachedSentence(
+    val text: String,
+    val paragraphIndex: Int,
+    val sentenceIndexInParagraph: Int,
+    val chapterSentenceIndex: Int,
+    val isCurrent: Boolean
+)
+
+private data class BookVisibleWindowSnapshot(
+    val firstVisibleItemIndex: Int,
+    val firstVisibleChapterSentenceIndex: Int,
+    val firstVisibleItemScrollOffset: Int,
+    val currentChapterSentenceIndex: Int,
+    val cachedStartChapterSentenceIndex: Int,
+    val cachedElapsedSeconds: Int,
+    val cachedRemainingSeconds: Int,
+    val cachedProgressFraction: Float,
+    val cachedChapterEstimatedDurationSeconds: Int,
+    val sentences: List<BookCachedSentence>
+)
+
 private data class BookReadStateCache(
     val bookUri: String,
     val bookTitle: String,
@@ -3766,12 +5544,157 @@ private data class BookReadStateCache(
     val lastChapterSentenceIndex: Int,
     val lastReadingTargetName: String,
     val lastChapterTitle: String,
+    val lastVisibleFirstItemIndex: Int,
+    val lastVisibleFirstChapterSentenceIndex: Int,
+    val lastVisibleFirstItemScrollOffset: Int,
+    val cachedStartChapterSentenceIndex: Int,
+    val cachedElapsedSeconds: Int,
+    val cachedRemainingSeconds: Int,
+    val cachedProgressFraction: Float,
+    val cachedChapterEstimatedDurationSeconds: Int,
+    val cachedSentences: List<BookCachedSentence>,
     val cachedVisibleText: List<String>,
     val updatedAt: Long
 )
 
 private const val BOOK_READ_CACHE_PREFS = "book_read_state_cache"
 private const val BOOK_READ_CACHE_SEPARATOR = "\u001E"
+private const val BOOK_READ_CACHE_ENTRY_SEPARATOR = "\u001D"
+private const val BOOK_READ_CACHE_FIELD_SEPARATOR = "\u001F"
+private const val BOOK_RESTORE_TAG = "BookReaderRestore"
+private const val BOOK_HOT_TTS_TAG = "BookListenHot"
+
+private object BookAishell3PreparedAudioCache {
+    private const val MAX_ITEMS = 24
+    private val lock = Any()
+    private val chunksByKey = linkedMapOf<String, List<PcmAudioChunk>>()
+    private val prewarmingKeys = mutableSetOf<String>()
+
+    fun get(key: String): List<PcmAudioChunk>? = synchronized(lock) {
+        chunksByKey[key]
+    }
+
+    fun put(key: String, chunks: List<PcmAudioChunk>, source: String) = synchronized(lock) {
+        if (chunksByKey.containsKey(key)) {
+            chunksByKey.remove(key)
+        }
+        chunksByKey[key] = chunks
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "prepared cache put source=$source key=$key chunks=${chunks.size} " +
+                "bytes=${chunks.sumOf { it.data.size }} prepared cache size=${chunksByKey.size}"
+        )
+        while (chunksByKey.size > MAX_ITEMS) {
+            val firstKey = chunksByKey.keys.firstOrNull() ?: break
+            if (firstKey == key) break
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "prepared cache evict key=$firstKey reason=max_items max=$MAX_ITEMS"
+            )
+            chunksByKey.remove(firstKey)
+        }
+    }
+
+    fun contains(key: String): Boolean = synchronized(lock) {
+        chunksByKey.containsKey(key)
+    }
+
+    fun size(): Int = synchronized(lock) {
+        chunksByKey.size
+    }
+
+    fun dumpSummary(): String = synchronized(lock) {
+        val keys = chunksByKey.keys
+            .toList()
+            .takeLast(8)
+            .joinToString(separator = ",") { it.takeLast(28) }
+        "prepared cache size=${chunksByKey.size} prewarming=${prewarmingKeys.size} recentKeys=[$keys]"
+    }
+
+    fun markPrewarming(key: String): Boolean = synchronized(lock) {
+        if (chunksByKey.containsKey(key) || prewarmingKeys.contains(key)) {
+            false
+        } else {
+            prewarmingKeys.add(key)
+            true
+        }
+    }
+
+    fun unmarkPrewarming(key: String) = synchronized(lock) {
+        prewarmingKeys.remove(key)
+        Unit
+    }
+
+    fun isPrewarming(key: String): Boolean = synchronized(lock) {
+        prewarmingKeys.contains(key)
+    }
+
+    fun trim(keepKeys: Set<String>) = synchronized(lock) {
+        while (chunksByKey.size > MAX_ITEMS) {
+            val evictKey = chunksByKey.keys.firstOrNull { it !in keepKeys }
+                ?: chunksByKey.keys.firstOrNull()
+                ?: break
+            if (evictKey in keepKeys && chunksByKey.size <= keepKeys.size) {
+                Log.i(BOOK_HOT_TTS_TAG, "prepared cache keep pinned current key=$evictKey")
+                break
+            }
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "prepared cache evict key=$evictKey reason=trim max=$MAX_ITEMS pinned=${evictKey in keepKeys}"
+            )
+            chunksByKey.remove(evictKey)
+        }
+    }
+}
+
+private object BookAishell3SegmentAudioCache {
+    private const val MAX_ITEMS = 48
+    private val lock = Any()
+    private val chunksByKey = linkedMapOf<String, PcmAudioChunk>()
+    private val prewarmingKeys = mutableSetOf<String>()
+
+    fun get(key: String): PcmAudioChunk? = synchronized(lock) {
+        chunksByKey[key]
+    }
+
+    fun put(key: String, chunk: PcmAudioChunk, source: String) = synchronized(lock) {
+        if (chunksByKey.containsKey(key)) {
+            chunksByKey.remove(key)
+        }
+        chunksByKey[key] = chunk
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "segment cache put source=$source key=$key bytes=${chunk.data.size} segment cache size=${chunksByKey.size}"
+        )
+        while (chunksByKey.size > MAX_ITEMS) {
+            val evictKey = chunksByKey.keys.firstOrNull() ?: break
+            Log.i(BOOK_HOT_TTS_TAG, "segment cache evict key=$evictKey reason=max_items max=$MAX_ITEMS")
+            chunksByKey.remove(evictKey)
+        }
+    }
+
+    fun contains(key: String): Boolean = synchronized(lock) {
+        chunksByKey.containsKey(key)
+    }
+
+    fun markPrewarming(key: String): Boolean = synchronized(lock) {
+        if (chunksByKey.containsKey(key) || prewarmingKeys.contains(key)) {
+            false
+        } else {
+            prewarmingKeys.add(key)
+            true
+        }
+    }
+
+    fun unmarkPrewarming(key: String) = synchronized(lock) {
+        prewarmingKeys.remove(key)
+        Unit
+    }
+
+    fun isPrewarming(key: String): Boolean = synchronized(lock) {
+        prewarmingKeys.contains(key)
+    }
+}
 
 private fun bookReadCachePrefix(bookUri: String): String {
     return "book_${bookUri.hashCode()}_"
@@ -3788,6 +5711,19 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
         ?.split(BOOK_READ_CACHE_SEPARATOR)
         ?.filter { it.isNotBlank() }
         .orEmpty()
+    val cachedSentences = decodeBookCachedSentences(
+        prefs.getString(prefix + "sentence_window", null).orEmpty()
+    )
+    val lastVisibleFirstItemIndex = prefs.getInt(prefix + "visible_first_index", -1)
+    val cachedStartChapterSentenceIndex = prefs.getInt(prefix + "cached_start_chapter_sentence", 0)
+    val savedFirstVisibleChapterSentenceIndex = prefs.getInt(prefix + "visible_first_chapter_sentence", -1)
+    val firstVisibleChapterSentenceIndex = if (savedFirstVisibleChapterSentenceIndex >= 0) {
+        savedFirstVisibleChapterSentenceIndex
+    } else if (lastVisibleFirstItemIndex > 0) {
+        (cachedStartChapterSentenceIndex + lastVisibleFirstItemIndex - 1).coerceAtLeast(0)
+    } else {
+        cachedStartChapterSentenceIndex.coerceAtLeast(0)
+    }
     return BookReadStateCache(
         bookUri = storedUri,
         bookTitle = prefs.getString(prefix + "title", null).orEmpty(),
@@ -3795,8 +5731,17 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
         lastSentenceIndexInParagraph = prefs.getInt(prefix + "sentence", 0),
         lastChapterSentenceIndex = prefs.getInt(prefix + "chapter_sentence", 0),
         lastReadingTargetName = prefs.getString(prefix + "reading_target", null)
-            ?: BookReadingTarget.SENTENCE.name,
+            ?: "SENTENCE",
         lastChapterTitle = prefs.getString(prefix + "chapter_title", null).orEmpty(),
+        lastVisibleFirstItemIndex = lastVisibleFirstItemIndex,
+        lastVisibleFirstChapterSentenceIndex = firstVisibleChapterSentenceIndex,
+        lastVisibleFirstItemScrollOffset = prefs.getInt(prefix + "visible_first_offset", 0),
+        cachedStartChapterSentenceIndex = cachedStartChapterSentenceIndex,
+        cachedElapsedSeconds = prefs.getInt(prefix + "cached_elapsed_seconds", -1),
+        cachedRemainingSeconds = prefs.getInt(prefix + "cached_remaining_seconds", -1),
+        cachedProgressFraction = prefs.getFloat(prefix + "cached_progress_fraction", -1f),
+        cachedChapterEstimatedDurationSeconds = prefs.getInt(prefix + "cached_chapter_duration_seconds", -1),
+        cachedSentences = cachedSentences,
         cachedVisibleText = cachedText,
         updatedAt = prefs.getLong(prefix + "updated_at", 0L)
     )
@@ -3814,9 +5759,70 @@ private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) 
         .putInt(prefix + "chapter_sentence", state.lastChapterSentenceIndex.coerceAtLeast(0))
         .putString(prefix + "reading_target", state.lastReadingTargetName)
         .putString(prefix + "chapter_title", state.lastChapterTitle)
+        .putInt(prefix + "visible_first_index", state.lastVisibleFirstItemIndex)
+        .putInt(prefix + "visible_first_chapter_sentence", state.lastVisibleFirstChapterSentenceIndex)
+        .putInt(prefix + "visible_first_offset", state.lastVisibleFirstItemScrollOffset.coerceAtLeast(0))
+        .putInt(prefix + "cached_start_chapter_sentence", state.cachedStartChapterSentenceIndex.coerceAtLeast(0))
+        .putInt(prefix + "cached_elapsed_seconds", state.cachedElapsedSeconds)
+        .putInt(prefix + "cached_remaining_seconds", state.cachedRemainingSeconds)
+        .putFloat(prefix + "cached_progress_fraction", state.cachedProgressFraction)
+        .putInt(prefix + "cached_chapter_duration_seconds", state.cachedChapterEstimatedDurationSeconds)
+        .putString(prefix + "sentence_window", encodeBookCachedSentences(state.cachedSentences))
         .putString(prefix + "text", state.cachedVisibleText.joinToString(BOOK_READ_CACHE_SEPARATOR))
         .putLong(prefix + "updated_at", state.updatedAt)
         .apply()
+}
+
+private fun encodeBookCachedSentences(sentences: List<BookCachedSentence>): String {
+    return sentences.joinToString(BOOK_READ_CACHE_ENTRY_SEPARATOR) { sentence ->
+        listOf(
+            sentence.chapterSentenceIndex.toString(),
+            sentence.paragraphIndex.toString(),
+            sentence.sentenceIndexInParagraph.toString(),
+            if (sentence.isCurrent) "1" else "0",
+            Uri.encode(sentence.text)
+        ).joinToString(BOOK_READ_CACHE_FIELD_SEPARATOR)
+    }
+}
+
+private fun decodeBookCachedSentences(raw: String): List<BookCachedSentence> {
+    if (raw.isBlank()) return emptyList()
+    return raw
+        .split(BOOK_READ_CACHE_ENTRY_SEPARATOR)
+        .mapNotNull { encoded ->
+            val parts = encoded.split(BOOK_READ_CACHE_FIELD_SEPARATOR, limit = 5)
+            if (parts.size < 5) return@mapNotNull null
+            BookCachedSentence(
+                chapterSentenceIndex = parts[0].toIntOrNull() ?: return@mapNotNull null,
+                paragraphIndex = parts[1].toIntOrNull() ?: return@mapNotNull null,
+                sentenceIndexInParagraph = parts[2].toIntOrNull() ?: return@mapNotNull null,
+                isCurrent = parts[3] == "1",
+                text = Uri.decode(parts[4]).orEmpty()
+            )
+        }
+        .filter { it.text.isNotBlank() }
+}
+
+private fun buildBookCachedSentences(
+    sentences: List<ReaderSentence>,
+    startIndex: Int,
+    endIndex: Int,
+    currentChapterSentenceIndex: Int
+): List<BookCachedSentence> {
+    if (sentences.isEmpty()) return emptyList()
+    val safeStart = startIndex.coerceIn(0, sentences.size)
+    val safeEnd = endIndex.coerceIn(safeStart, sentences.size)
+    return sentences
+        .subList(safeStart, safeEnd)
+        .map { sentence ->
+            BookCachedSentence(
+                text = sentence.text,
+                paragraphIndex = sentence.paragraphIndex,
+                sentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
+                chapterSentenceIndex = sentence.chapterSentenceIndex,
+                isCurrent = sentence.chapterSentenceIndex == currentChapterSentenceIndex
+            )
+        }
 }
 
 private fun buildReaderSentences(
@@ -3882,7 +5888,16 @@ private fun estimateSentenceTimeLabel(
     toIndex: Int,
     speechRate: Float
 ): String {
-    if (sentences.isEmpty()) return "00:00"
+    return formatDuration(estimateSentenceDurationSeconds(sentences, fromIndex, toIndex, speechRate))
+}
+
+private fun estimateSentenceDurationSeconds(
+    sentences: List<ReaderSentence>,
+    fromIndex: Int,
+    toIndex: Int,
+    speechRate: Float
+): Int {
+    if (sentences.isEmpty()) return 0
     val start = fromIndex.coerceIn(0, sentences.size)
     val end = toIndex.coerceIn(start, sentences.size)
     val chars = sentences
@@ -3890,8 +5905,7 @@ private fun estimateSentenceTimeLabel(
         .sumOf { sentence -> sentence.text.count { !it.isWhitespace() } }
     val safeSpeechRate = if (speechRate > 0f) speechRate else 1f
     val effectiveRate = (300f * safeSpeechRate).coerceAtLeast(60f)
-    val seconds = ((chars * 60f) / effectiveRate).roundToInt().coerceAtLeast(0)
-    return formatDuration(seconds)
+    return ((chars * 60f) / effectiveRate).roundToInt().coerceAtLeast(0)
 }
 
 private fun estimateChapterTimeLabel(

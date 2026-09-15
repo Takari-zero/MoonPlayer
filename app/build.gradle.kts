@@ -56,5 +56,7 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.datastore.preferences)
 
+    testImplementation(libs.junit)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

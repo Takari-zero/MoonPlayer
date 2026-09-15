@@ -1,6 +1,7 @@
 package com.shenghui.localvibe.core.tts
 
 import android.content.Context
+import android.os.Looper
 import android.util.Log
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
@@ -60,7 +61,9 @@ class Aishell3SegmentedStreamingTtsEngine(
                 silenceScale = 0.2f
             )
 
-            tts = OfflineTts(assetManager = null, config = config)
+            tts = synchronized(NATIVE_TTS_LOCK) {
+                OfflineTts(assetManager = null, config = config)
+            }
             isReady = true
             val initCostMs = System.currentTimeMillis() - startedAt
             Log.d(TAG, "initCostMs=$initCostMs")
@@ -95,7 +98,7 @@ class Aishell3SegmentedStreamingTtsEngine(
             return@withContext StreamingTtsResult.Error(message)
         }
 
-        val segments = splitForPreview(text)
+        val segments = splitTextSegments(text)
         if (segments.isEmpty()) {
             val message = "试听文本为空"
             onError(message)
@@ -115,10 +118,21 @@ class Aishell3SegmentedStreamingTtsEngine(
                 }
 
                 val segmentStartMs = System.currentTimeMillis()
-                val audio = offlineTts.generate(
-                    text = segmentText,
-                    sid = DEFAULT_SPEAKER_ID,
-                    speed = params.speed.coerceIn(0.5f, 2.0f)
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "native synth enter session=speak segmentIndex=$index main=${isMainThread()} " +
+                        "thread=${Thread.currentThread().name}"
+                )
+                val audio = synchronized(NATIVE_TTS_LOCK) {
+                    offlineTts.generate(
+                        text = segmentText,
+                        sid = DEFAULT_SPEAKER_ID,
+                        speed = params.speed.coerceIn(0.5f, 2.0f)
+                    )
+                }
+                Log.i(
+                    BOOK_HOT_TTS_TAG,
+                    "native synth exit session=speak segmentIndex=$index thread=${Thread.currentThread().name}"
                 )
                 val segmentSynthesizeCostMs = System.currentTimeMillis() - segmentStartMs
                 totalSynthesizeCostMs += segmentSynthesizeCostMs
@@ -174,6 +188,86 @@ class Aishell3SegmentedStreamingTtsEngine(
         }
     }
 
+    suspend fun synthesizeToChunks(
+        text: String,
+        params: StreamingTtsParams
+    ): Result<List<PcmAudioChunk>> = withContext(Dispatchers.IO) {
+        val segments = splitTextSegments(text)
+        if (segments.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("text is blank"))
+        }
+
+        runCatching {
+            segments.mapIndexed { index, segmentText ->
+                synthesizeSegmentToChunk(
+                    segmentText = segmentText,
+                    params = params,
+                    sessionLabel = "prewarm",
+                    segmentIndex = index,
+                    isFinal = index == segments.lastIndex
+                ).getOrThrow()
+            }
+        }
+    }
+
+    suspend fun synthesizeSegmentToChunk(
+        segmentText: String,
+        params: StreamingTtsParams,
+        sessionLabel: String,
+        segmentIndex: Int,
+        isFinal: Boolean
+    ): Result<PcmAudioChunk> = withContext(Dispatchers.IO) {
+        val initResult = initialize()
+        if (initResult.isFailure) {
+            return@withContext Result.failure(
+                initResult.exceptionOrNull() ?: IllegalStateException("aishell3 initialize failed")
+            )
+        }
+
+        val offlineTts = tts
+            ?: return@withContext Result.failure(IllegalStateException("aishell3 engine unavailable"))
+
+        if (segmentText.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("text is blank"))
+        }
+
+        runCatching {
+            val startedAt = System.currentTimeMillis()
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "native synth enter session=$sessionLabel segmentIndex=$segmentIndex main=${isMainThread()} " +
+                    "thread=${Thread.currentThread().name}"
+            )
+            val audio = synchronized(NATIVE_TTS_LOCK) {
+                offlineTts.generate(
+                    text = segmentText,
+                    sid = DEFAULT_SPEAKER_ID,
+                    speed = params.speed.coerceIn(0.5f, 2.0f)
+                )
+            }
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "native synth exit session=$sessionLabel segmentIndex=$segmentIndex thread=${Thread.currentThread().name}"
+            )
+            val sampleRate = audio.sampleRate.takeIf { it > 0 } ?: DEFAULT_SAMPLE_RATE
+            val pcm = floatSamplesToPcm16(audio.samples, params.volume)
+            Log.d(
+                TAG,
+                "$sessionLabel segmentIndex=$segmentIndex costMs=${System.currentTimeMillis() - startedAt} " +
+                    "sampleRate=$sampleRate pcmBytes=${pcm.size}"
+            )
+            PcmAudioChunk(
+                data = pcm,
+                format = PcmAudioFormat(
+                    sampleRate = sampleRate,
+                    channelCount = 1,
+                    encoding = PcmAudioEncoding.PCM_16BIT
+                ),
+                isFinal = isFinal
+            )
+        }
+    }
+
     override fun stop() {
         stopRequested = true
         Log.d(TAG, "stop")
@@ -182,9 +276,15 @@ class Aishell3SegmentedStreamingTtsEngine(
     override fun release() {
         stopRequested = true
         isReady = false
-        tts?.release()
+        synchronized(NATIVE_TTS_LOCK) {
+            tts?.release()
+        }
         tts = null
         Log.d(TAG, "release")
+    }
+
+    private fun isMainThread(): Boolean {
+        return Looper.myLooper() == Looper.getMainLooper()
     }
 
     private fun prepareModelFiles(): File {
@@ -217,15 +317,61 @@ class Aishell3SegmentedStreamingTtsEngine(
         }
     }
 
-    private fun splitForPreview(text: String): List<String> {
+    fun splitTextSegments(text: String): List<String> {
         return if (text == PREVIEW_TEXT) {
             PREVIEW_SEGMENTS
         } else {
-            text.split(Regex("[，。！？；、\\s]+"))
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .ifEmpty { listOf(text.trim()) }
+            splitIntoShortSegments(text)
         }
+    }
+
+    private fun splitIntoShortSegments(text: String): List<String> {
+        val normalized = text.trim()
+        if (normalized.isBlank()) return emptyList()
+        val segments = mutableListOf<String>()
+        val builder = StringBuilder()
+
+        fun flush() {
+            val segment = builder.toString().trim()
+            if (segment.isNotEmpty()) {
+                segments += segment
+            }
+            builder.clear()
+        }
+
+        normalized.forEach { char ->
+            if (char.isWhitespace() && char != '\n' && char != '\r') {
+                if (builder.isNotEmpty() && builder.last() != ' ') {
+                    builder.append(' ')
+                }
+            } else {
+                builder.append(char)
+            }
+
+            if (isSegmentBoundary(char) || builder.length >= MAX_SEGMENT_CHARS) {
+                flush()
+            }
+        }
+        flush()
+        return segments.ifEmpty { listOf(normalized) }
+    }
+
+    private fun isSegmentBoundary(char: Char): Boolean {
+        return char == '\uFF0C' ||
+            char == '\u3002' ||
+            char == '\uFF01' ||
+            char == '\uFF1F' ||
+            char == '\uFF1B' ||
+            char == '\uFF1A' ||
+            char == '\u3001' ||
+            char == ',' ||
+            char == '.' ||
+            char == '!' ||
+            char == '?' ||
+            char == ';' ||
+            char == ':' ||
+            char == '\n' ||
+            char == '\r'
     }
 
     private fun floatSamplesToPcm16(samples: FloatArray, volume: Float): ByteArray {
@@ -243,10 +389,13 @@ class Aishell3SegmentedStreamingTtsEngine(
 
     companion object {
         private const val TAG = "Aishell3StreamingTts"
+        private const val BOOK_HOT_TTS_TAG = "BookListenHot"
+        private val NATIVE_TTS_LOCK = Any()
         private const val ASSET_DIR = "offline_tts/aishell3"
         private const val DEFAULT_SAMPLE_RATE = 8000
         private const val DEFAULT_SPEAKER_ID = 10
         private const val BYTES_PER_SAMPLE = 2
+        private const val MAX_SEGMENT_CHARS = 24
         const val PREVIEW_TEXT = "这是一段自研离线流式语音试听。"
 
         private val PREVIEW_SEGMENTS = listOf(
