@@ -124,10 +124,11 @@ class Aishell3SegmentedStreamingTtsEngine(
                         "thread=${Thread.currentThread().name}"
                 )
                 val audio = synchronized(NATIVE_TTS_LOCK) {
+                    val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
                     offlineTts.generate(
                         text = segmentText,
                         sid = DEFAULT_SPEAKER_ID,
-                        speed = params.speed.coerceIn(0.5f, 2.0f)
+                        speed = speechRate.sherpaGenerateSpeed
                     )
                 }
                 Log.i(
@@ -239,10 +240,11 @@ class Aishell3SegmentedStreamingTtsEngine(
                     "thread=${Thread.currentThread().name}"
             )
             val audio = synchronized(NATIVE_TTS_LOCK) {
+                val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
                 offlineTts.generate(
                     text = segmentText,
                     sid = DEFAULT_SPEAKER_ID,
-                    speed = params.speed.coerceIn(0.5f, 2.0f)
+                    speed = speechRate.sherpaGenerateSpeed
                 )
             }
             Log.i(

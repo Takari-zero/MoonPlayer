@@ -122,7 +122,7 @@ class BookTtsController(
                 return BookTtsSpeakResult(false, "当前声线不可用")
             }
         }
-        engine.setSpeechRate(speechRate.coerceIn(0.5f, 2.0f))
+        engine.setSpeechRate(BookSpeechRate.fromUserMultiplier(speechRate).systemTtsSpeechRate)
         engine.setPitch(pitch.coerceIn(0.5f, 2.0f))
         val params = Bundle()
         val result = engine.speak(

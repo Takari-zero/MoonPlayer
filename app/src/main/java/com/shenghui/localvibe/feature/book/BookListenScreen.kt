@@ -104,6 +104,7 @@ import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
 import com.shenghui.localvibe.core.tts.BookTtsVoice
+import com.shenghui.localvibe.core.tts.BookSpeechRate
 import com.shenghui.localvibe.core.tts.OfflineTtsAvailability
 import com.shenghui.localvibe.core.tts.PcmAudioChunk
 import com.shenghui.localvibe.core.tts.StreamingPcmAudioPlayer
@@ -261,6 +262,9 @@ fun BookListenScreen(
     var isAishell3Paused by remember { mutableStateOf(false) }
     var isBuiltInOfflineTtsInitializing by remember { mutableStateOf(false) }
     var builtInOfflineTtsError by remember { mutableStateOf<String?>(null) }
+    val bookSpeechRate = remember(speechRate) {
+        BookSpeechRate.fromCurrentUiMultiplier(speechRate)
+    }
     val screenDisposed = remember(bookFile?.uri) { java.util.concurrent.atomic.AtomicBoolean(false) }
 
     DisposableEffect(Unit) {
@@ -352,11 +356,11 @@ fun BookListenScreen(
     }
 
     fun aishell3PreparedKey(chapterSentenceIndex: Int, text: String): String {
-        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|${text.hashCode()}|${speechRate.coerceIn(0.5f, 2.0f)}|$pitch"
+        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|${text.hashCode()}|${bookSpeechRate.sherpaGenerateSpeed}|$pitch"
     }
 
     fun aishell3SegmentKey(chapterSentenceIndex: Int, segmentIndex: Int, segmentText: String): String {
-        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|seg=$segmentIndex|${segmentText.hashCode()}|${speechRate.coerceIn(0.5f, 2.0f)}|$pitch"
+        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|seg=$segmentIndex|${segmentText.hashCode()}|${bookSpeechRate.sherpaGenerateSpeed}|$pitch"
     }
 
     fun isPlausibleChapterSentenceIndex(index: Int): Boolean {
@@ -443,9 +447,8 @@ fun BookListenScreen(
         Log.i(BOOK_HOT_TTS_TAG, "first segment synth start key=$key index=$segmentIndex source=$source")
         val result = aishell3TtsEngine.synthesizeSegmentToChunk(
             segmentText = segmentText,
-            params = StreamingTtsParams(
+            params = bookSpeechRate.asStreamingParams(
                 voiceId = "aishell3-speaker-10",
-                speed = speechRate.coerceIn(0.5f, 2.0f),
                 pitch = pitch,
                 volume = 1f
             ),
@@ -509,9 +512,8 @@ fun BookListenScreen(
             }
             val result = aishell3TtsEngine.synthesizeToChunks(
                 text = text,
-                params = StreamingTtsParams(
+                params = bookSpeechRate.asStreamingParams(
                     voiceId = "aishell3-speaker-10",
-                    speed = speechRate.coerceIn(0.5f, 2.0f),
                     pitch = pitch,
                     volume = 1f
                 )
@@ -597,9 +599,8 @@ fun BookListenScreen(
                 }
                 val result = aishell3TtsEngine.synthesizeSegmentToChunk(
                     segmentText = segmentText,
-                    params = StreamingTtsParams(
+                    params = bookSpeechRate.asStreamingParams(
                         voiceId = "aishell3-speaker-10",
-                        speed = speechRate.coerceIn(0.5f, 2.0f),
                         pitch = pitch,
                         volume = 1f
                     ),
@@ -2261,9 +2262,8 @@ fun BookListenScreen(
                             val synthesizedChunks = mutableListOf<PcmAudioChunk>()
                             val result = aishell3TtsEngine.speak(
                                 text = speakText,
-                                params = StreamingTtsParams(
+                                params = bookSpeechRate.asStreamingParams(
                                     voiceId = "aishell3-speaker-10",
-                                    speed = speechRate.coerceIn(0.5f, 2.0f),
                                     pitch = pitch,
                                     volume = 1f
                                 ),
@@ -2997,9 +2997,8 @@ fun BookListenScreen(
                         val result = runCatching {
                             engine.speak(
                                 text = Aishell3SegmentedStreamingTtsEngine.PREVIEW_TEXT,
-                                params = StreamingTtsParams(
+                                params = bookSpeechRate.asStreamingParams(
                                     voiceId = "aishell3-speaker-10",
-                                    speed = 1f,
                                     pitch = 1f,
                                     volume = 1f
                                 ),
@@ -3180,7 +3179,10 @@ fun BookListenScreen(
                         }
 
                         Toast.makeText(context, "正在播放内置语音...", Toast.LENGTH_SHORT).show()
-                        val result = builtInOfflineTtsEngine.speak("这是一段内置离线语音试听。") {
+                        val result = builtInOfflineTtsEngine.speak(
+                            text = "这是一段内置离线语音试听。",
+                            speechRate = bookSpeechRate
+                        ) {
                             Toast.makeText(context, "内置语音开始播放", Toast.LENGTH_SHORT).show()
                         }
                         when (result) {

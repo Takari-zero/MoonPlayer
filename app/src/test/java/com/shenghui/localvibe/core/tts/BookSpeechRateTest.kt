@@ -37,6 +37,23 @@ class BookSpeechRateTest {
     }
 
     @Test
+    fun providerMappingsPreserveAllRecommendedPresetMultipliers() {
+        val expected = listOf(0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+
+        val mapped = BookSpeechRate.recommendedPresets.map { rate ->
+            Triple(
+                rate.systemTtsSpeechRate,
+                rate.sherpaGenerateSpeed,
+                rate.pcmPlaybackSpeed
+            )
+        }
+
+        assertEquals(expected, mapped.map { it.first })
+        assertEquals(expected, mapped.map { it.second })
+        assertEquals(List(expected.size) { 1.0f }, mapped.map { it.third })
+    }
+
+    @Test
     fun streamingParamsUseSherpaSpeedWithoutTouchingPcmFormat() {
         val params = BookSpeechRate.fromUserMultiplier(1.75f)
             .asStreamingParams(voiceId = "aishell3-speaker-10", pitch = 3f)

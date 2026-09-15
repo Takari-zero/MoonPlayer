@@ -15,9 +15,9 @@ This document separates product speech speed from TTS synthesis performance and 
 
 - UI: the book reader already has a speech-rate slider. Current slider range is `0.6x..1.8x`.
 - Persistence: the book speech rate is screen-local state today. It is not persisted in DataStore or book settings.
-- Android System TTS: `BookTtsController.speakSentence()` calls `TextToSpeech.setSpeechRate()` and clamps to `0.5x..2.0x`.
-- Aishell3/Sherpa: `Aishell3SegmentedStreamingTtsEngine` passes `StreamingTtsParams.speed` into `OfflineTts.generate(speed=...)` and clamps to `0.5x..2.0x`.
-- BuiltInOffline: the current preview path calls `OfflineTts.generate(..., speed = 1.0f)`. It does not yet use the UI speech-rate value.
+- Android System TTS: `BookTtsController.speakSentence()` maps user speed through `BookSpeechRate` and calls `TextToSpeech.setSpeechRate()`.
+- Aishell3/Sherpa: `Aishell3SegmentedStreamingTtsEngine` maps `StreamingTtsParams.speed` through `BookSpeechRate` and passes it into `OfflineTts.generate(speed=...)`.
+- BuiltInOffline: `BuiltInOfflineTtsEngine.speak()` accepts `BookSpeechRate` and passes its Sherpa speed into `OfflineTts.generate(speed=...)`.
 - PCM playback: `StreamingPcmAudioPlayer` does not use `PlaybackParams` and does not change sample rate to fake speech speed.
 
 ## Sherpa API Findings
@@ -28,6 +28,14 @@ The checked wrapper exposes both:
 - `OfflineTts.generate(speed = ...)`
 
 Current LocalVibe code uses `generate(speed = ...)`; it does not set `lengthScale`. The exact relationship between `lengthScale` and audible speed should not be assumed without a separate native/Sherpa validation task.
+
+`BookSpeechRate` is the current product-level speed model. Provider-specific mappings are:
+
+- System TTS: user multiplier maps directly to `TextToSpeech.setSpeechRate()`.
+- Sherpa/Aishell3/BuiltInOffline: user multiplier maps directly to `OfflineTts.generate(speed=...)`.
+- PCM playback: remains `1.0x`; no sample-rate, frame-dropping, or `AudioTrack PlaybackParams` speed hack is used.
+
+Changing speed during playback updates the state used by future synthesis requests and cache keys. Already queued PCM is not time-stretched or restarted automatically.
 
 ## Text Processing Chain
 

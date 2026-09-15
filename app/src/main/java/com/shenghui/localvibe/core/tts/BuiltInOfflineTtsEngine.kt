@@ -76,7 +76,7 @@ class BuiltInOfflineTtsEngine {
             Log.i(TAG, "numThreads=2")
             Log.i(TAG, "debug=true")
             Log.i(TAG, "sid=0")
-            Log.i(TAG, "speed=1.0")
+            Log.i(TAG, "speed=runtime")
 
             val config = OfflineTtsConfig(
                 model = OfflineTtsModelConfig(
@@ -114,6 +114,7 @@ class BuiltInOfflineTtsEngine {
 
     suspend fun speak(
         text: String,
+        speechRate: BookSpeechRate = BookSpeechRate.fromUserMultiplier(1f),
         onPlaybackStarted: suspend () -> Unit = {}
     ): BuiltInOfflineTtsResult = withContext(Dispatchers.IO) {
         val offlineTts = tts
@@ -126,9 +127,9 @@ class BuiltInOfflineTtsEngine {
 
         try {
             stopped = false
-            val english = synthesize(offlineTts, "hello", "hello")
-            val chineseShort = synthesize(offlineTts, "你好", "你好")
-            val chinese = synthesize(offlineTts, "中文试听", text)
+            val english = synthesize(offlineTts, "hello", "hello", speechRate)
+            val chineseShort = synthesize(offlineTts, "你好", "你好", speechRate)
+            val chinese = synthesize(offlineTts, "中文试听", text, speechRate)
             val selected = when {
                 chinese.isUsable -> chinese
                 chineseShort.isUsable -> chineseShort
@@ -274,14 +275,19 @@ class BuiltInOfflineTtsEngine {
         Log.i(TAG, "asset copied path=$assetPath target=${target.absolutePath} size=${target.length()}")
     }
 
-    private fun synthesize(offlineTts: OfflineTts, label: String, text: String): SynthesisOutput {
+    private fun synthesize(
+        offlineTts: OfflineTts,
+        label: String,
+        text: String,
+        speechRate: BookSpeechRate
+    ): SynthesisOutput {
         Log.i(TAG, "synthesize $label start")
         Log.i(TAG, "$label text=$text")
         Log.i(TAG, "$label text length=${text.length}")
         Log.i(TAG, "$label sid=0")
-        Log.i(TAG, "$label speed=1.0")
+        Log.i(TAG, "$label speed=${speechRate.sherpaGenerateSpeed}")
         val startMs = System.currentTimeMillis()
-        val audio = offlineTts.generate(text = text, sid = 0, speed = 1.0f)
+        val audio = offlineTts.generate(text = text, sid = 0, speed = speechRate.sherpaGenerateSpeed)
         val costMs = System.currentTimeMillis() - startMs
         val samples = audio.samples
         val rawSampleRate = audio.sampleRate
