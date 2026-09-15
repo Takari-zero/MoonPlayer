@@ -21,6 +21,13 @@ Runtime status:
 - JVM tests and Debug build passed for that commit.
 - Android real-device runtime acceptance for `d286b71` has not been completed yet.
 
+Resource packaging status:
+
+- iFlytek research-only assets must not be packaged into LocalVibe APKs.
+- The base app must continue to run without optional offline voice packs.
+- Aishell3 and BuiltInOffline engines may be unavailable when Sherpa/ONNX native runtime, supported ABI, or required model assets are missing.
+- Android System TTS remains the independent fallback and must not depend on `offline_tts` assets or Sherpa native libraries.
+
 ## Engine roles
 
 ### Android System TTS

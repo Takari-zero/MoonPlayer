@@ -104,6 +104,7 @@ import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
 import com.shenghui.localvibe.core.tts.BookTtsVoice
+import com.shenghui.localvibe.core.tts.OfflineTtsAvailability
 import com.shenghui.localvibe.core.tts.PcmAudioChunk
 import com.shenghui.localvibe.core.tts.StreamingPcmAudioPlayer
 import com.shenghui.localvibe.core.tts.StreamingTtsParams
@@ -252,6 +253,9 @@ fun BookListenScreen(
     var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
     val builtInOfflineTtsEngine = remember { BuiltInOfflineTtsEngine() }
     val aishell3TtsEngine = remember { Aishell3SegmentedStreamingTtsEngine(context.applicationContext) }
+    val offlineTtsAvailability = remember(context) {
+        OfflineTtsAvailability.check(context.applicationContext)
+    }
     var aishell3Player by remember { mutableStateOf<StreamingPcmAudioPlayer?>(null) }
     val aishell3StopJobRef = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.Job?>(null) }
     var isAishell3Paused by remember { mutableStateOf(false) }
@@ -2944,6 +2948,10 @@ fun BookListenScreen(
             voiceDataInstallUnavailable = voiceDataInstallUnavailable,
             isBuiltInOfflineTtsInitializing = isBuiltInOfflineTtsInitializing,
             builtInOfflineTtsError = builtInOfflineTtsError,
+            isBuiltInOfflineAvailable = offlineTtsAvailability.builtInOfflineAvailable,
+            builtInOfflineUnavailableReason = offlineTtsAvailability.builtInOfflineUnavailableReason,
+            isAishell3OfflineAvailable = offlineTtsAvailability.aishell3Available,
+            aishell3OfflineUnavailableReason = offlineTtsAvailability.aishell3UnavailableReason,
             onDismiss = { showVoicePackageSheet = false },
             onInstallVoiceData = ::openVoiceDataInstaller,
             onOpenSystemSettings = ::openSystemVoiceSettings,
@@ -2969,87 +2977,95 @@ fun BookListenScreen(
                 }
             },
             onAishell3OfflinePreview = {
-                coroutineScope.launch {
-                    Log.d("Aishell3StreamingTts", "start aishell3 preview")
-                    Toast.makeText(context, "正在生成自研离线语音...", Toast.LENGTH_SHORT).show()
+                if (!offlineTtsAvailability.aishell3Available) {
+                    Toast.makeText(
+                        context,
+                        offlineTtsAvailability.aishell3UnavailableReason ?: "Aishell3 离线语音不可用",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    coroutineScope.launch {
+                        Log.d("Aishell3StreamingTts", "start aishell3 preview")
+                        Toast.makeText(context, "正在生成自研离线语音...", Toast.LENGTH_SHORT).show()
 
-                    val engine = Aishell3SegmentedStreamingTtsEngine(context.applicationContext)
-                    val streamingPlayer = StreamingPcmAudioPlayer()
-                    var chunkIndex = 0
-                    var playbackDurationMs = 0L
-                    var playbackStarted = false
+                        val engine = Aishell3SegmentedStreamingTtsEngine(context.applicationContext)
+                        val streamingPlayer = StreamingPcmAudioPlayer()
+                        var chunkIndex = 0
+                        var playbackDurationMs = 0L
+                        var playbackStarted = false
 
-                    val result = runCatching {
-                        engine.speak(
-                            text = Aishell3SegmentedStreamingTtsEngine.PREVIEW_TEXT,
-                            params = StreamingTtsParams(
-                                voiceId = "aishell3-speaker-10",
-                                speed = 1f,
-                                pitch = 1f,
-                                volume = 1f
-                            ),
-                            onStart = {
-                                Log.d("Aishell3StreamingTts", "preview onStart")
-                            },
-                            onChunk = { chunk ->
-                                Log.d(
-                                    "Aishell3StreamingTts",
-                                    "ui chunk index=$chunkIndex bytes=${chunk.data.size} sampleRate=${chunk.format.sampleRate}"
-                                )
+                        val result = runCatching {
+                            engine.speak(
+                                text = Aishell3SegmentedStreamingTtsEngine.PREVIEW_TEXT,
+                                params = StreamingTtsParams(
+                                    voiceId = "aishell3-speaker-10",
+                                    speed = 1f,
+                                    pitch = 1f,
+                                    volume = 1f
+                                ),
+                                onStart = {
+                                    Log.d("Aishell3StreamingTts", "preview onStart")
+                                },
+                                onChunk = { chunk ->
+                                    Log.d(
+                                        "Aishell3StreamingTts",
+                                        "ui chunk index=$chunkIndex bytes=${chunk.data.size} sampleRate=${chunk.format.sampleRate}"
+                                    )
 
-                                if (chunkIndex == 0) {
-                                    val startResult = streamingPlayer.start(chunk.format)
-                                    if (startResult.isFailure) {
-                                        val message = startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败"
+                                    if (chunkIndex == 0) {
+                                        val startResult = streamingPlayer.start(chunk.format)
+                                        if (startResult.isFailure) {
+                                            val message = startResult.exceptionOrNull()?.message ?: "AudioTrack 启动失败"
+                                            throw IllegalStateException(message)
+                                        }
+                                        playbackStarted = true
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "自研离线语音开始播放", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+
+                                    val writeResult = streamingPlayer.write(chunk)
+                                    if (writeResult.isFailure) {
+                                        val message = writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败"
                                         throw IllegalStateException(message)
                                     }
-                                    playbackStarted = true
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "自研离线语音开始播放", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
 
-                                val writeResult = streamingPlayer.write(chunk)
-                                if (writeResult.isFailure) {
-                                    val message = writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败"
-                                    throw IllegalStateException(message)
+                                    playbackDurationMs += chunk.data.size * 1000L /
+                                        (chunk.format.sampleRate * 2L)
+                                    chunkIndex += 1
+                                },
+                                onDone = {
+                                    Log.d("Aishell3StreamingTts", "preview onDone playbackDurationMs=$playbackDurationMs")
+                                },
+                                onError = { error ->
+                                    Log.e("Aishell3StreamingTts", "preview error: $error")
                                 }
+                            )
+                        }.getOrElse { error ->
+                            Log.e("Aishell3StreamingTts", "preview exception", error)
+                            StreamingTtsResult.Error(error.message ?: "未知错误")
+                        }
 
-                                playbackDurationMs += chunk.data.size * 1000L /
-                                    (chunk.format.sampleRate * 2L)
-                                chunkIndex += 1
-                            },
-                            onDone = {
-                                Log.d("Aishell3StreamingTts", "preview onDone playbackDurationMs=$playbackDurationMs")
-                            },
-                            onError = { error ->
-                                Log.e("Aishell3StreamingTts", "preview error: $error")
+                        if (playbackStarted) {
+                            delay((playbackDurationMs + 220L).coerceAtMost(5000L))
+                        }
+                        streamingPlayer.release()
+                        engine.release()
+
+                        when (result) {
+                            StreamingTtsResult.Success -> {
+                                Toast.makeText(context, "自研离线语音播放完成", Toast.LENGTH_SHORT).show()
                             }
-                        )
-                    }.getOrElse { error ->
-                        Log.e("Aishell3StreamingTts", "preview exception", error)
-                        StreamingTtsResult.Error(error.message ?: "未知错误")
-                    }
-
-                    if (playbackStarted) {
-                        delay((playbackDurationMs + 220L).coerceAtMost(5000L))
-                    }
-                    streamingPlayer.release()
-                    engine.release()
-
-                    when (result) {
-                        StreamingTtsResult.Success -> {
-                            Toast.makeText(context, "自研离线语音播放完成", Toast.LENGTH_SHORT).show()
-                        }
-                        StreamingTtsResult.Stopped -> {
-                            Toast.makeText(context, "自研离线语音已停止", Toast.LENGTH_SHORT).show()
-                        }
-                        is StreamingTtsResult.Error -> {
-                            Toast.makeText(
-                                context,
-                                "自研离线语音失败：${result.message}",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            StreamingTtsResult.Stopped -> {
+                                Toast.makeText(context, "自研离线语音已停止", Toast.LENGTH_SHORT).show()
+                            }
+                            is StreamingTtsResult.Error -> {
+                                Toast.makeText(
+                                    context,
+                                    "自研离线语音失败：${result.message}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }
                 }
@@ -3143,6 +3159,10 @@ fun BookListenScreen(
             onBuiltInPreview = {
                 if (isBuiltInOfflineTtsInitializing) {
                     Toast.makeText(context, "内置语音正在初始化", Toast.LENGTH_SHORT).show()
+                } else if (!offlineTtsAvailability.builtInOfflineAvailable) {
+                    val reason = offlineTtsAvailability.builtInOfflineUnavailableReason ?: "内置离线语音不可用"
+                    builtInOfflineTtsError = reason
+                    Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
                 } else {
                     coroutineScope.launch {
                         builtInOfflineTtsError = null
@@ -4046,6 +4066,10 @@ private fun VoicePackageSettingsBottomSheet(
     voiceDataInstallUnavailable: Boolean,
     isBuiltInOfflineTtsInitializing: Boolean,
     builtInOfflineTtsError: String?,
+    isBuiltInOfflineAvailable: Boolean,
+    builtInOfflineUnavailableReason: String?,
+    isAishell3OfflineAvailable: Boolean,
+    aishell3OfflineUnavailableReason: String?,
     onDismiss: () -> Unit,
     onInstallVoiceData: () -> Unit,
     onOpenSystemSettings: () -> Unit,
@@ -4175,10 +4199,15 @@ private fun VoicePackageSettingsBottomSheet(
             )
 
             VoiceSheetActionButton(
-                text = if (isBuiltInOfflineTtsInitializing) "内置语音初始化中" else "内置语音试听",
+                text = when {
+                    !isBuiltInOfflineAvailable -> "内置语音未安装"
+                    isBuiltInOfflineTtsInitializing -> "内置语音初始化中"
+                    else -> "内置语音试听"
+                },
                 onClick = onBuiltInPreview,
                 modifier = Modifier.fillMaxWidth(),
-                emphasized = true
+                emphasized = isBuiltInOfflineAvailable,
+                muted = !isBuiltInOfflineAvailable
             )
             VoiceSheetActionButton(
                 text = "音频通道测试",
@@ -4186,10 +4215,11 @@ private fun VoicePackageSettingsBottomSheet(
                 modifier = Modifier.fillMaxWidth()
             )
             VoiceSheetActionButton(
-                text = "自研离线试听",
+                text = if (isAishell3OfflineAvailable) "自研离线试听" else "自研离线未安装",
                 onClick = onAishell3OfflinePreview,
                 modifier = Modifier.fillMaxWidth(),
-                emphasized = true
+                emphasized = isAishell3OfflineAvailable,
+                muted = !isAishell3OfflineAvailable
             )
             VoiceSheetActionButton(
                 text = "流式音频测试",
@@ -4200,6 +4230,22 @@ private fun VoicePackageSettingsBottomSheet(
                 Text(
                     text = "内置语音：$builtInOfflineTtsError",
                     color = Color(0xFFFFD5D5).copy(alpha = 0.88f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            }
+            if (!isBuiltInOfflineAvailable && !builtInOfflineUnavailableReason.isNullOrBlank()) {
+                Text(
+                    text = "内置语音：$builtInOfflineUnavailableReason",
+                    color = Color.White.copy(alpha = 0.52f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            }
+            if (!isAishell3OfflineAvailable && !aishell3OfflineUnavailableReason.isNullOrBlank()) {
+                Text(
+                    text = "自研离线：$aishell3OfflineUnavailableReason",
+                    color = Color.White.copy(alpha = 0.52f),
                     fontSize = 12.sp,
                     lineHeight = 17.sp
                 )
