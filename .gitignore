@@ -14,3 +14,14 @@ test-results/
 
 .agents/
 skills-lock.json
+
+# Local diagnostic artifacts
+/localvibe_*.txt
+/iflytek_*.txt
+/book_crash_log.txt
+/readonly_iflytek_engine.txt
+/*.err.txt
+/*.pid
+/*.jobid
+/iflytek_*.apk
+/*.patch
