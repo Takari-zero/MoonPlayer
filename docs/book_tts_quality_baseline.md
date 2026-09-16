@@ -98,6 +98,16 @@ Human listening is still required for:
 - First audio latency can be approximated from existing logs, but there is no dedicated benchmark framework yet.
 - RTF can be computed from synthesis duration and generated audio duration, but it is not yet emitted as a single structured metric in runtime logs.
 
+## Aishell3 Synthesis Metrics
+
+- `Aishell3SegmentedStreamingTtsEngine` now records monotonic timing around each `speak()` request with `SystemClock.elapsedRealtime()`.
+- The emitted summary records request-to-synthesis-start, first non-empty PCM availability, total generation time, generated audio duration, and RTF. It records character count and a local metrics session id, not the book text.
+- `TtsSynthesisMetrics` defines `RTF = synthesis wall time / generated audio duration`. Empty audio, invalid sample rates, and negative timing intervals produce unavailable metrics rather than `NaN` or `Infinity`.
+- The first PCM event is latched once per synthesis request. The current metric session is local to one engine request, so an older request cannot overwrite a newer request's values.
+- This is not an audible-latency measurement: first PCM availability occurs before the asynchronous `AudioTrack` writer, and no audio output timestamp is collected.
+- Aishell3 calls Sherpa `OfflineTts.generate()` synchronously for each short segment, then emits the completed segment through `onChunk`. It is therefore segmented progressive synthesis, not native token/chunk streaming.
+- No real-device latency, RTF, pronunciation, or prosody data has been collected yet.
+
 ## Boundaries
 
 - Do not fake speed by changing PCM sample-rate metadata.

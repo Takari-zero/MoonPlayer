@@ -68,15 +68,3 @@ data class BookSpeechRate(
         }
     }
 }
-
-data class TtsQualityMetrics(
-    val firstAudioLatencyMs: Long,
-    val synthesisDurationMs: Long,
-    val generatedAudioDurationMs: Long
-) {
-    val realTimeFactor: Double?
-        get() {
-            if (generatedAudioDurationMs <= 0L) return null
-            return synthesisDurationMs.toDouble() / generatedAudioDurationMs.toDouble()
-        }
-}

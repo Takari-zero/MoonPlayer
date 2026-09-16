@@ -1,7 +1,6 @@
 package com.shenghui.localvibe.core.tts
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class BookSpeechRateTest {
@@ -64,21 +63,4 @@ class BookSpeechRateTest {
         assertEquals(1.0f, params.volume)
     }
 
-    @Test
-    fun realTimeFactorUsesSynthesisDurationOverGeneratedDuration() {
-        val metrics = TtsQualityMetrics(
-            firstAudioLatencyMs = 320,
-            synthesisDurationMs = 500,
-            generatedAudioDurationMs = 1000
-        )
-
-        assertEquals(0.5, metrics.realTimeFactor ?: -1.0, 0.0001)
-        assertNull(
-            TtsQualityMetrics(
-                firstAudioLatencyMs = 0,
-                synthesisDurationMs = 500,
-                generatedAudioDurationMs = 0
-            ).realTimeFactor
-        )
-    }
 }

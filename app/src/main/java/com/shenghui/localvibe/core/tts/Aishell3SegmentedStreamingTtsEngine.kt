@@ -2,6 +2,7 @@ package com.shenghui.localvibe.core.tts
 
 import android.content.Context
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
@@ -10,6 +11,7 @@ import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 
 class Aishell3SegmentedStreamingTtsEngine(
@@ -85,40 +87,74 @@ class Aishell3SegmentedStreamingTtsEngine(
         onDone: () -> Unit,
         onError: (String) -> Unit
     ): StreamingTtsResult = withContext(Dispatchers.IO) {
-        val initResult = initialize()
-        if (initResult.isFailure) {
-            val message = initResult.exceptionOrNull()?.message ?: "aishell3 初始化失败"
-            onError(message)
-            return@withContext StreamingTtsResult.Error(message)
+        val requestStartElapsedMs = SystemClock.elapsedRealtime()
+        val metricsSessionId = METRICS_SESSION_COUNTER.incrementAndGet()
+        var synthesisStartElapsedMs: Long? = null
+        var firstPcmElapsedMs: Long? = null
+        var generationCompletedElapsedMs: Long? = null
+        var generatedSamples = 0L
+        var generatedSampleRate = 0
+        var metricsLogged = false
+        fun logSynthesisMetrics() {
+            if (metricsLogged) return
+            metricsLogged = true
+            val metrics = TtsSynthesisMetrics(
+                textLength = segmentsForMetricsLength(text),
+                synthesisRequestStartElapsedMs = requestStartElapsedMs,
+                synthesisStartElapsedMs = synthesisStartElapsedMs,
+                firstPcmElapsedMs = firstPcmElapsedMs,
+                generationCompletedElapsedMs = generationCompletedElapsedMs,
+                generatedSamples = generatedSamples,
+                sampleRate = generatedSampleRate
+            )
+            Log.i(
+                BOOK_HOT_TTS_TAG,
+                "tts synthesis metrics provider=Aishell3 session=$metricsSessionId " +
+                    "chars=${metrics.textLength} requestToSynthesisMs=${metrics.requestToSynthesisMs ?: "unavailable"} " +
+                    "firstPcmMs=${metrics.firstPcmLatencyMs ?: "unavailable"} " +
+                    "synthesisMs=${metrics.synthesisDurationMs ?: "unavailable"} " +
+                    "audioMs=${metrics.generatedAudioDurationMs ?: "unavailable"} " +
+                    "rtf=${metrics.realTimeFactor ?: "unavailable"}"
+            )
         }
-
-        val offlineTts = tts
-        if (offlineTts == null) {
-            val message = "aishell3 引擎不可用"
-            onError(message)
-            return@withContext StreamingTtsResult.Error(message)
-        }
-
-        val segments = splitTextSegments(text)
-        if (segments.isEmpty()) {
-            val message = "试听文本为空"
-            onError(message)
-            return@withContext StreamingTtsResult.Error(message)
-        }
-
-        stopRequested = false
-        var started = false
-        val clickStartMs = System.currentTimeMillis()
-        var totalSynthesizeCostMs = 0L
 
         try {
+            val initResult = initialize()
+            if (initResult.isFailure) {
+                val message = initResult.exceptionOrNull()?.message ?: "aishell3 初始化失败"
+                onError(message)
+                return@withContext StreamingTtsResult.Error(message)
+            }
+
+            val offlineTts = tts
+            if (offlineTts == null) {
+                val message = "aishell3 引擎不可用"
+                onError(message)
+                return@withContext StreamingTtsResult.Error(message)
+            }
+
+            val segments = splitTextSegments(text)
+            if (segments.isEmpty()) {
+                val message = "试听文本为空"
+                onError(message)
+                return@withContext StreamingTtsResult.Error(message)
+            }
+
+            stopRequested = false
+            var started = false
+            val clickStartMs = System.currentTimeMillis()
+            var totalSynthesizeCostMs = 0L
+
             for ((index, segmentText) in segments.withIndex()) {
                 if (stopRequested) {
                     Log.d(TAG, "stopped=true segmentIndex=$index")
                     return@withContext StreamingTtsResult.Stopped
                 }
 
-                val segmentStartMs = System.currentTimeMillis()
+                if (synthesisStartElapsedMs == null) {
+                    synthesisStartElapsedMs = SystemClock.elapsedRealtime()
+                }
+                val segmentStartElapsedMs = SystemClock.elapsedRealtime()
                 Log.i(
                     BOOK_HOT_TTS_TAG,
                     "native synth enter session=speak segmentIndex=$index main=${isMainThread()} " +
@@ -136,11 +172,19 @@ class Aishell3SegmentedStreamingTtsEngine(
                     BOOK_HOT_TTS_TAG,
                     "native synth exit session=speak segmentIndex=$index thread=${Thread.currentThread().name}"
                 )
-                val segmentSynthesizeCostMs = System.currentTimeMillis() - segmentStartMs
+                generationCompletedElapsedMs = SystemClock.elapsedRealtime()
+                val segmentSynthesizeCostMs = generationCompletedElapsedMs!! - segmentStartElapsedMs
                 totalSynthesizeCostMs += segmentSynthesizeCostMs
 
                 val sampleRate = audio.sampleRate.takeIf { it > 0 } ?: DEFAULT_SAMPLE_RATE
                 val pcm = floatSamplesToPcm16(audio.samples, params.volume)
+                if (pcm.isNotEmpty() && firstPcmElapsedMs == null) {
+                    firstPcmElapsedMs = SystemClock.elapsedRealtime()
+                }
+                generatedSamples += audio.samples.size.toLong()
+                if (generatedSampleRate == 0 && sampleRate > 0) {
+                    generatedSampleRate = sampleRate
+                }
                 val audioDurationMs = if (sampleRate > 0) {
                     (audio.samples.size * 1000L) / sampleRate
                 } else {
@@ -187,6 +231,8 @@ class Aishell3SegmentedStreamingTtsEngine(
             Log.e(TAG, "error=$message", error)
             onError(message)
             StreamingTtsResult.Error(message)
+        } finally {
+            logSynthesisMetrics()
         }
     }
 
@@ -289,6 +335,10 @@ class Aishell3SegmentedStreamingTtsEngine(
 
     private fun isMainThread(): Boolean {
         return Looper.myLooper() == Looper.getMainLooper()
+    }
+
+    private fun segmentsForMetricsLength(text: String): Int {
+        return BookTtsTextNormalizer.normalize(text).spokenText.length
     }
 
     private fun prepareModelFiles(): File {
@@ -401,6 +451,7 @@ class Aishell3SegmentedStreamingTtsEngine(
         private const val DEFAULT_SPEAKER_ID = 10
         private const val BYTES_PER_SAMPLE = 2
         private const val MAX_SEGMENT_CHARS = 24
+        private val METRICS_SESSION_COUNTER = AtomicLong(0L)
         const val PREVIEW_TEXT = "这是一段自研离线流式语音试听。"
 
         private val PREVIEW_SEGMENTS = listOf(
