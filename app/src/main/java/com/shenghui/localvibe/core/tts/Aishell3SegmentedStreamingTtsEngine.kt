@@ -34,7 +34,8 @@ class Aishell3SegmentedStreamingTtsEngine(
             stopRequested = false
             val startedAt = System.currentTimeMillis()
             val modelDir = prepareModelFiles()
-            val ruleFsts = RULE_FST_FILES.joinToString(",") {
+            val resourceConfig = OfflineTtsResourceConfigs.AISHELL3
+            val ruleFsts = resourceConfig.ruleFstFiles.joinToString(",") {
                 File(modelDir, it).absolutePath
             }
 
@@ -45,11 +46,11 @@ class Aishell3SegmentedStreamingTtsEngine(
             val config = OfflineTtsConfig(
                 model = OfflineTtsModelConfig(
                     vits = OfflineTtsVitsModelConfig(
-                        model = File(modelDir, "model.onnx").absolutePath,
-                        lexicon = File(modelDir, "lexicon.txt").absolutePath,
-                        tokens = File(modelDir, "tokens.txt").absolutePath,
+                        model = File(modelDir, resourceConfig.modelFile).absolutePath,
+                        lexicon = File(modelDir, resourceConfig.lexiconFile).absolutePath,
+                        tokens = File(modelDir, resourceConfig.tokensFile).absolutePath,
                         dataDir = "",
-                        dictDir = ""
+                        dictDir = resourceConfig.dictDir
                     ),
                     numThreads = 4,
                     debug = true,
@@ -419,11 +420,5 @@ class Aishell3SegmentedStreamingTtsEngine(
             "speakers.txt"
         )
 
-        private val RULE_FST_FILES = listOf(
-            "phone.fst",
-            "date.fst",
-            "number.fst",
-            "new_heteronym.fst"
-        )
     }
 }

@@ -47,11 +47,12 @@ class BuiltInOfflineTtsEngine {
             val model = prepareModelFiles(appContext)
             preparedModel = model
 
-            val modelPath = File(model.modelDir, MODEL_NAME).absolutePath
-            val tokensPath = File(model.modelDir, "tokens.txt").absolutePath
-            val lexiconPath = File(model.modelDir, "lexicon.txt").absolutePath
+            val resourceConfig = OfflineTtsResourceConfigs.BUILT_IN_OFFLINE
+            val modelPath = File(model.modelDir, resourceConfig.modelFile).absolutePath
+            val tokensPath = File(model.modelDir, resourceConfig.tokensFile).absolutePath
+            val lexiconPath = File(model.modelDir, resourceConfig.lexiconFile).absolutePath
             val dictPath = File(model.modelDir, "dict").absolutePath
-            val ruleFsts = RULE_FST_FILES.joinToString(",") { File(model.modelDir, it).absolutePath }
+            val ruleFsts = resourceConfig.ruleFstFiles.joinToString(",") { File(model.modelDir, it).absolutePath }
 
             Log.i(TAG, "using assetManager or filesDir=filesDir")
             Log.i(TAG, "config model path=$modelPath")
@@ -85,7 +86,7 @@ class BuiltInOfflineTtsEngine {
                         lexicon = lexiconPath,
                         tokens = tokensPath,
                         dataDir = "",
-                        dictDir = ""
+                        dictDir = resourceConfig.dictDir
                     ),
                     numThreads = 2,
                     debug = true,
@@ -545,11 +546,6 @@ class BuiltInOfflineTtsEngine {
             "number.fst",
             "date.fst",
             "new_heteronym.fst"
-        )
-        val RULE_FST_FILES = listOf(
-            "phone.fst",
-            "date.fst",
-            "number.fst"
         )
     }
 }

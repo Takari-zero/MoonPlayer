@@ -56,7 +56,9 @@ Changing speed during playback updates the state used by future synthesis reques
 
 - Aishell3/Sherpa loads `phone.fst`, `date.fst`, `number.fst`, and `new_heteronym.fst` through `OfflineTtsConfig.ruleFsts`.
 - BuiltInOffline requires/copies `phone.fst`, `number.fst`, `date.fst`, and `new_heteronym.fst`.
-- BuiltInOffline currently configures `OfflineTtsConfig.ruleFsts` with `phone.fst`, `date.fst`, and `number.fst`; `new_heteronym.fst` is present in the required file set but is not part of the configured rule FST list.
+- BuiltInOffline configures `OfflineTtsConfig.ruleFsts` with `phone.fst`, `date.fst`, `number.fst`, and `new_heteronym.fst`.
+- BuiltInOffline still copies the model's `dict/` resources for completeness, but the local Sherpa VITS binding marks `dictDir` as unused and the engine passes an empty `dictDir`; the copied dictionary is therefore not claimed as an active Sherpa input.
+- Both provider resource descriptors are covered by JVM tests so a required rule FST cannot silently become copy-only again.
 - No project-level hardcoded number, date, English, or heteronym rewrite table is currently applied before provider synthesis.
 
 ## Accuracy Baseline Categories
