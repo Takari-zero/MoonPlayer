@@ -228,7 +228,8 @@ class Aishell3SegmentedStreamingTtsEngine(
         val offlineTts = tts
             ?: return@withContext Result.failure(IllegalStateException("aishell3 engine unavailable"))
 
-        if (segmentText.isBlank()) {
+        val ttsText = BookTtsTextNormalizer.normalize(segmentText)
+        if (ttsText.spokenText.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("text is blank"))
         }
 
@@ -242,7 +243,7 @@ class Aishell3SegmentedStreamingTtsEngine(
             val audio = synchronized(NATIVE_TTS_LOCK) {
                 val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
                 offlineTts.generate(
-                    text = segmentText,
+                    text = ttsText.spokenText,
                     sid = DEFAULT_SPEAKER_ID,
                     speed = speechRate.sherpaGenerateSpeed
                 )
@@ -320,10 +321,11 @@ class Aishell3SegmentedStreamingTtsEngine(
     }
 
     fun splitTextSegments(text: String): List<String> {
-        return if (text == PREVIEW_TEXT) {
+        val ttsText = BookTtsTextNormalizer.normalize(text)
+        return if (ttsText.spokenText == PREVIEW_TEXT) {
             PREVIEW_SEGMENTS
         } else {
-            splitIntoShortSegments(text)
+            splitIntoShortSegments(ttsText.spokenText)
         }
     }
 

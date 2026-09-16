@@ -111,7 +111,8 @@ class BookTtsController(
     ): BookTtsSpeakResult {
         val engine = tts ?: return BookTtsSpeakResult(false, "当前系统没有可用语音引擎")
         if (!isReady) return BookTtsSpeakResult(false, "系统语音仍在初始化或不可用")
-        if (text.isBlank()) return BookTtsSpeakResult(false, "朗读内容为空")
+        val ttsText = BookTtsTextNormalizer.normalize(text)
+        if (ttsText.spokenText.isBlank()) return BookTtsSpeakResult(false, "朗读内容为空")
         utteranceCounter += 1
         selectedVoiceName?.let { voiceName ->
             val voice = engine.voices?.firstOrNull { it.name == voiceName }
@@ -126,7 +127,7 @@ class BookTtsController(
         engine.setPitch(pitch.coerceIn(0.5f, 2.0f))
         val params = Bundle()
         val result = engine.speak(
-            text,
+            ttsText.spokenText,
             TextToSpeech.QUEUE_FLUSH,
             params,
             utteranceId ?: "book-sentence-$utteranceCounter"

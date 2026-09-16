@@ -25,6 +25,27 @@ class BookTtsQualityCorpusTest {
         assertTrue(BookTtsQualityCorpus.samples.all { it.text.isNotBlank() })
         assertTrue(BookTtsQualityCorpus.samples.any { it.text.length in 80..150 })
     }
+
+    @Test
+    fun baselineCorpusSurvivesLowRiskTextNormalization() {
+        BookTtsQualityCorpus.samples.forEach { sample ->
+            val normalized = BookTtsTextNormalizer.normalize(sample.text)
+
+            assertEquals(sample.text, normalized.originalText)
+            assertTrue(normalized.spokenText.isNotBlank())
+        }
+    }
+
+    @Test
+    fun normalizerDoesNotRewriteNumbersDatesOrChineseEnglishSamples() {
+        val unchangedIds = setOf("number_001", "datetime_001", "zh_en_001")
+
+        BookTtsQualityCorpus.samples
+            .filter { it.id in unchangedIds }
+            .forEach { sample ->
+                assertEquals(sample.text, BookTtsTextNormalizer.normalize(sample.text).spokenText)
+            }
+    }
 }
 
 private object BookTtsQualityCorpus {

@@ -121,7 +121,8 @@ class BuiltInOfflineTtsEngine {
         if (!isReady || offlineTts == null) {
             return@withContext fail("内置离线语音尚未初始化")
         }
-        if (text.isBlank()) {
+        val ttsText = BookTtsTextNormalizer.normalize(text)
+        if (ttsText.spokenText.isBlank()) {
             return@withContext fail("试听文本为空")
         }
 
@@ -129,7 +130,7 @@ class BuiltInOfflineTtsEngine {
             stopped = false
             val english = synthesize(offlineTts, "hello", "hello", speechRate)
             val chineseShort = synthesize(offlineTts, "你好", "你好", speechRate)
-            val chinese = synthesize(offlineTts, "中文试听", text, speechRate)
+            val chinese = synthesize(offlineTts, "中文试听", ttsText.spokenText, speechRate)
             val selected = when {
                 chinese.isUsable -> chinese
                 chineseShort.isUsable -> chineseShort
