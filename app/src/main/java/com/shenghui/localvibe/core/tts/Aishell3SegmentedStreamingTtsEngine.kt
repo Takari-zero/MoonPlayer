@@ -86,6 +86,24 @@ class Aishell3SegmentedStreamingTtsEngine(
         onChunk: suspend (PcmAudioChunk) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
+    ): StreamingTtsResult = speak(
+        text = text,
+        params = params,
+        onStart = onStart,
+        onChunk = onChunk,
+        onDone = onDone,
+        onError = onError,
+        purpose = "playback"
+    )
+
+    suspend fun speak(
+        text: String,
+        params: StreamingTtsParams,
+        onStart: () -> Unit,
+        onChunk: suspend (PcmAudioChunk) -> Unit,
+        onDone: () -> Unit,
+        onError: (String) -> Unit,
+        purpose: String = "playback"
     ): StreamingTtsResult = withContext(Dispatchers.IO) {
         val requestStartElapsedMs = SystemClock.elapsedRealtime()
         val metricsSessionId = METRICS_SESSION_COUNTER.incrementAndGet()
@@ -155,22 +173,29 @@ class Aishell3SegmentedStreamingTtsEngine(
                     synthesisStartElapsedMs = SystemClock.elapsedRealtime()
                 }
                 val segmentStartElapsedMs = SystemClock.elapsedRealtime()
-                Log.i(
-                    BOOK_HOT_TTS_TAG,
-                    "native synth enter session=speak segmentIndex=$index main=${isMainThread()} " +
-                        "thread=${Thread.currentThread().name}"
-                )
+                val lockWaitStartElapsedMs = SystemClock.elapsedRealtime()
+                var lockAcquiredElapsedMs = lockWaitStartElapsedMs
+                var generateStartElapsedMs = lockWaitStartElapsedMs
+                var generateEndElapsedMs = lockWaitStartElapsedMs
                 val audio = synchronized(NATIVE_TTS_LOCK) {
+                    lockAcquiredElapsedMs = SystemClock.elapsedRealtime()
+                    generateStartElapsedMs = lockAcquiredElapsedMs
                     val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
-                    offlineTts.generate(
+                    val result = offlineTts.generate(
                         text = segmentText,
                         sid = DEFAULT_SPEAKER_ID,
                         speed = speechRate.sherpaGenerateSpeed
                     )
+                    generateEndElapsedMs = SystemClock.elapsedRealtime()
+                    result
                 }
+                val lockReleasedElapsedMs = SystemClock.elapsedRealtime()
                 Log.i(
                     BOOK_HOT_TTS_TAG,
-                    "native synth exit session=speak segmentIndex=$index thread=${Thread.currentThread().name}"
+                    "native synth timing purpose=$purpose session=$metricsSessionId segmentIndex=$index " +
+                        "lockWaitMs=${lockAcquiredElapsedMs - lockWaitStartElapsedMs} " +
+                        "generateMs=${generateEndElapsedMs - generateStartElapsedMs} " +
+                        "totalSynthesisMs=${lockReleasedElapsedMs - lockWaitStartElapsedMs}"
                 )
                 generationCompletedElapsedMs = SystemClock.elapsedRealtime()
                 val segmentSynthesizeCostMs = generationCompletedElapsedMs!! - segmentStartElapsedMs
@@ -265,6 +290,7 @@ class Aishell3SegmentedStreamingTtsEngine(
         segmentIndex: Int,
         isFinal: Boolean
     ): Result<PcmAudioChunk> = withContext(Dispatchers.IO) {
+        val requestStartElapsedMs = SystemClock.elapsedRealtime()
         val initResult = initialize()
         if (initResult.isFailure) {
             return@withContext Result.failure(
@@ -282,22 +308,31 @@ class Aishell3SegmentedStreamingTtsEngine(
 
         runCatching {
             val startedAt = System.currentTimeMillis()
-            Log.i(
-                BOOK_HOT_TTS_TAG,
-                "native synth enter session=$sessionLabel segmentIndex=$segmentIndex main=${isMainThread()} " +
-                    "thread=${Thread.currentThread().name}"
-            )
+            val lockWaitStartElapsedMs = SystemClock.elapsedRealtime()
+            var lockAcquiredElapsedMs = lockWaitStartElapsedMs
+            var generateStartElapsedMs = lockWaitStartElapsedMs
+            var generateEndElapsedMs = lockWaitStartElapsedMs
             val audio = synchronized(NATIVE_TTS_LOCK) {
+                lockAcquiredElapsedMs = SystemClock.elapsedRealtime()
+                generateStartElapsedMs = lockAcquiredElapsedMs
                 val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
-                offlineTts.generate(
+                val result = offlineTts.generate(
                     text = ttsText.spokenText,
                     sid = DEFAULT_SPEAKER_ID,
                     speed = speechRate.sherpaGenerateSpeed
                 )
+                generateEndElapsedMs = SystemClock.elapsedRealtime()
+                result
             }
+            val lockReleasedElapsedMs = SystemClock.elapsedRealtime()
             Log.i(
                 BOOK_HOT_TTS_TAG,
-                "native synth exit session=$sessionLabel segmentIndex=$segmentIndex thread=${Thread.currentThread().name}"
+                "native synth timing purpose=$sessionLabel session=$sessionLabel segmentIndex=$segmentIndex " +
+                    "chars=${ttsText.spokenText.length} rate=${BookSpeechRate.fromUserMultiplier(params.speed).multiplier} " +
+                    "requestToLockMs=${lockWaitStartElapsedMs - requestStartElapsedMs} " +
+                    "lockWaitMs=${lockAcquiredElapsedMs - lockWaitStartElapsedMs} " +
+                    "generateMs=${generateEndElapsedMs - generateStartElapsedMs} " +
+                    "totalSynthesisMs=${lockReleasedElapsedMs - lockWaitStartElapsedMs}"
             )
             val sampleRate = audio.sampleRate.takeIf { it > 0 } ?: DEFAULT_SAMPLE_RATE
             val pcm = floatSamplesToPcm16(audio.samples, params.volume)
