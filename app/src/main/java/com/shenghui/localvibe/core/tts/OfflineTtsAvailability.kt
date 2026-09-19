@@ -12,6 +12,7 @@ data class OfflineTtsResourceState(
 
 data class OfflineTtsEngineAvailability(
     val nativeRuntimeAvailable: Boolean,
+    val supportedAbiPresent: Boolean,
     val aishell3ModelAvailable: Boolean,
     val builtInModelAvailable: Boolean,
     val aishell3Available: Boolean,
@@ -48,6 +49,7 @@ object OfflineTtsAvailability {
         val nativeAvailable = state.nativeRuntimeLoadable && state.supportedAbiPresent
         return OfflineTtsEngineAvailability(
             nativeRuntimeAvailable = nativeAvailable,
+            supportedAbiPresent = state.supportedAbiPresent,
             aishell3ModelAvailable = state.aishell3ModelAvailable,
             builtInModelAvailable = state.builtInModelAvailable,
             aishell3Available = nativeAvailable && state.aishell3ModelAvailable,

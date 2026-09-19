@@ -183,29 +183,14 @@ class StreamingPcmAudioPlayer(
         }
     }
 
-    private fun writeNow(queued: QueuedPcmChunk): Result<Int> = synchronized(audioOperationLock) {
+    private fun writeNow(queued: QueuedPcmChunk): Result<Int> {
         val sessionId = queued.sessionId
         val chunk = queued.chunk
         if (sessionId != currentSessionId) {
             Log.i(BOOK_HOT_TTS_TAG, "audio queue drop old session=$sessionId current=$currentSessionId")
             return Result.success(0)
         }
-        val track: AudioTrack
-        val format: PcmAudioFormat
-        synchronized(lock) {
-            if (stopped) {
-                Log.d(TAG, "write ignored because player is stopped")
-                return Result.success(0)
-            }
-
-            track = requireNotNull(audioTrack) { "AudioTrack is not started" }
-            format = requireNotNull(activeFormat) { "No active audio format" }
-            require(chunk.format == format) {
-                "Chunk format changed from $format to ${chunk.format}"
-            }
-        }
-
-        return runCatching {
+        try {
             logMainThreadErrorIfNeeded("prepared audio write")
             if (chunk.data.isEmpty()) {
                 Log.d(TAG, "write empty chunk isFinal=${chunk.isFinal}")
@@ -215,39 +200,53 @@ class StreamingPcmAudioPlayer(
             var totalWritten = 0
             var offset = 0
             while (offset < chunk.data.size) {
-                if (stopped) {
-                    Log.d(TAG, "write stopped totalWritten=$totalWritten requested=${chunk.data.size}")
+                if (sessionId != currentSessionId || stopped || released) {
+                    Log.i(BOOK_HOT_TTS_TAG, "audio queue write aborted stale session=$sessionId current=$currentSessionId")
                     return Result.success(totalWritten)
                 }
-                while (paused && !stopped) {
+                if (paused) {
                     Thread.sleep(PAUSED_WRITE_WAIT_MS)
-                }
-                if (stopped) {
-                    Log.d(TAG, "write stopped after pause totalWritten=$totalWritten requested=${chunk.data.size}")
-                    return Result.success(totalWritten)
+                    continue
                 }
 
                 val byteCount = minOf(MAX_WRITE_BYTES, chunk.data.size - offset)
-                Log.i(
-                    BOOK_HOT_TTS_TAG,
-                    "audio queue write session=$sessionId main=${isMainThread()} size=$byteCount"
-                )
-                Log.i(
-                    BOOK_HOT_TTS_TAG,
-                    "prepared audio write chunk main=${isMainThread()} size=$byteCount"
-                )
-                val written = track.write(chunk.data, offset, byteCount)
-                Log.d(TAG, "write bytes=$written requested=$byteCount")
-                require(written > 0) {
-                    "AudioTrack.write failed: $written"
+                val writeResult = synchronized(audioOperationLock) {
+                    synchronized(lock) {
+                        if (sessionId != currentSessionId || stopped || released || paused) {
+                            return@synchronized 0
+                        }
+                        val track = requireNotNull(audioTrack) { "AudioTrack is not started" }
+                        val format = requireNotNull(activeFormat) { "No active audio format" }
+                        require(chunk.format == format) {
+                            "Chunk format changed from $format to ${chunk.format}"
+                        }
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "audio queue write session=$sessionId main=${isMainThread()} size=$byteCount"
+                        )
+                        track.write(chunk.data, offset, byteCount, AudioTrack.WRITE_NON_BLOCKING)
+                    }
                 }
 
-                totalWritten += written
-                offset += written
+                if (sessionId != currentSessionId || stopped || released) {
+                    Log.i(BOOK_HOT_TTS_TAG, "audio queue write result ignored stale session=$sessionId current=$currentSessionId")
+                    return Result.success(totalWritten)
+                }
+                Log.d(TAG, "write bytes=$writeResult requested=$byteCount")
+                if (writeResult < 0) {
+                    throw IllegalStateException("AudioTrack.write failed: $writeResult")
+                }
+                if (writeResult == 0) {
+                    Thread.sleep(NON_BLOCKING_WRITE_RETRY_MS)
+                    continue
+                }
+
+                totalWritten += writeResult
+                offset += writeResult
                 synchronized(lock) {
                     writtenFrames += PcmPlaybackCompletion.frameCount(
-                        bytes = written,
-                        format = format
+                        bytes = writeResult,
+                        format = chunk.format
                     )
                 }
 
@@ -264,10 +263,11 @@ class StreamingPcmAudioPlayer(
                 onStateChanged("final_chunk")
             }
 
-            totalWritten
-        }.onFailure { error ->
+            return Result.success(totalWritten)
+        } catch (error: Throwable) {
             Log.e(TAG, "write failed", error)
             onStateChanged("error:${error.message}")
+            return Result.failure<Int>(error)
         }
     }
 
@@ -339,37 +339,41 @@ class StreamingPcmAudioPlayer(
         }
     }
 
-    fun pause() = synchronized(lock) {
-        Log.d(TAG, "pause")
-        paused = true
-        audioTrack?.let { track ->
-            runCatching {
-                if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                    track.pause()
+    fun pause() = synchronized(audioOperationLock) {
+        synchronized(lock) {
+            Log.d(TAG, "pause")
+            paused = true
+            audioTrack?.let { track ->
+                runCatching {
+                    if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        track.pause()
+                    }
+                    onStateChanged("paused")
+                }.onFailure { error ->
+                    Log.w(TAG, "pause failed", error)
+                    onStateChanged("error:${error.message}")
                 }
-                onStateChanged("paused")
-            }.onFailure { error ->
-                Log.w(TAG, "pause failed", error)
-                onStateChanged("error:${error.message}")
             }
         }
     }
 
-    fun resume() = synchronized(lock) {
-        Log.d(TAG, "resume")
-        val track = audioTrack
-        if (track == null || stopped) {
-            onStateChanged("error:AudioTrack is not paused")
-            return@synchronized Result.failure(IllegalStateException("AudioTrack is not paused"))
-        }
-        runCatching {
-            paused = false
-            track.play()
-            Log.d(TAG, "AudioTrack playState=${track.playState}")
-            onStateChanged("resumed")
-        }.onFailure { error ->
-            Log.w(TAG, "resume failed", error)
-            onStateChanged("error:${error.message}")
+    fun resume() = synchronized(audioOperationLock) {
+        synchronized(lock) {
+            Log.d(TAG, "resume")
+            val track = audioTrack
+            if (track == null || stopped) {
+                onStateChanged("error:AudioTrack is not paused")
+                return@synchronized Result.failure(IllegalStateException("AudioTrack is not paused"))
+            }
+            runCatching {
+                paused = false
+                track.play()
+                Log.d(TAG, "AudioTrack playState=${track.playState}")
+                onStateChanged("resumed")
+            }.onFailure { error ->
+                Log.w(TAG, "resume failed", error)
+                onStateChanged("error:${error.message}")
+            }
         }
     }
 
@@ -459,6 +463,7 @@ class StreamingPcmAudioPlayer(
         private const val BYTES_PER_MONO_16BIT_SAMPLE = 2
         private const val MAX_WRITE_BYTES = 2048
         private const val PAUSED_WRITE_WAIT_MS = 20L
+        private const val NON_BLOCKING_WRITE_RETRY_MS = 4L
         private const val PLAYBACK_COMPLETE_POLL_MS = 40L
         private const val PLAYBACK_COMPLETE_SETTLE_MS = 80L
         private const val PLAYBACK_COMPLETE_TIMEOUT_MS = 60_000L

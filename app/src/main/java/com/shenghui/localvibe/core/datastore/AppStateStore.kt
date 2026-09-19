@@ -459,6 +459,20 @@ class AppStateStore(private val context: Context) {
         return context.appStateDataStore.data.first()[LastMainTabRouteKey]
     }
 
+    suspend fun loadBookPlaybackEngineName(): String? {
+        return context.appStateDataStore.data.first()[BookPlaybackEngineKey]
+    }
+
+    suspend fun saveBookPlaybackEngineName(engineName: String?) {
+        context.appStateDataStore.edit { prefs ->
+            if (engineName.isNullOrBlank()) {
+                prefs.remove(BookPlaybackEngineKey)
+            } else {
+                prefs[BookPlaybackEngineKey] = engineName
+            }
+        }
+    }
+
     suspend fun saveLastMainTabRoute(route: String?) {
         context.appStateDataStore.edit { prefs ->
             if (route.isNullOrBlank()) {
@@ -908,6 +922,7 @@ class AppStateStore(private val context: Context) {
         val AudioSortModeKey = stringPreferencesKey("audio_sort_mode")
         val AudioSortAscendingKey = booleanPreferencesKey("audio_sort_ascending")
         val LastMainTabRouteKey = stringPreferencesKey("last_main_tab_route")
+        val BookPlaybackEngineKey = stringPreferencesKey("book_playback_engine")
         const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
         const val MAX_VIDEO_PLAYBACK_SPEED = 5f
         const val DEFAULT_VIDEO_PLAYBACK_SPEED = 1f

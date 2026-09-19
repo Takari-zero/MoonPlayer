@@ -58,6 +58,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -98,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import com.shenghui.localvibe.core.book.BookChapter
 import com.shenghui.localvibe.core.book.BookChapterDetector
 import com.shenghui.localvibe.core.book.TxtBookReader
+import com.shenghui.localvibe.core.datastore.AppStateStore
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.tts.Aishell3SegmentedStreamingTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
@@ -105,6 +107,7 @@ import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
 import com.shenghui.localvibe.core.tts.BookTtsVoice
 import com.shenghui.localvibe.core.tts.BookSpeechRate
+import com.shenghui.localvibe.core.tts.BookTtsPlaybackRateResolver
 import com.shenghui.localvibe.core.tts.OfflineTtsAvailability
 import com.shenghui.localvibe.core.tts.PcmAudioChunk
 import com.shenghui.localvibe.core.tts.StreamingPcmAudioPlayer
@@ -183,6 +186,7 @@ fun BookListenScreen(
     var isLoading by remember(bookFile?.uri) { mutableStateOf(bookFile != null) }
     var loadError by remember(bookFile?.uri) { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
+    var playbackIntentPlaying by remember(bookFile?.uri) { mutableStateOf(false) }
     var wasPlayingBeforeSliderSeek by remember { mutableStateOf(false) }
     var playbackSessionId by remember { mutableLongStateOf(0L) }
     var pendingPlaySessionId by remember { mutableLongStateOf(-1L) }
@@ -191,6 +195,10 @@ fun BookListenScreen(
     var lastPlaybackRequestTrigger by remember { mutableStateOf("") }
     var lastPlaybackRequestAtMs by remember { mutableLongStateOf(0L) }
     var activePlaybackEngineName by remember { mutableStateOf(BookPlaybackEngine.NONE.name) }
+    var preferredPlaybackEngineName by remember {
+        mutableStateOf(BookPlaybackEngine.AISHELL3.name)
+    }
+    var preferredPlaybackEngineUserOverride by remember { mutableStateOf(false) }
     var isTtsReady by remember { mutableStateOf(false) }
     var isTtsChecking by remember { mutableStateOf(true) }
     var speechRate by remember { mutableFloatStateOf(1.0f) }
@@ -257,15 +265,52 @@ fun BookListenScreen(
     val offlineTtsAvailability = remember(context) {
         OfflineTtsAvailability.check(context.applicationContext)
     }
+    val appStateStore = remember(context) { AppStateStore(context.applicationContext) }
+    val preferredPlaybackEngine = remember(preferredPlaybackEngineName) {
+        BookPlaybackEngineSelection.parse(
+            preferredPlaybackEngineName,
+            BookPlaybackEngine.SYSTEM_TTS
+        )
+    }
+    val effectivePlaybackEngine = remember(preferredPlaybackEngine, offlineTtsAvailability.aishell3Available) {
+        BookPlaybackEngineSelection.effective(
+            preferredPlaybackEngine,
+            offlineTtsAvailability.aishell3Available
+        )
+    }
     var aishell3Player by remember { mutableStateOf<StreamingPcmAudioPlayer?>(null) }
     val aishell3StopJobRef = remember { java.util.concurrent.atomic.AtomicReference<kotlinx.coroutines.Job?>(null) }
     var isAishell3Paused by remember { mutableStateOf(false) }
     var isBuiltInOfflineTtsInitializing by remember { mutableStateOf(false) }
     var builtInOfflineTtsError by remember { mutableStateOf<String?>(null) }
     val bookSpeechRate = remember(speechRate) {
-        BookSpeechRate.fromCurrentUiMultiplier(speechRate)
+        BookTtsPlaybackRateResolver.resolveLatest(speechRate)
     }
+    val latestBookSpeechRate by rememberUpdatedState(bookSpeechRate)
+    val latestPreferredPlaybackEngineUserOverride by rememberUpdatedState(preferredPlaybackEngineUserOverride)
     val screenDisposed = remember(bookFile?.uri) { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+    LaunchedEffect(offlineTtsAvailability.aishell3Available) {
+        val defaultEngine = if (offlineTtsAvailability.aishell3Available) {
+            BookPlaybackEngine.AISHELL3
+        } else {
+            BookPlaybackEngine.SYSTEM_TTS
+        }
+        val persistedEngine = appStateStore.loadBookPlaybackEngineName()
+        if (!latestPreferredPlaybackEngineUserOverride) {
+            preferredPlaybackEngineName = BookPlaybackEngineSelection
+                .parse(persistedEngine, defaultEngine)
+                .name
+        }
+    }
+
+    LaunchedEffect(speechRate) {
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "RATE_STATE rate=${bookSpeechRate.multiplier} playbackIntent=$playbackIntentPlaying " +
+                "isPlaying=$isPlaying session=$playbackSessionId"
+        )
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -275,6 +320,7 @@ fun BookListenScreen(
                     "sentence=$currentSentenceIndexInParagraph"
             )
             screenDisposed.set(true)
+            playbackIntentPlaying = false
             playbackSessionId += 1
             pendingPlaySessionId = -1L
             pendingPlayTargetChapterSentenceIndex = -1
@@ -356,11 +402,11 @@ fun BookListenScreen(
     }
 
     fun aishell3PreparedKey(chapterSentenceIndex: Int, text: String): String {
-        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|${text.hashCode()}|${bookSpeechRate.sherpaGenerateSpeed}|$pitch"
+        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|${text.hashCode()}|${latestBookSpeechRate.sherpaGenerateSpeed}|$pitch"
     }
 
     fun aishell3SegmentKey(chapterSentenceIndex: Int, segmentIndex: Int, segmentText: String): String {
-        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|seg=$segmentIndex|${segmentText.hashCode()}|${bookSpeechRate.sherpaGenerateSpeed}|$pitch"
+        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|seg=$segmentIndex|${segmentText.hashCode()}|${latestBookSpeechRate.sherpaGenerateSpeed}|$pitch"
     }
 
     fun isPlausibleChapterSentenceIndex(index: Int): Boolean {
@@ -445,9 +491,15 @@ fun BookListenScreen(
             Log.i(BOOK_HOT_TTS_TAG, "segment0 cache miss session=$source key=$key")
         }
         Log.i(BOOK_HOT_TTS_TAG, "first segment synth start key=$key index=$segmentIndex source=$source")
+        Log.i(
+            BOOK_HOT_TTS_TAG,
+            "SYNTH_REQUEST purpose=${if (source.startsWith("play")) "playback" else "prewarm"} " +
+                "session=$source sentenceIndex=$segmentIndex rate=${latestBookSpeechRate.multiplier} " +
+                "mappedSpeed=${latestBookSpeechRate.sherpaGenerateSpeed}"
+        )
         val result = aishell3TtsEngine.synthesizeSegmentToChunk(
             segmentText = segmentText,
-            params = bookSpeechRate.asStreamingParams(
+            params = latestBookSpeechRate.asStreamingParams(
                 voiceId = "aishell3-speaker-10",
                 pitch = pitch,
                 volume = 1f
@@ -458,9 +510,14 @@ fun BookListenScreen(
         )
         BookAishell3SegmentAudioCache.unmarkPrewarming(key)
         return result
-            .onSuccess { chunk ->
-                BookAishell3SegmentAudioCache.put(key, chunk, source = source)
-                if (segmentIndex == 0) {
+                .onSuccess { chunk ->
+                    BookAishell3SegmentAudioCache.put(key, chunk, source = source)
+                    Log.i(
+                        BOOK_HOT_TTS_TAG,
+                        "SYNTH_FIRST_PCM purpose=${if (source.startsWith("play")) "playback" else "prewarm"} " +
+                            "session=$source rate=${latestBookSpeechRate.multiplier} pcmSamples=${chunk.data.size / 2}"
+                    )
+                    if (segmentIndex == 0) {
                     Log.i(
                         BOOK_HOT_TTS_TAG,
                         "segment0 ready session=$source costMs=${System.currentTimeMillis() - startedAt} key=$key"
@@ -512,7 +569,7 @@ fun BookListenScreen(
             }
             val result = aishell3TtsEngine.synthesizeToChunks(
                 text = text,
-                params = bookSpeechRate.asStreamingParams(
+                params = latestBookSpeechRate.asStreamingParams(
                     voiceId = "aishell3-speaker-10",
                     pitch = pitch,
                     volume = 1f
@@ -599,7 +656,7 @@ fun BookListenScreen(
                 }
                 val result = aishell3TtsEngine.synthesizeSegmentToChunk(
                     segmentText = segmentText,
-                    params = bookSpeechRate.asStreamingParams(
+                    params = latestBookSpeechRate.asStreamingParams(
                         voiceId = "aishell3-speaker-10",
                         pitch = pitch,
                         volume = 1f
@@ -745,8 +802,12 @@ fun BookListenScreen(
             } catch (error: Throwable) {
                 releasePreparedPlayer()
                 withContext(Dispatchers.Main.immediate) {
-                    isPlaying = false
-                    activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                    if (BookPlaybackSessionGuard.isActive(sessionId, playbackSessionId, screenDisposed.get())) {
+                        isPlaying = false
+                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                    } else {
+                        Log.i(BOOK_HOT_TTS_TAG, "prepared playback error ignored old session=$sessionId")
+                    }
                 }
                 Log.e("BookReaderPlayback", "prepared playback failed key=$key", error)
             }
@@ -789,6 +850,7 @@ fun BookListenScreen(
             var playbackDurationMs = 0L
             var playbackStartedAtMs = 0L
             var playbackStarted = false
+            var firstWriteLogged = false
             val synthesizedChunks = mutableListOf<PcmAudioChunk>()
 
             suspend fun isSegmentSessionActive(): Boolean = withContext(Dispatchers.Main.immediate) {
@@ -883,6 +945,15 @@ fun BookListenScreen(
                     if (writeResult.isFailure) {
                         throw IllegalStateException(writeResult.exceptionOrNull()?.message ?: "AudioTrack 写入失败")
                     }
+                    if (!firstWriteLogged) {
+                        firstWriteLogged = true
+                        Log.i(
+                            BOOK_HOT_TTS_TAG,
+                            "PCM_FIRST_WRITE purpose=playback session=$sessionId " +
+                                "playerId=${System.identityHashCode(player)} rate=${latestBookSpeechRate.multiplier} " +
+                                "bytes=${chunk.data.size}"
+                        )
+                    }
                     playbackDurationMs += chunk.data.size * 1000L / (chunk.format.sampleRate * 2L)
                     if (index + 1 < segments.size) {
                         Log.i(BOOK_HOT_TTS_TAG, "next segment synth queued index=${index + 1}")
@@ -927,8 +998,12 @@ fun BookListenScreen(
                     if (aishell3Player === player) {
                         aishell3Player = null
                     }
-                    isPlaying = false
-                    activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                    if (BookPlaybackSessionGuard.isActive(sessionId, playbackSessionId, screenDisposed.get())) {
+                        isPlaying = false
+                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                    } else {
+                        Log.i(BOOK_HOT_TTS_TAG, "segmented playback error ignored old session=$sessionId")
+                    }
                 }
                 Log.e("BookReaderPlayback", "segmented playback failed key=$sentenceKey", error)
                 onError(error.message ?: error::class.java.simpleName)
@@ -947,6 +1022,26 @@ fun BookListenScreen(
         stopAishell3Playback(trigger = reason)
         ttsController?.stop()
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
+    }
+
+    fun selectPreferredPlaybackEngine(engine: BookPlaybackEngine) {
+        if (engine == BookPlaybackEngine.AISHELL3 && !offlineTtsAvailability.aishell3Available) {
+            Toast.makeText(context, "自研离线不可用：${offlineTtsAvailability.aishell3UnavailableReason ?: "资源未安装"}", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (preferredPlaybackEngine == engine) {
+            preferredPlaybackEngineUserOverride = true
+            return
+        }
+        stopCurrentPlayback(reason = "provider_change", invalidateSession = true)
+        playbackIntentPlaying = false
+        isPlaying = false
+        preferredPlaybackEngineUserOverride = true
+        preferredPlaybackEngineName = engine.name
+        coroutineScope.launch {
+            appStateStore.saveBookPlaybackEngineName(engine.name)
+        }
+        Toast.makeText(context, "正文播放引擎：${engine.displayName()}", Toast.LENGTH_SHORT).show()
     }
 
     fun clearSleepTimer() {
@@ -1492,6 +1587,37 @@ fun BookListenScreen(
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
         onBeforeSpeak()
 
+        if (effectivePlaybackEngine == BookPlaybackEngine.SYSTEM_TTS) {
+            Log.i(
+                "BookReaderPlayback",
+                "preferred provider dispatch preferred=${preferredPlaybackEngine.name} effective=SYSTEM_TTS " +
+                    "sessionId=$sessionId rate=$latestSpeechRate"
+            )
+            val result = ttsController?.speakSentence(
+                text = textToSpeak.orEmpty(),
+                speechRate = latestSpeechRate,
+                pitch = pitch
+            )
+            if (result?.success == true) {
+                activePlaybackEngineName = BookPlaybackEngine.SYSTEM_TTS.name
+                isPlaying = true
+                saveProgress(targetParagraphIndex)
+            } else {
+                isPlaying = false
+                activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                ttsError = result?.message ?: "系统语音不可用，请安装或启用系统语音引擎后重试"
+                showVoicePackageSheet = true
+                Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        Log.i(
+            "BookReaderPlayback",
+            "preferred provider dispatch preferred=${preferredPlaybackEngine.name} effective=AISHELL3 " +
+                "sessionId=$sessionId rate=${latestBookSpeechRate.multiplier}"
+        )
+
         Log.i(BOOK_HOT_TTS_TAG, "play prepared path enter key=$preparedKey")
         BookAishell3PreparedAudioCache.get(preparedKey)?.let { chunks ->
             Log.i(
@@ -1579,7 +1705,7 @@ fun BookListenScreen(
             }
             val result = ttsController?.speakSentence(
                 text = textToSpeak.orEmpty(),
-                speechRate = speechRate,
+                speechRate = latestSpeechRate,
                 pitch = pitch
             )
             return if (result?.success == true) {
@@ -1689,7 +1815,7 @@ fun BookListenScreen(
         }
     }
 
-    fun jumpToSentence(sentence: ReaderSentence, autoPlay: Boolean = isPlaying) {
+    fun jumpToSentence(sentence: ReaderSentence, autoPlay: Boolean) {
         if (paragraphs.isEmpty()) return
         val chapterStart = chapterStartFor(sentence.paragraphIndex, chapters)
         val chapterEnd = chapterEndExclusiveFor(sentence.paragraphIndex, paragraphs.size, chapters)
@@ -1717,7 +1843,8 @@ fun BookListenScreen(
         Log.i(
             BOOK_HOT_TTS_TAG,
             "sentence tap index=${sentence.chapterSentenceIndex} paragraph=${sentence.paragraphIndex} " +
-                "sentence=${sentence.sentenceIndexInParagraph} autoPlay=$autoPlay"
+                "sentence=${sentence.sentenceIndexInParagraph} executionPlaying=$isPlaying " +
+                "playbackIntent=$playbackIntentPlaying autoPlay=$autoPlay"
         )
         Log.i(BOOK_HOT_TTS_TAG, "sentence tap cancel previous playback")
         stopCurrentPlayback(reason = "jump_to_sentence", invalidateSession = true)
@@ -1787,12 +1914,6 @@ fun BookListenScreen(
         )
     }
 
-    LaunchedEffect(speechRate, pitch) {
-        if (isPlaying && paragraphs.isNotEmpty()) {
-            speakCurrentSentence()
-        }
-    }
-
     LaunchedEffect(isTtsReady, selectedVoiceName, ttsRetryKey) {
         if (isTtsReady) {
             selectedVoiceName?.let { ttsController?.selectVoice(it) }
@@ -1859,10 +1980,7 @@ fun BookListenScreen(
                 },
                 onMenuAction = { action ->
                     when (action) {
-                        "语音设置" -> openIntentSafely(
-                            Intent("com.android.settings.TTS_SETTINGS"),
-                            "无法打开语音设置"
-                        )
+                        "语音设置" -> showVoicePackageSheet = true
                         "重新检测 TTS" -> restartTtsCheck()
                     }
                 }
@@ -2454,11 +2572,19 @@ fun BookListenScreen(
                                     currentReadingTargetName = cachedTarget.name
                                 }
                                 if (paragraphs.isNotEmpty() && !isLoading) {
-                                    if (isPlaying) pauseReading() else speakCurrentSentence()
-                                } else {
-                                    if (isPlaying) {
+                                    if (isPlaying || playbackIntentPlaying) {
+                                        playbackIntentPlaying = false
                                         pauseReading()
                                     } else {
+                                        playbackIntentPlaying = true
+                                        speakCurrentSentence()
+                                    }
+                                } else {
+                                    if (isPlaying) {
+                                        playbackIntentPlaying = false
+                                        pauseReading()
+                                    } else {
+                                        playbackIntentPlaying = true
                                         playCachedPreviewAt(playableIndex, cachedTarget)
                                     }
                                 }
@@ -2517,11 +2643,13 @@ fun BookListenScreen(
                                             "fullSize=${paragraphs.size} cachedSize=${cachedSentences.size}"
                                     )
                                 } else {
-                                    val wasPlaying = isPlaying
+                                    val wasPlaying = BookPlaybackIntent.shouldAutoPlayAfterSentenceTap(playbackIntentPlaying)
                                     Log.i(
                                         BOOK_HOT_TTS_TAG,
                                         "sentence tap index=${sentence.chapterSentenceIndex} paragraph=${sentence.paragraphIndex} " +
-                                            "sentence=${sentence.sentenceIndexInParagraph} cachedPreview=true"
+                                            "sentence=${sentence.sentenceIndexInParagraph} executionPlaying=$isPlaying " +
+                                            "playbackIntent=$playbackIntentPlaying " +
+                                            "autoPlay=$wasPlaying cachedPreview=true"
                                     )
                                     Log.i(BOOK_HOT_TTS_TAG, "sentence tap cancel previous playback")
                                     stopCurrentPlayback(reason = "cached_sentence_tap", invalidateSession = true)
@@ -2539,7 +2667,7 @@ fun BookListenScreen(
                                     }
                                 }
                             },
-                            onSpeechRateChange = { speechRate = it },
+                            onSpeechRateChange = { newRate -> speechRate = newRate },
                             onPitchChange = { pitch = it },
                             onReaderFontSizeChange = { readerFontSizeSp = it },
                             onOpenCatalog = { if (chapters.isNotEmpty()) showChapterSheet = true },
@@ -2553,13 +2681,7 @@ fun BookListenScreen(
                             },
                             onInstallVoiceData = ::openVoiceDataInstaller,
                             onOpenVoicePackageSettings = { showVoicePackageSheet = true },
-                            onOpenVoiceSettings = {
-                                openIntentSafely(
-                                    Intent("com.android.settings.TTS_SETTINGS")
-                                        .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
-                                    "无法打开语音设置"
-                                )
-                            },
+                            onOpenVoiceSettings = { showVoicePackageSheet = true },
                             onRetryTts = { restartTtsCheck() },
                             restoreGateLabel = "cached preview",
                             initialFirstVisibleItemIndex = cachedInitialFirstVisibleItemIndex,
@@ -2778,9 +2900,18 @@ fun BookListenScreen(
                             pitch = pitch,
                             readerFontSizeSp = readerFontSizeSp,
                             onPlayPause = {
-                                if (isPlaying) pauseReading() else speakCurrentSentence()
+                                if (isPlaying || playbackIntentPlaying) {
+                                    playbackIntentPlaying = false
+                                    pauseReading()
+                                } else {
+                                    playbackIntentPlaying = true
+                                    speakCurrentSentence()
+                                }
                             },
-                            onStop = { stopReading() },
+                            onStop = {
+                                playbackIntentPlaying = false
+                                stopReading()
+                            },
                             onPrevious = {
                                 jumpToChapter(-1)
                             },
@@ -2806,9 +2937,12 @@ fun BookListenScreen(
                             }
                         },
                         onSentenceClick = { sentence ->
-                            jumpToSentence(sentence)
+                            jumpToSentence(
+                                sentence,
+                                autoPlay = BookPlaybackIntent.shouldAutoPlayAfterSentenceTap(playbackIntentPlaying)
+                            )
                         },
-                        onSpeechRateChange = { speechRate = it },
+                        onSpeechRateChange = { newRate -> speechRate = newRate },
                         onPitchChange = { pitch = it },
                         onReaderFontSizeChange = { readerFontSizeSp = it },
                         onOpenCatalog = { showChapterSheet = true },
@@ -2822,13 +2956,7 @@ fun BookListenScreen(
                         },
                         onInstallVoiceData = ::openVoiceDataInstaller,
                         onOpenVoicePackageSettings = { showVoicePackageSheet = true },
-                            onOpenVoiceSettings = {
-                                openIntentSafely(
-                                    Intent("com.android.settings.TTS_SETTINGS")
-                                        .also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
-                                    "无法打开语音设置"
-                                )
-                            },
+                            onOpenVoiceSettings = { showVoicePackageSheet = true },
                             onRetryTts = { restartTtsCheck() },
                             restoreGateLabel = "full content",
                             initialFirstVisibleItemIndex = fullInitialFirstVisibleItemIndex,
@@ -2952,6 +3080,8 @@ fun BookListenScreen(
             builtInOfflineUnavailableReason = offlineTtsAvailability.builtInOfflineUnavailableReason,
             isAishell3OfflineAvailable = offlineTtsAvailability.aishell3Available,
             aishell3OfflineUnavailableReason = offlineTtsAvailability.aishell3UnavailableReason,
+            preferredPlaybackEngine = preferredPlaybackEngine,
+            effectivePlaybackEngine = effectivePlaybackEngine,
             onDismiss = { showVoicePackageSheet = false },
             onInstallVoiceData = ::openVoiceDataInstaller,
             onOpenSystemSettings = ::openSystemVoiceSettings,
@@ -3069,6 +3199,7 @@ fun BookListenScreen(
                     }
                 }
             },
+            onPreferredPlaybackEngineChange = ::selectPreferredPlaybackEngine,
             onStreamingAudioTest = {
                 coroutineScope.launch {
                     Log.d("ToneStreamingTtsEngine", "start streaming tone test")
@@ -3544,7 +3675,7 @@ private fun BookListenContent(
             speechRate = speechRate,
             pitch = pitch,
             onInstallVoiceData = onInstallVoiceData,
-            onOpenVoiceSettings = onOpenVoicePackageSettings,
+            onOpenVoiceSettings = { showVoiceControls = true },
             onRetry = onRetryTts,
             modifier = Modifier.padding(horizontal = 18.dp)
         )
@@ -4072,6 +4203,8 @@ private fun VoicePackageSettingsBottomSheet(
     builtInOfflineUnavailableReason: String?,
     isAishell3OfflineAvailable: Boolean,
     aishell3OfflineUnavailableReason: String?,
+    preferredPlaybackEngine: BookPlaybackEngine,
+    effectivePlaybackEngine: BookPlaybackEngine,
     onDismiss: () -> Unit,
     onInstallVoiceData: () -> Unit,
     onOpenSystemSettings: () -> Unit,
@@ -4079,6 +4212,7 @@ private fun VoicePackageSettingsBottomSheet(
     onPreview: () -> Unit,
     onAudioChannelTest: () -> Unit,
     onAishell3OfflinePreview: () -> Unit,
+    onPreferredPlaybackEngineChange: (BookPlaybackEngine) -> Unit,
     onStreamingAudioTest: () -> Unit,
     onBuiltInPreview: () -> Unit,
     onRefreshVoices: () -> Unit,
@@ -4141,6 +4275,34 @@ private fun VoicePackageSettingsBottomSheet(
                 speechRate = speechRate,
                 pitch = pitch
             )
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "正文播放引擎",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "选择听书正文使用的语音引擎",
+                    color = Color.White.copy(alpha = 0.54f),
+                    fontSize = 12.sp
+                )
+                BookPlaybackEngineSelection.options(
+                    preferred = preferredPlaybackEngine,
+                    aishell3Available = isAishell3OfflineAvailable,
+                    aishell3UnavailableReason = aishell3OfflineUnavailableReason
+                ).forEach { option ->
+                    PlaybackEngineOption(
+                        title = option.title,
+                        subtitle = option.unavailableReason?.let { "未安装：$it" },
+                        selected = preferredPlaybackEngine == option.engine,
+                        enabled = option.enabled,
+                        effective = effectivePlaybackEngine == option.engine,
+                        onClick = { onPreferredPlaybackEngineChange(option.engine) }
+                    )
+                }
+            }
 
             if (!isTtsReady) {
                 Column(
@@ -4374,6 +4536,53 @@ private fun VoicePackageSettingsBottomSheet(
                     onClick = { }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackEngineOption(
+    title: String,
+    subtitle: String? = null,
+    selected: Boolean,
+    enabled: Boolean,
+    effective: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = if (selected) 0.08f else 0.04f))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            enabled = enabled
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = if (enabled) Color.White else Color.White.copy(alpha = 0.42f),
+                fontSize = 14.sp
+            )
+            subtitle?.let {
+                Text(
+                    text = it,
+                    color = Color.White.copy(alpha = 0.42f),
+                    fontSize = 11.sp
+                )
+            }
+        }
+        if (effective) {
+            Text(
+                text = "当前",
+                color = Color(0xFFC3B0FF),
+                fontSize = 11.sp
+            )
         }
     }
 }
@@ -5286,12 +5495,6 @@ private enum class SleepTimerStopMode(val label: String) {
 private enum class BookReadingTarget {
     CHAPTER_TITLE,
     SENTENCE
-}
-
-private enum class BookPlaybackEngine {
-    NONE,
-    AISHELL3,
-    SYSTEM_TTS
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
