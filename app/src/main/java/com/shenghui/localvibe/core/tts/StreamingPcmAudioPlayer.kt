@@ -3,6 +3,7 @@ package com.shenghui.localvibe.core.tts
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -94,7 +95,7 @@ class StreamingPcmAudioPlayer(
                     }
 
                     val bufferSize = max(minBufferSize, format.sampleRate * BYTES_PER_MONO_16BIT_SAMPLE / 2)
-                    AudioTrack.Builder()
+                    val newTrack = AudioTrack.Builder()
                         .setAudioAttributes(
                             AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -111,11 +112,22 @@ class StreamingPcmAudioPlayer(
                         .setBufferSizeInBytes(bufferSize)
                         .setTransferMode(AudioTrack.MODE_STREAM)
                         .build()
-                        .also { newTrack ->
-                            Log.d(TAG, "sampleRate=${format.sampleRate}")
-                            Log.d(TAG, "bufferSize=$bufferSize minBufferSize=$minBufferSize")
-                            Log.d(TAG, "AudioTrack state=${newTrack.state}")
+                    require(newTrack.state == AudioTrack.STATE_INITIALIZED) {
+                        "AudioTrack initialization failed state=${newTrack.state}"
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        try {
+                            newTrack.setStartThresholdInFrames(1)
+                        } catch (error: IllegalArgumentException) {
+                            Log.w(TAG, "setStartThresholdInFrames failed", error)
+                        } catch (error: IllegalStateException) {
+                            Log.w(TAG, "setStartThresholdInFrames failed", error)
                         }
+                    }
+                    Log.d(TAG, "sampleRate=${format.sampleRate}")
+                    Log.d(TAG, "bufferSize=$bufferSize minBufferSize=$minBufferSize")
+                    Log.d(TAG, "AudioTrack state=${newTrack.state}")
+                    newTrack
                 }
 
 
