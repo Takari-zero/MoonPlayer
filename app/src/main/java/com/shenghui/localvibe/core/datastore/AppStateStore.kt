@@ -473,6 +473,20 @@ class AppStateStore(private val context: Context) {
         }
     }
 
+    suspend fun loadBookTtsVoiceId(): String? {
+        return context.appStateDataStore.data.first()[BookTtsVoiceIdKey]
+    }
+
+    suspend fun saveBookTtsVoiceId(voiceId: String?) {
+        context.appStateDataStore.edit { prefs ->
+            if (voiceId.isNullOrBlank()) {
+                prefs.remove(BookTtsVoiceIdKey)
+            } else {
+                prefs[BookTtsVoiceIdKey] = voiceId
+            }
+        }
+    }
+
     suspend fun saveLastMainTabRoute(route: String?) {
         context.appStateDataStore.edit { prefs ->
             if (route.isNullOrBlank()) {
@@ -923,6 +937,7 @@ class AppStateStore(private val context: Context) {
         val AudioSortAscendingKey = booleanPreferencesKey("audio_sort_ascending")
         val LastMainTabRouteKey = stringPreferencesKey("last_main_tab_route")
         val BookPlaybackEngineKey = stringPreferencesKey("book_playback_engine")
+        val BookTtsVoiceIdKey = stringPreferencesKey("book_tts_voice_id")
         const val MIN_VIDEO_PLAYBACK_SPEED = 0.25f
         const val MAX_VIDEO_PLAYBACK_SPEED = 5f
         const val DEFAULT_VIDEO_PLAYBACK_SPEED = 1f

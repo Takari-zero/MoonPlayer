@@ -23,6 +23,8 @@ class Aishell3SegmentedStreamingTtsEngine(
 
     private val appContext = context.applicationContext
     private var tts: OfflineTts? = null
+    private var voiceRegistry: Aishell3VoiceRegistrySnapshot? = null
+    private var runtimeNumSpeakers: Int = 0
 
     @Volatile
     private var stopRequested = false
@@ -36,6 +38,7 @@ class Aishell3SegmentedStreamingTtsEngine(
             stopRequested = false
             val startedAt = System.currentTimeMillis()
             val modelDir = prepareModelFiles()
+            voiceRegistry = Aishell3VoiceRegistry.fromAsset(appContext.assets)
             val resourceConfig = OfflineTtsResourceConfigs.AISHELL3
             val ruleFsts = resourceConfig.ruleFstFiles.joinToString(",") {
                 File(modelDir, it).absolutePath
@@ -71,7 +74,14 @@ class Aishell3SegmentedStreamingTtsEngine(
             val initCostMs = System.currentTimeMillis() - startedAt
             Log.d(TAG, "initCostMs=$initCostMs")
             Log.d(TAG, "sampleRate=${tts?.sampleRate()}")
-            Log.d(TAG, "numSpeakers=${tts?.numSpeakers()}")
+            runtimeNumSpeakers = tts?.numSpeakers() ?: 0
+            Log.d(TAG, "numSpeakers=$runtimeNumSpeakers")
+            if (runtimeNumSpeakers != voiceRegistry?.numSpeakers) {
+                Log.w(
+                    TAG,
+                    "speaker metadata mismatch metadata=${voiceRegistry?.numSpeakers} runtime=$runtimeNumSpeakers"
+                )
+            }
             Unit
         }.onFailure { error ->
             Log.e(TAG, "initialize error", error)
@@ -151,6 +161,9 @@ class Aishell3SegmentedStreamingTtsEngine(
                 return@withContext StreamingTtsResult.Error(message)
             }
 
+            val speakerId = resolveSpeakerId(params.voiceId)
+                ?: return@withContext StreamingTtsResult.Error("aishell3 voice unavailable")
+
             val segments = splitTextSegments(text)
             if (segments.isEmpty()) {
                 val message = "试听文本为空"
@@ -183,7 +196,7 @@ class Aishell3SegmentedStreamingTtsEngine(
                     val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
                     val result = offlineTts.generate(
                         text = segmentText,
-                        sid = DEFAULT_SPEAKER_ID,
+                        sid = speakerId,
                         speed = speechRate.sherpaGenerateSpeed
                     )
                     generateEndElapsedMs = SystemClock.elapsedRealtime()
@@ -301,6 +314,9 @@ class Aishell3SegmentedStreamingTtsEngine(
         val offlineTts = tts
             ?: return@withContext Result.failure(IllegalStateException("aishell3 engine unavailable"))
 
+        val speakerId = resolveSpeakerId(params.voiceId)
+            ?: return@withContext Result.failure(IllegalStateException("aishell3 voice unavailable"))
+
         val ttsText = BookTtsTextNormalizer.normalize(segmentText)
         if (ttsText.spokenText.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("text is blank"))
@@ -318,7 +334,7 @@ class Aishell3SegmentedStreamingTtsEngine(
                 val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
                 val result = offlineTts.generate(
                     text = ttsText.spokenText,
-                    sid = DEFAULT_SPEAKER_ID,
+                    sid = speakerId,
                     speed = speechRate.sherpaGenerateSpeed
                 )
                 generateEndElapsedMs = SystemClock.elapsedRealtime()
@@ -365,11 +381,26 @@ class Aishell3SegmentedStreamingTtsEngine(
             tts?.release()
         }
         tts = null
+        voiceRegistry = null
+        runtimeNumSpeakers = 0
         Log.d(TAG, "release")
     }
 
     private fun isMainThread(): Boolean {
         return Looper.myLooper() == Looper.getMainLooper()
+    }
+
+    private fun resolveSpeakerId(voiceId: String): Int? {
+        val registry = voiceRegistry ?: return null
+        val runtimeLimit = runtimeNumSpeakers
+        val resolved = registry.resolve(voiceId)
+        val candidate = resolved?.takeIf { it.speakerId in 0 until runtimeLimit }
+            ?: registry.resolve(Aishell3VoiceRegistry.DEFAULT_AISHELL3_VOICE_ID)
+                ?.takeIf { it.speakerId in 0 until runtimeLimit }
+        if (resolved == null || resolved.speakerId !in 0 until runtimeLimit) {
+            Log.w(TAG, "invalid voiceId=$voiceId, fallback=${candidate?.voiceId ?: "unavailable"}")
+        }
+        return candidate?.speakerId
     }
 
     private fun segmentsForMetricsLength(text: String): Int {
@@ -483,7 +514,7 @@ class Aishell3SegmentedStreamingTtsEngine(
         private val NATIVE_TTS_LOCK = Any()
         private const val ASSET_DIR = "offline_tts/aishell3"
         private const val DEFAULT_SAMPLE_RATE = 8000
-        private const val DEFAULT_SPEAKER_ID = 10
+        const val DEFAULT_SPEAKER_ID = Aishell3VoiceRegistry.DEFAULT_AISHELL3_SPEAKER_ID
         private const val BYTES_PER_SAMPLE = 2
         private const val MAX_SEGMENT_CHARS = 24
         private val METRICS_SESSION_COUNTER = AtomicLong(0L)

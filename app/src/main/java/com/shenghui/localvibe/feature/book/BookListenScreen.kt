@@ -102,6 +102,8 @@ import com.shenghui.localvibe.core.book.TxtBookReader
 import com.shenghui.localvibe.core.datastore.AppStateStore
 import com.shenghui.localvibe.core.scanner.LocalMediaFile
 import com.shenghui.localvibe.core.tts.Aishell3SegmentedStreamingTtsEngine
+import com.shenghui.localvibe.core.tts.Aishell3VoiceRegistry
+import com.shenghui.localvibe.core.tts.BookTtsCacheKey
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsEngine
 import com.shenghui.localvibe.core.tts.BuiltInOfflineTtsResult
 import com.shenghui.localvibe.core.tts.BookTtsController
@@ -191,6 +193,9 @@ fun BookListenScreen(
         mutableStateOf(BookPlaybackEngine.AISHELL3.name)
     }
     var preferredPlaybackEngineUserOverride by remember { mutableStateOf(false) }
+    var selectedAishell3VoiceId by remember {
+        mutableStateOf(Aishell3VoiceRegistry.DEFAULT_AISHELL3_VOICE_ID)
+    }
     var isTtsReady by remember { mutableStateOf(false) }
     var isTtsChecking by remember { mutableStateOf(true) }
     var speechRate by remember { mutableFloatStateOf(1.0f) }
@@ -247,6 +252,7 @@ fun BookListenScreen(
     val latestBookFile by rememberUpdatedState(bookFile)
     val latestSpeechRate by rememberUpdatedState(speechRate)
     val latestPitch by rememberUpdatedState(pitch)
+    val latestAishell3VoiceId by rememberUpdatedState(selectedAishell3VoiceId)
     val latestPlaybackMode by rememberUpdatedState(playbackMode)
     val latestPendingStopAfterChapter by rememberUpdatedState(pendingStopAfterChapter)
     val latestPendingStopChapterIndex by rememberUpdatedState(pendingStopChapterIndex)
@@ -264,6 +270,9 @@ fun BookListenScreen(
         OfflineTtsAvailability.check(context.applicationContext)
     }
     val appStateStore = remember(context) { AppStateStore(context.applicationContext) }
+    val aishell3VoiceRegistry = remember(context) {
+        runCatching { Aishell3VoiceRegistry.fromAsset(context.assets) }.getOrNull()
+    }
     val preferredPlaybackEngine = remember(preferredPlaybackEngineName) {
         BookPlaybackEngineSelection.parse(
             preferredPlaybackEngineName,
@@ -295,11 +304,16 @@ fun BookListenScreen(
             BookPlaybackEngine.SYSTEM_TTS
         }
         val persistedEngine = appStateStore.loadBookPlaybackEngineName()
+        val persistedVoiceId = appStateStore.loadBookTtsVoiceId()
         if (!latestPreferredPlaybackEngineUserOverride) {
             preferredPlaybackEngineName = BookPlaybackEngineSelection
                 .parse(persistedEngine, defaultEngine)
                 .name
         }
+        selectedAishell3VoiceId = aishell3VoiceRegistry
+            ?.resolveOrDefault(persistedVoiceId)
+            ?.voiceId
+            ?: Aishell3VoiceRegistry.DEFAULT_AISHELL3_VOICE_ID
     }
 
     DisposableEffect(Unit) {
@@ -369,11 +383,32 @@ fun BookListenScreen(
     }
 
     fun aishell3PreparedKey(chapterSentenceIndex: Int, text: String): String {
-        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|${text.hashCode()}|${latestBookSpeechRate.sherpaGenerateSpeed}|$pitch"
+        val voice = aishell3VoiceRegistry
+            ?.resolveOrDefault(latestAishell3VoiceId)
+            ?: Aishell3VoiceRegistry.defaultDescriptor()
+        return BookTtsCacheKey.aishell3(
+            bookUri = bookFile?.uri.orEmpty(),
+            chapterSentenceIndex = chapterSentenceIndex,
+            textIdentity = text.hashCode(),
+            speed = latestBookSpeechRate.sherpaGenerateSpeed,
+            pitch = pitch,
+            voice = voice
+        )
     }
 
     fun aishell3SegmentKey(chapterSentenceIndex: Int, segmentIndex: Int, segmentText: String): String {
-        return "${bookFile?.uri.orEmpty()}|$chapterSentenceIndex|seg=$segmentIndex|${segmentText.hashCode()}|${latestBookSpeechRate.sherpaGenerateSpeed}|$pitch"
+        val voice = aishell3VoiceRegistry
+            ?.resolveOrDefault(latestAishell3VoiceId)
+            ?: Aishell3VoiceRegistry.defaultDescriptor()
+        return BookTtsCacheKey.aishell3Segment(
+            bookUri = bookFile?.uri.orEmpty(),
+            chapterSentenceIndex = chapterSentenceIndex,
+            segmentIndex = segmentIndex,
+            textIdentity = segmentText.hashCode(),
+            speed = latestBookSpeechRate.sherpaGenerateSpeed,
+            pitch = pitch,
+            voice = voice
+        )
     }
 
     fun isPlausibleChapterSentenceIndex(index: Int): Boolean {
@@ -467,7 +502,7 @@ fun BookListenScreen(
         val result = aishell3TtsEngine.synthesizeSegmentToChunk(
             segmentText = segmentText,
             params = latestBookSpeechRate.asStreamingParams(
-                voiceId = "aishell3-speaker-10",
+                voiceId = latestAishell3VoiceId,
                 pitch = pitch,
                 volume = 1f
             ),
@@ -537,7 +572,7 @@ fun BookListenScreen(
             val result = aishell3TtsEngine.synthesizeToChunks(
                 text = text,
                 params = latestBookSpeechRate.asStreamingParams(
-                    voiceId = "aishell3-speaker-10",
+                    voiceId = latestAishell3VoiceId,
                     pitch = pitch,
                     volume = 1f
                 )
@@ -624,7 +659,7 @@ fun BookListenScreen(
                 val result = aishell3TtsEngine.synthesizeSegmentToChunk(
                     segmentText = segmentText,
                     params = latestBookSpeechRate.asStreamingParams(
-                        voiceId = "aishell3-speaker-10",
+                        voiceId = latestAishell3VoiceId,
                         pitch = pitch,
                         volume = 1f
                     ),
@@ -2466,7 +2501,7 @@ fun BookListenScreen(
                             val result = aishell3TtsEngine.speak(
                                 text = speakText,
                                 params = bookSpeechRate.asStreamingParams(
-                                    voiceId = "aishell3-speaker-10",
+                                    voiceId = latestAishell3VoiceId,
                                     pitch = pitch,
                                     volume = 1f
                                 ),
@@ -3218,7 +3253,7 @@ fun BookListenScreen(
                             engine.speak(
                                 text = Aishell3SegmentedStreamingTtsEngine.PREVIEW_TEXT,
                                 params = bookSpeechRate.asStreamingParams(
-                                    voiceId = "aishell3-speaker-10",
+                                    voiceId = latestAishell3VoiceId,
                                     pitch = 1f,
                                     volume = 1f
                                 ),
