@@ -91,4 +91,81 @@ class BookContentReadinessTest {
 
         assertEquals(false, restored.playRequested)
     }
+
+    @Test
+    fun previewPendingTargetResolvesFromPreparedContentWhenActiveListIsStale() {
+        val pending = PendingBookPlaybackTarget(
+            104210, 0, "target".hashCode(), PendingBookPlaybackSource.USER_SENTENCE_TAP, true
+        )
+
+        val result = PendingBookPlaybackTargetResolver.consume(
+            pending = pending,
+            readiness = BookContentReadiness.PLAYBACK_READY,
+            preparedAvailable = true,
+            preparedTargets = listOf(BookPlaybackSentenceTarget(104210, 0, 163)),
+            currentPlaybackIntentPlaying = false
+        )
+
+        assertEquals(163, result.resolvedTarget?.chapterSentenceIndex)
+        assertEquals(true, result.playbackIntentPlaying)
+        assertEquals(false, result.terminalRejected)
+    }
+
+    @Test
+    fun pendingTargetIsPreservedUntilPreparedContentIsReady() {
+        val pending = PendingBookPlaybackTarget(
+            104210, 0, "target".hashCode(), PendingBookPlaybackSource.USER_SENTENCE_TAP, true
+        )
+
+        val result = PendingBookPlaybackTargetResolver.consume(
+            pending = pending,
+            readiness = BookContentReadiness.PREVIEW,
+            preparedAvailable = false,
+            preparedTargets = emptyList(),
+            currentPlaybackIntentPlaying = false
+        )
+
+        assertEquals(pending, result.pendingTarget)
+        assertEquals(true, result.preparedNotReady)
+        assertEquals(false, result.terminalRejected)
+        assertEquals(false, result.playbackIntentPlaying)
+    }
+
+    @Test
+    fun readyMissingPendingTargetClearsIntentForNextPlay() {
+        val pending = PendingBookPlaybackTarget(
+            104210, 0, "target".hashCode(), PendingBookPlaybackSource.USER_SENTENCE_TAP, true
+        )
+
+        val result = PendingBookPlaybackTargetResolver.consume(
+            pending = pending,
+            readiness = BookContentReadiness.PLAYBACK_READY,
+            preparedAvailable = true,
+            preparedTargets = emptyList(),
+            currentPlaybackIntentPlaying = true
+        )
+
+        assertNull(result.pendingTarget)
+        assertEquals(false, result.playbackIntentPlaying)
+        assertEquals(true, result.terminalRejected)
+    }
+
+    @Test
+    fun preparedPendingTargetRequestsExistingPlaybackDispatch() {
+        val pending = PendingBookPlaybackTarget(
+            12, 2, "target".hashCode(), PendingBookPlaybackSource.USER_SENTENCE_TAP, true
+        )
+
+        val result = PendingBookPlaybackTargetResolver.consume(
+            pending = pending,
+            readiness = BookContentReadiness.PLAYBACK_READY,
+            preparedAvailable = true,
+            preparedTargets = listOf(BookPlaybackSentenceTarget(12, 2, 7)),
+            currentPlaybackIntentPlaying = false
+        )
+
+        assertEquals(BookPlaybackSentenceTarget(12, 2, 7), result.resolvedTarget)
+        assertEquals(true, result.playbackIntentPlaying)
+        assertEquals(false, result.preparedNotReady)
+    }
 }

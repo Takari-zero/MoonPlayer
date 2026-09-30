@@ -169,6 +169,51 @@ class BuiltInOfflineTtsEngine {
         }
     }
 
+    suspend fun synthesizeSingleChunkForAudition(
+        text: String,
+        speechRate: BookSpeechRate = BookSpeechRate.fromCurrentUiMultiplier(1f)
+    ): Result<PcmAudioChunk> = withContext(Dispatchers.IO) {
+        val offlineTts = tts
+        if (!isReady || offlineTts == null) {
+            return@withContext Result.failure(IllegalStateException("内置离线语音尚未初始化"))
+        }
+        val normalized = BookTtsTextNormalizer.normalize(text)
+        if (normalized.spokenText.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("试听文本为空"))
+        }
+
+        runCatching {
+            stopped = false
+            val audio = offlineTts.generate(
+                text = normalized.spokenText,
+                sid = 0,
+                speed = speechRate.sherpaGenerateSpeed
+            )
+            val sampleRate = audio.sampleRate.takeIf { it > 0 } ?: FALLBACK_SAMPLE_RATE
+            val samples = audio.samples
+            val pcm = shortsToPcm16Bytes(floatToPcm16(samples))
+            val metrics = TtsAudioQualityMetrics.from(samples, sampleRate, pcm)
+            Log.i(
+                TAG,
+                "AUDIO_QUALITY_AUDITION engine=zh_mvp sid=0 sampleRate=$sampleRate " +
+                    "samples=${metrics.sampleCount} frames=${metrics.sampleCount} durationMs=${metrics.durationMs} " +
+                    "pcmBytes=${pcm.size} peak=${metrics.peakAbs} rms=${metrics.rms} " +
+                    "clippedCount=${metrics.clippedSampleCount} clippedRatio=${metrics.clippedRatio} " +
+                    "fingerprint=${metrics.fingerprint} normalizedTextLength=${normalized.spokenText.length} " +
+                    "segmentCount=1 speed=${speechRate.sherpaGenerateSpeed}"
+            )
+            PcmAudioChunk(
+                data = pcm,
+                format = PcmAudioFormat(
+                    sampleRate = sampleRate,
+                    channelCount = 1,
+                    encoding = PcmAudioEncoding.PCM_16BIT
+                ),
+                isFinal = true
+            )
+        }
+    }
+
     suspend fun playAudioChannelTest(
         onPlaybackStarted: suspend () -> Unit = {}
     ): BuiltInOfflineTtsResult = withContext(Dispatchers.IO) {
@@ -464,6 +509,16 @@ class BuiltInOfflineTtsEngine {
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                 .toShort()
         }
+    }
+
+    private fun shortsToPcm16Bytes(samples: ShortArray): ByteArray {
+        val bytes = ByteArray(samples.size * 2)
+        samples.forEachIndexed { index, sample ->
+            val value = sample.toInt()
+            bytes[index * 2] = (value and 0xFF).toByte()
+            bytes[index * 2 + 1] = ((value shr 8) and 0xFF).toByte()
+        }
+        return bytes
     }
 
     private fun sourceFailurePrefix(source: String): String {

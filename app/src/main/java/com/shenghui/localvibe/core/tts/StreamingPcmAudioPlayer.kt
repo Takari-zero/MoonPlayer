@@ -62,7 +62,7 @@ class StreamingPcmAudioPlayer(
                 require(format.channelCount == 1) {
                     "Only mono PCM is supported"
                 }
-                require(format.sampleRate in SUPPORTED_SAMPLE_RATES) {
+                require(StreamingPcmSupportedSampleRates.isSupported(format.sampleRate)) {
                     "Unsupported sampleRate=${format.sampleRate}"
                 }
 
@@ -479,8 +479,13 @@ class StreamingPcmAudioPlayer(
         private const val PLAYBACK_COMPLETE_POLL_MS = 40L
         private const val PLAYBACK_COMPLETE_SETTLE_MS = 80L
         private const val PLAYBACK_COMPLETE_TIMEOUT_MS = 60_000L
-        private val SUPPORTED_SAMPLE_RATES = setOf(8000, 16000, 24000, 44100)
     }
+}
+
+internal object StreamingPcmSupportedSampleRates {
+    private val values = setOf(8000, 16000, 22050, 24000, 44100)
+
+    fun isSupported(sampleRate: Int): Boolean = sampleRate in values
 }
 
 internal object PcmPlaybackCompletion {

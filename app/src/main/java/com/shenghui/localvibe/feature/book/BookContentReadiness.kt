@@ -22,6 +22,14 @@ enum class PendingBookPlaybackSource {
 }
 
 object PendingBookPlaybackTargetResolver {
+    data class ConsumeResult(
+        val pendingTarget: PendingBookPlaybackTarget?,
+        val playbackIntentPlaying: Boolean,
+        val resolvedTarget: BookPlaybackSentenceTarget?,
+        val preparedNotReady: Boolean,
+        val terminalRejected: Boolean
+    )
+
     fun replace(
         current: PendingBookPlaybackTarget?,
         next: PendingBookPlaybackTarget
@@ -40,5 +48,49 @@ object PendingBookPlaybackTargetResolver {
             it.paragraphIndex == pending.paragraphIndex &&
                 it.sentenceIndexInParagraph == pending.sentenceIndexInParagraph
         }
+    }
+
+    fun consume(
+        pending: PendingBookPlaybackTarget?,
+        readiness: BookContentReadiness,
+        preparedAvailable: Boolean,
+        preparedTargets: List<BookPlaybackSentenceTarget>,
+        currentPlaybackIntentPlaying: Boolean
+    ): ConsumeResult {
+        if (pending == null) {
+            return ConsumeResult(
+                pendingTarget = null,
+                playbackIntentPlaying = currentPlaybackIntentPlaying,
+                resolvedTarget = null,
+                preparedNotReady = false,
+                terminalRejected = false
+            )
+        }
+        if (readiness != BookContentReadiness.PLAYBACK_READY || !preparedAvailable) {
+            return ConsumeResult(
+                pendingTarget = pending,
+                playbackIntentPlaying = currentPlaybackIntentPlaying,
+                resolvedTarget = null,
+                preparedNotReady = true,
+                terminalRejected = false
+            )
+        }
+        val resolved = resolve(pending, preparedTargets)
+        if (resolved == null) {
+            return ConsumeResult(
+                pendingTarget = null,
+                playbackIntentPlaying = false,
+                resolvedTarget = null,
+                preparedNotReady = false,
+                terminalRejected = true
+            )
+        }
+        return ConsumeResult(
+            pendingTarget = null,
+            playbackIntentPlaying = pending.playRequested,
+            resolvedTarget = resolved,
+            preparedNotReady = false,
+            terminalRejected = false
+        )
     }
 }

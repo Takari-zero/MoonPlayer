@@ -11,6 +11,7 @@ import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 
@@ -67,7 +68,7 @@ class Aishell3SegmentedStreamingTtsEngine(
                 silenceScale = 0.2f
             )
 
-            tts = synchronized(NATIVE_TTS_LOCK) {
+            tts = synchronized(OfflineTtsNativeLock) {
                 OfflineTts(assetManager = null, config = config)
             }
             isReady = true
@@ -175,6 +176,8 @@ class Aishell3SegmentedStreamingTtsEngine(
             var started = false
             val clickStartMs = System.currentTimeMillis()
             var totalSynthesizeCostMs = 0L
+            val auditionSamples = if (purpose == "audition") ArrayList<Float>() else null
+            val auditionPcm = if (purpose == "audition") ByteArrayOutputStream() else null
 
             for ((index, segmentText) in segments.withIndex()) {
                 if (stopRequested) {
@@ -190,9 +193,16 @@ class Aishell3SegmentedStreamingTtsEngine(
                 var lockAcquiredElapsedMs = lockWaitStartElapsedMs
                 var generateStartElapsedMs = lockWaitStartElapsedMs
                 var generateEndElapsedMs = lockWaitStartElapsedMs
-                val audio = synchronized(NATIVE_TTS_LOCK) {
+                val audio = synchronized(OfflineTtsNativeLock) {
                     lockAcquiredElapsedMs = SystemClock.elapsedRealtime()
                     generateStartElapsedMs = lockAcquiredElapsedMs
+                    if (purpose == "audition") {
+                        Log.i(
+                            TAG,
+                            "AUDIO_QUALITY_AUDITION_GENERATE engine=aishell3 sid=$speakerId " +
+                                "voiceId=${params.voiceId} segmentIndex=$index"
+                        )
+                    }
                     val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
                     val result = offlineTts.generate(
                         text = segmentText,
@@ -216,6 +226,8 @@ class Aishell3SegmentedStreamingTtsEngine(
 
                 val sampleRate = audio.sampleRate.takeIf { it > 0 } ?: DEFAULT_SAMPLE_RATE
                 val pcm = floatSamplesToPcm16(audio.samples, params.volume)
+                auditionSamples?.let { samples -> audio.samples.forEach(samples::add) }
+                auditionPcm?.write(pcm)
                 if (pcm.isNotEmpty() && firstPcmElapsedMs == null) {
                     firstPcmElapsedMs = SystemClock.elapsedRealtime()
                 }
@@ -262,6 +274,23 @@ class Aishell3SegmentedStreamingTtsEngine(
             }
 
             Log.d(TAG, "totalSynthesizeCostMs=$totalSynthesizeCostMs")
+            if (purpose == "audition" && auditionSamples != null && auditionPcm != null) {
+                val metrics = TtsAudioQualityMetrics.from(
+                    samples = auditionSamples.toFloatArray(),
+                    sampleRate = generatedSampleRate,
+                    pcmBytes = auditionPcm.toByteArray()
+                )
+                Log.i(
+                    TAG,
+                    "AUDIO_QUALITY_AUDITION engine=aishell3 sid=$speakerId " +
+                        "voiceId=${params.voiceId} sampleRate=$generatedSampleRate " +
+                        "samples=${metrics.sampleCount} frames=${metrics.sampleCount} durationMs=${metrics.durationMs} " +
+                        "pcmBytes=${auditionPcm.size()} peak=${metrics.peakAbs} rms=${metrics.rms} " +
+                        "clippedCount=${metrics.clippedSampleCount} clippedRatio=${metrics.clippedRatio} " +
+                        "fingerprint=${metrics.fingerprint} normalizedTextLength=${segmentsForMetricsLength(text)} " +
+                        "segmentCount=${segments.size} speed=${BookSpeechRate.fromUserMultiplier(params.speed).sherpaGenerateSpeed}"
+                )
+            }
             onDone()
             StreamingTtsResult.Success
         } catch (error: Throwable) {
@@ -328,7 +357,7 @@ class Aishell3SegmentedStreamingTtsEngine(
             var lockAcquiredElapsedMs = lockWaitStartElapsedMs
             var generateStartElapsedMs = lockWaitStartElapsedMs
             var generateEndElapsedMs = lockWaitStartElapsedMs
-            val audio = synchronized(NATIVE_TTS_LOCK) {
+            val audio = synchronized(OfflineTtsNativeLock) {
                 lockAcquiredElapsedMs = SystemClock.elapsedRealtime()
                 generateStartElapsedMs = lockAcquiredElapsedMs
                 val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
@@ -377,7 +406,7 @@ class Aishell3SegmentedStreamingTtsEngine(
     override fun release() {
         stopRequested = true
         isReady = false
-        synchronized(NATIVE_TTS_LOCK) {
+        synchronized(OfflineTtsNativeLock) {
             tts?.release()
         }
         tts = null
@@ -511,7 +540,6 @@ class Aishell3SegmentedStreamingTtsEngine(
     companion object {
         private const val TAG = "Aishell3StreamingTts"
         private const val BOOK_HOT_TTS_TAG = "BookListenHot"
-        private val NATIVE_TTS_LOCK = Any()
         private const val ASSET_DIR = "offline_tts/aishell3"
         private const val DEFAULT_SAMPLE_RATE = 8000
         const val DEFAULT_SPEAKER_ID = Aishell3VoiceRegistry.DEFAULT_AISHELL3_SPEAKER_ID

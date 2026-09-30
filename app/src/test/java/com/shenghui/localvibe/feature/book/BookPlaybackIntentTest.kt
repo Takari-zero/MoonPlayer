@@ -27,4 +27,48 @@ class BookPlaybackIntentTest {
             )
         }
     }
+
+    @Test
+    fun completedTargetContinuesFromIntentEvenWhenCurrentPlayerIsNoLongerPlaying() {
+        assertTrue(
+            shouldContinuePlaybackAfterTarget(
+                moved = true,
+                playbackIntentPlaying = true,
+                sessionValid = true
+            )
+        )
+    }
+
+    @Test
+    fun pausedIntentDoesNotAutoAdvanceAfterCurrentTargetCompletes() {
+        assertFalse(
+            shouldContinuePlaybackAfterTarget(
+                moved = true,
+                playbackIntentPlaying = false,
+                sessionValid = true
+            )
+        )
+    }
+
+    @Test
+    fun staleSessionDoesNotAutoAdvanceEvenWhenIntentIsStillTrue() {
+        assertFalse(
+            shouldContinuePlaybackAfterTarget(
+                moved = true,
+                playbackIntentPlaying = true,
+                sessionValid = false
+            )
+        )
+    }
+
+    @Test
+    fun missingNextTargetDoesNotContinue() {
+        assertFalse(
+            shouldContinuePlaybackAfterTarget(
+                moved = false,
+                playbackIntentPlaying = true,
+                sessionValid = true
+            )
+        )
+    }
 }
