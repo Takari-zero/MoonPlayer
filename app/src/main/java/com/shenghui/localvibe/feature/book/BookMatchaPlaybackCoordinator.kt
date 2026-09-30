@@ -15,7 +15,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 internal data class BookPlaybackTargetId(
     val chapterSentenceIndex: Int,
@@ -57,9 +56,7 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
         replacePlayerOutput()
         val prepared = request.snapshot?.let { snapshot ->
             val key = keyFor(request.targetId, request.text, request.speechRate, prewarmSlot.currentEpoch())
-            prewarmSlot.consume(key) ?: prewarmSlot.inFlight(key)?.let { deferred ->
-                withTimeoutOrNull(PREWARM_WAIT_MS) { deferred.await() }
-            }
+            prewarmSlot.awaitAndConsume(key, PREWARM_WAIT_MS)
         }
         if (prepared != null) {
             Log.i(TAG, "MATCHA_PREWARM_CONSUMED target=${request.targetId.chapterSentenceIndex}")
