@@ -2494,6 +2494,8 @@ fun BookListenScreen(
                         }
                         val updatedState = BookReadStateCache(
                             bookUri = file.uri,
+                            contentSize = file.size,
+                            contentModifiedAt = file.modifiedAt,
                             bookTitle = file.displayTitle(),
                             lastParagraphIndex = sentence.paragraphIndex,
                             lastSentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
@@ -3340,6 +3342,8 @@ fun BookListenScreen(
                                     }
                                 val state = BookReadStateCache(
                                     bookUri = bookFile?.uri.orEmpty(),
+                                    contentSize = bookFile?.size,
+                                    contentModifiedAt = bookFile?.modifiedAt,
                                     bookTitle = bookFile?.displayTitle().orEmpty(),
                                     lastParagraphIndex = currentCachedSentence?.paragraphIndex ?: currentParagraphIndex,
                                     lastSentenceIndexInParagraph = currentCachedSentence?.sentenceIndexInParagraph
@@ -6267,6 +6271,8 @@ private data class BookVisibleWindowSnapshot(
 
 private data class BookReadStateCache(
     val bookUri: String,
+    val contentSize: Long?,
+    val contentModifiedAt: Long?,
     val bookTitle: String,
     val lastParagraphIndex: Int,
     val lastSentenceIndexInParagraph: Int,
@@ -6433,15 +6439,14 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
     if (bookUri.isNullOrBlank()) return null
     val prefs = context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE)
     val prefix = bookReadCachePrefix(bookUri)
-    val storedUri = prefs.getString(prefix + "uri", null) ?: return null
-    if (storedUri != bookUri) return null
+    val metadata = BookPreviewCacheMetadataCodec.decode(prefix, bookUri, prefs.all) ?: return null
     val cachedText = prefs
         .getString(prefix + "text", null)
         ?.split(BOOK_READ_CACHE_SEPARATOR)
         ?.filter { it.isNotBlank() }
         .orEmpty()
     val cachedSentences = decodeBookCachedSentences(
-        prefs.getString(prefix + "sentence_window", null).orEmpty()
+        metadata.encodedSentenceWindow
     )
     val lastVisibleFirstItemIndex = prefs.getInt(prefix + "visible_first_index", -1)
     val cachedStartChapterSentenceIndex = prefs.getInt(prefix + "cached_start_chapter_sentence", 0)
@@ -6454,7 +6459,9 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
         cachedStartChapterSentenceIndex.coerceAtLeast(0)
     }
     return BookReadStateCache(
-        bookUri = storedUri,
+        bookUri = metadata.bookUri,
+        contentSize = metadata.contentSize,
+        contentModifiedAt = metadata.contentModifiedAt,
         bookTitle = prefs.getString(prefix + "title", null).orEmpty(),
         lastParagraphIndex = prefs.getInt(prefix + "paragraph", 0),
         lastSentenceIndexInParagraph = prefs.getInt(prefix + "sentence", 0),
@@ -6479,9 +6486,23 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
 private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) {
     if (state.bookUri.isBlank()) return
     val prefix = bookReadCachePrefix(state.bookUri)
-    context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putString(prefix + "uri", state.bookUri)
+    val editor = context.getSharedPreferences(BOOK_READ_CACHE_PREFS, Context.MODE_PRIVATE).edit()
+    BookPreviewCacheMetadataCodec.encode(
+        prefix = prefix,
+        metadata = BookPreviewCacheMetadata(
+            bookUri = state.bookUri,
+            contentSize = state.contentSize,
+            contentModifiedAt = state.contentModifiedAt,
+            encodedSentenceWindow = encodeBookCachedSentences(state.cachedSentences)
+        )
+    ).forEach { (key, value) ->
+        when (value) {
+            null -> editor.remove(key)
+            is String -> editor.putString(key, value)
+            is Long -> editor.putLong(key, value)
+        }
+    }
+    editor
         .putString(prefix + "title", state.bookTitle)
         .putInt(prefix + "paragraph", state.lastParagraphIndex.coerceAtLeast(0))
         .putInt(prefix + "sentence", state.lastSentenceIndexInParagraph.coerceAtLeast(0))
@@ -6496,7 +6517,6 @@ private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) 
         .putInt(prefix + "cached_remaining_seconds", state.cachedRemainingSeconds)
         .putFloat(prefix + "cached_progress_fraction", state.cachedProgressFraction)
         .putInt(prefix + "cached_chapter_duration_seconds", state.cachedChapterEstimatedDurationSeconds)
-        .putString(prefix + "sentence_window", encodeBookCachedSentences(state.cachedSentences))
         .putString(prefix + "text", state.cachedVisibleText.joinToString(BOOK_READ_CACHE_SEPARATOR))
         .putLong(prefix + "updated_at", state.updatedAt)
         .apply()
