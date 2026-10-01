@@ -2,9 +2,13 @@ package com.shenghui.localvibe.feature.book
 
 data class PreviewContentIdentity(
     val bookUri: String,
-    val size: Long?,
-    val modifiedAt: Long?
-)
+    val version: PreviewContentVersion
+) {
+    constructor(bookUri: String, size: Long?, modifiedAt: Long?) : this(
+        bookUri = bookUri,
+        version = PreviewContentVersion.metadata(size, modifiedAt)
+    )
+}
 
 data class CachedPreviewPlaybackCandidate(
     val paragraphIndex: Int,
@@ -34,7 +38,9 @@ enum class PreviewPlaybackRejectionReason {
     BOOK_URI_MISMATCH,
     CONTENT_VERSION_UNAVAILABLE,
     CONTENT_SIZE_MISMATCH,
+    CONTENT_VERSION_KIND_MISMATCH,
     CONTENT_MODIFIED_AT_MISMATCH,
+    CONTENT_FINGERPRINT_MISMATCH,
     GENERATION_MISMATCH,
     TEXT_HASH_MISMATCH,
     TEXT_MISMATCH,
@@ -70,27 +76,38 @@ object PreviewPlaybackTargetResolver {
         if (cachedIdentity.bookUri != currentIdentity.bookUri) {
             return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.BOOK_URI_MISMATCH)
         }
-        val cachedSize = cachedIdentity.size
-        val currentSize = currentIdentity.size
-        val cachedModifiedAt = cachedIdentity.modifiedAt
-        val currentModifiedAt = currentIdentity.modifiedAt
+        val cachedVersion = cachedIdentity.version
+        val currentVersion = currentIdentity.version
         if (
-            cachedSize == null ||
-            currentSize == null ||
-            cachedModifiedAt == null ||
-            currentModifiedAt == null
+            cachedVersion == PreviewContentVersion.Unavailable ||
+            currentVersion == PreviewContentVersion.Unavailable
         ) {
             return PreviewPlaybackResolution.Rejected(
                 PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE
             )
         }
-        if (cachedSize != currentSize) {
+        if (cachedVersion.size != currentVersion.size) {
             return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.CONTENT_SIZE_MISMATCH)
         }
-        if (cachedModifiedAt != currentModifiedAt) {
-            return PreviewPlaybackResolution.Rejected(
-                PreviewPlaybackRejectionReason.CONTENT_MODIFIED_AT_MISMATCH
-            )
+        if (cachedVersion::class != currentVersion::class) {
+            return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.CONTENT_VERSION_KIND_MISMATCH)
+        }
+        when {
+            cachedVersion is PreviewContentVersion.Metadata &&
+                currentVersion is PreviewContentVersion.Metadata &&
+                cachedVersion.modifiedAt != currentVersion.modifiedAt -> {
+                return PreviewPlaybackResolution.Rejected(
+                    PreviewPlaybackRejectionReason.CONTENT_MODIFIED_AT_MISMATCH
+                )
+            }
+
+            cachedVersion is PreviewContentVersion.Fingerprint &&
+                currentVersion is PreviewContentVersion.Fingerprint &&
+                cachedVersion.sha256Hex != currentVersion.sha256Hex -> {
+                return PreviewPlaybackResolution.Rejected(
+                    PreviewPlaybackRejectionReason.CONTENT_FINGERPRINT_MISMATCH
+                )
+            }
         }
         if (candidate.originReaderGeneration != currentReaderGeneration) {
             return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.GENERATION_MISMATCH)

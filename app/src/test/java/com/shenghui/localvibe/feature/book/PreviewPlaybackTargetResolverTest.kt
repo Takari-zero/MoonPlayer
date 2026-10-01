@@ -17,9 +17,9 @@ class PreviewPlaybackTargetResolverTest {
     )
     private val identity = PreviewContentIdentity(
         bookUri = "content://books/current",
-        size = 4096L,
-        modifiedAt = 123456L
+        version = PreviewContentVersion.metadata(4096L, 123456L)
     )
+    private val fingerprint = PreviewContentVersion.fingerprint(4096L, "a".repeat(64))
 
     @Test
     fun matchingIdentityVersionAndTextAreAllowed() {
@@ -35,18 +35,18 @@ class PreviewPlaybackTargetResolverTest {
     }
 
     @Test
-    fun rejectsUnavailableCachedSize() {
+    fun rejectsUnavailableCachedVersion() {
         assertRejected(
             PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE,
-            cachedIdentity = identity.copy(size = null)
+            cachedIdentity = identity.copy(version = PreviewContentVersion.Unavailable)
         )
     }
 
     @Test
-    fun rejectsUnavailableCachedModifiedAt() {
+    fun rejectsUnavailableCurrentVersion() {
         assertRejected(
             PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE,
-            cachedIdentity = identity.copy(modifiedAt = null)
+            currentIdentity = identity.copy(version = PreviewContentVersion.Unavailable)
         )
     }
 
@@ -54,7 +54,7 @@ class PreviewPlaybackTargetResolverTest {
     fun rejectsContentSizeMismatch() {
         assertRejected(
             PreviewPlaybackRejectionReason.CONTENT_SIZE_MISMATCH,
-            currentIdentity = identity.copy(size = identity.size!! + 1L)
+            currentIdentity = identity.copy(version = PreviewContentVersion.metadata(4097L, 123456L))
         )
     }
 
@@ -62,7 +62,78 @@ class PreviewPlaybackTargetResolverTest {
     fun rejectsContentModifiedAtMismatch() {
         assertRejected(
             PreviewPlaybackRejectionReason.CONTENT_MODIFIED_AT_MISMATCH,
-            currentIdentity = identity.copy(modifiedAt = identity.modifiedAt!! + 1L)
+            currentIdentity = identity.copy(version = PreviewContentVersion.metadata(4096L, 123457L))
+        )
+    }
+
+    @Test
+    fun matchingFingerprintVersionsAreAllowed() {
+        val fingerprintIdentity = identity.copy(version = fingerprint)
+
+        assertTrue(
+            resolve(
+                cachedIdentity = fingerprintIdentity,
+                currentIdentity = fingerprintIdentity
+            ) is PreviewPlaybackResolution.Allowed
+        )
+    }
+
+    @Test
+    fun rejectsFingerprintSizeMismatch() {
+        assertRejected(
+            PreviewPlaybackRejectionReason.CONTENT_SIZE_MISMATCH,
+            cachedIdentity = identity.copy(version = fingerprint),
+            currentIdentity = identity.copy(
+                version = PreviewContentVersion.fingerprint(4097L, "a".repeat(64))
+            )
+        )
+    }
+
+    @Test
+    fun rejectsFingerprintDigestMismatch() {
+        assertRejected(
+            PreviewPlaybackRejectionReason.CONTENT_FINGERPRINT_MISMATCH,
+            cachedIdentity = identity.copy(version = fingerprint),
+            currentIdentity = identity.copy(
+                version = PreviewContentVersion.fingerprint(4096L, "b".repeat(64))
+            )
+        )
+    }
+
+    @Test
+    fun rejectsContentVersionKindMismatch() {
+        assertRejected(
+            PreviewPlaybackRejectionReason.CONTENT_VERSION_KIND_MISMATCH,
+            cachedIdentity = identity,
+            currentIdentity = identity.copy(version = fingerprint)
+        )
+    }
+
+    @Test
+    fun uriMismatchPrecedesUnavailableVersion() {
+        assertRejected(
+            PreviewPlaybackRejectionReason.BOOK_URI_MISMATCH,
+            cachedIdentity = identity.copy(version = PreviewContentVersion.Unavailable),
+            currentIdentity = identity.copy(bookUri = "content://books/other")
+        )
+    }
+
+    @Test
+    fun unavailableVersionPrecedesGenerationMismatch() {
+        assertRejected(
+            PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE,
+            cachedIdentity = identity.copy(version = PreviewContentVersion.Unavailable),
+            currentReaderGeneration = candidate.originReaderGeneration + 1L
+        )
+    }
+
+    @Test
+    fun sizeMismatchPrecedesVersionKindMismatch() {
+        assertRejected(
+            PreviewPlaybackRejectionReason.CONTENT_SIZE_MISMATCH,
+            currentIdentity = identity.copy(
+                version = PreviewContentVersion.fingerprint(4097L, "a".repeat(64))
+            )
         )
     }
 

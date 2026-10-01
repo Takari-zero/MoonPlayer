@@ -9,107 +9,184 @@ import org.junit.Test
 class BookPreviewCacheMetadataCodecTest {
     private val prefix = "book_42_"
     private val bookUri = "content://books/current"
+    private val fingerprint = "ab".repeat(32)
 
     @Test
-    fun newCacheRoundTripsUriSizeAndModifiedAt() {
-        val metadata = metadata(contentSize = 4096L, contentModifiedAt = 123456L)
-
+    fun metadataRoundTrips() {
+        val metadata = metadata(PreviewContentVersion.metadata(4096L, 123456L))
         assertEquals(metadata, roundTrip(metadata))
     }
 
     @Test
-    fun legacyCacheWithoutProvenanceStillLoadsForDisplay() {
+    fun fingerprintRoundTrips() {
+        val metadata = metadata(PreviewContentVersion.fingerprint(4096L, fingerprint))
+        assertEquals(metadata, roundTrip(metadata))
+    }
+
+    @Test
+    fun legacyMetadataWithoutKindDecodesAsMetadata() {
         val stored = mutableMapOf<String, Any>(
             prefix + "uri" to bookUri,
+            prefix + "content_size" to 4096L,
+            prefix + "content_modified_at" to 123456L,
             prefix + "sentence_window" to "legacy-window"
         )
 
         val decoded = BookPreviewCacheMetadataCodec.decode(prefix, bookUri, stored)
 
-        assertEquals(bookUri, decoded?.bookUri)
+        assertEquals(PreviewContentVersion.metadata(4096L, 123456L), decoded?.contentVersion)
         assertEquals("legacy-window", decoded?.encodedSentenceWindow)
-        assertNull(decoded?.contentSize)
-        assertNull(decoded?.contentModifiedAt)
     }
 
     @Test
-    fun legacyCacheCannotEstablishLocalPlaybackProvenance() {
-        val result = PreviewPlaybackTargetResolver.resolve(
-            candidate = CachedPreviewPlaybackCandidate(
-                paragraphIndex = 1,
-                sentenceIndexInParagraph = 0,
-                chapterSentenceIndex = 1,
-                text = "sentence",
-                stableTextHash = "sentence".hashCode(),
-                originReaderGeneration = 3L
-            ),
-            cachedIdentity = PreviewContentIdentity(bookUri, null, null),
-            currentIdentity = PreviewContentIdentity(bookUri, 4096L, 123456L),
-            currentReaderGeneration = 3L,
-            expectedText = "sentence",
-            expectedStableTextHash = "sentence".hashCode(),
-            playRequested = true
+    fun legacySizeOnlyDecodesAsUnavailable() {
+        val stored = mutableMapOf<String, Any>(
+            prefix + "uri" to bookUri,
+            prefix + "content_size" to 4096L
         )
 
         assertEquals(
-            PreviewPlaybackResolution.Rejected(
-                PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE
-            ),
-            result
+            PreviewContentVersion.Unavailable,
+            BookPreviewCacheMetadataCodec.decode(prefix, bookUri, stored)?.contentVersion
         )
     }
 
     @Test
-    fun zeroContentSizeIsPersistedAsARealValue() {
-        val encoded = BookPreviewCacheMetadataCodec.encode(
-            prefix,
-            metadata(contentSize = 0L, contentModifiedAt = 123456L)
-        )
-
-        assertTrue(encoded.containsKey(prefix + "content_size"))
-        assertEquals(0L, roundTrip(metadata(contentSize = 0L, contentModifiedAt = 123456L))?.contentSize)
+    fun fingerprintKindWithoutShaDecodesAsUnavailable() {
+        assertDecodedUnavailable(storedVersion("fingerprint", size = 4096L))
     }
 
     @Test
-    fun unknownModifiedAtRemainsNullWithoutMagicValue() {
-        val encoded = BookPreviewCacheMetadataCodec.encode(
-            prefix,
-            metadata(contentSize = 4096L, contentModifiedAt = null)
-        )
-        val stored = applyUpdate(encoded)
-
-        assertFalse(stored.containsKey(prefix + "content_modified_at"))
-        assertNull(BookPreviewCacheMetadataCodec.decode(prefix, bookUri, stored)?.contentModifiedAt)
+    fun metadataKindWithoutModifiedAtDecodesAsUnavailable() {
+        assertDecodedUnavailable(storedVersion("metadata", size = 4096L))
     }
 
     @Test
-    fun explicitlyStoredZeroModifiedAtRemainsPresent() {
-        val decoded = roundTrip(metadata(contentSize = 4096L, contentModifiedAt = 0L))
-
-        assertEquals(0L, decoded?.contentModifiedAt)
+    fun unknownKindDecodesAsUnavailable() {
+        assertDecodedUnavailable(storedVersion("future", size = 4096L))
     }
 
     @Test
-    fun savingNullProvenanceRemovesPreviouslyStoredValues() {
-        val knownValues = BookPreviewCacheMetadataCodec.encode(
-            prefix,
-            metadata(contentSize = 4096L, contentModifiedAt = 123456L)
-        )
-        val stored = applyUpdate(knownValues).toMutableMap()
+    fun metadataOverwriteRemovesOldFingerprint() {
+        val stored = applyUpdate(
+            BookPreviewCacheMetadataCodec.encode(
+                prefix,
+                metadata(PreviewContentVersion.fingerprint(4096L, fingerprint))
+            )
+        ).toMutableMap()
 
         applyUpdate(
-            update = BookPreviewCacheMetadataCodec.encode(
+            BookPreviewCacheMetadataCodec.encode(
                 prefix,
-                metadata(contentSize = null, contentModifiedAt = null)
+                metadata(PreviewContentVersion.metadata(4096L, 123456L))
             ),
-            stored = stored
+            stored
         )
 
+        assertFalse(stored.containsKey(prefix + "content_sha256"))
+        assertEquals(123456L, stored[prefix + "content_modified_at"])
+    }
+
+    @Test
+    fun fingerprintOverwriteRemovesOldModifiedAt() {
+        val stored = applyUpdate(
+            BookPreviewCacheMetadataCodec.encode(
+                prefix,
+                metadata(PreviewContentVersion.metadata(4096L, 123456L))
+            )
+        ).toMutableMap()
+
+        applyUpdate(
+            BookPreviewCacheMetadataCodec.encode(
+                prefix,
+                metadata(PreviewContentVersion.fingerprint(4096L, fingerprint))
+            ),
+            stored
+        )
+
+        assertFalse(stored.containsKey(prefix + "content_modified_at"))
+        assertEquals(fingerprint, stored[prefix + "content_sha256"])
+    }
+
+    @Test
+    fun unavailableRemovesAllVersionKeys() {
+        val stored = applyUpdate(
+            BookPreviewCacheMetadataCodec.encode(
+                prefix,
+                metadata(PreviewContentVersion.fingerprint(4096L, fingerprint))
+            )
+        ).toMutableMap()
+
+        applyUpdate(
+            BookPreviewCacheMetadataCodec.encode(
+                prefix,
+                metadata(PreviewContentVersion.Unavailable)
+            ),
+            stored
+        )
+
+        assertFalse(stored.containsKey(prefix + "content_version_kind"))
         assertFalse(stored.containsKey(prefix + "content_size"))
         assertFalse(stored.containsKey(prefix + "content_modified_at"))
-        val decoded = BookPreviewCacheMetadataCodec.decode(prefix, bookUri, stored)
-        assertNull(decoded?.contentSize)
-        assertNull(decoded?.contentModifiedAt)
+        assertFalse(stored.containsKey(prefix + "content_sha256"))
+    }
+
+    @Test
+    fun zeroByteFingerprintIsPreserved() {
+        val decoded = roundTrip(metadata(PreviewContentVersion.fingerprint(0L, fingerprint)))
+
+        assertEquals(0L, decoded?.contentVersion?.size)
+        assertTrue(decoded?.contentVersion is PreviewContentVersion.Fingerprint)
+    }
+
+    @Test
+    fun malformedPersistedFingerprintDecodesAsUnavailable() {
+        assertDecodedUnavailable(
+            storedVersion("fingerprint", size = 4096L, sha256 = "not-a-sha256")
+        )
+    }
+
+    @Test
+    fun uppercasePersistedFingerprintIsCanonicalized() {
+        val stored = storedVersion(
+            kind = "fingerprint",
+            size = 4096L,
+            sha256 = fingerprint.uppercase()
+        )
+
+        val version = BookPreviewCacheMetadataCodec.decode(prefix, bookUri, stored)?.contentVersion
+            as PreviewContentVersion.Fingerprint
+
+        assertEquals(fingerprint, version.sha256Hex)
+    }
+
+    @Test
+    fun legacyConstructorMapsInvalidMetadataToUnavailable() {
+        val metadata = BookPreviewCacheMetadata(
+            bookUri = bookUri,
+            contentSize = 4096L,
+            contentModifiedAt = 0L,
+            encodedSentenceWindow = "window"
+        )
+
+        assertEquals(PreviewContentVersion.Unavailable, metadata.contentVersion)
+        assertNull(metadata.contentSize)
+        assertNull(metadata.contentModifiedAt)
+    }
+
+    @Test
+    fun sentenceWindowRoundTripsWithoutChangingEncoding() {
+        val window = "12\u001F3\u001F0\u001F1\u001Fhello%20world"
+
+        assertEquals(
+            window,
+            roundTrip(
+                metadata(
+                    PreviewContentVersion.metadata(4096L, 123456L),
+                    encodedSentenceWindow = window
+                )
+            )?.encodedSentenceWindow
+        )
     }
 
     @Test
@@ -117,55 +194,53 @@ class BookPreviewCacheMetadataCodecTest {
         val stored = applyUpdate(
             BookPreviewCacheMetadataCodec.encode(
                 prefix,
-                metadata(contentSize = 4096L, contentModifiedAt = 123456L)
+                metadata(PreviewContentVersion.metadata(4096L, 123456L))
             )
         )
 
-        assertNull(
-            BookPreviewCacheMetadataCodec.decode(
-                prefix,
-                "content://books/other",
-                stored
-            )
-        )
-    }
-
-    @Test
-    fun sentenceWindowRoundTripsWithoutChangingItsEncoding() {
-        val encodedWindow = "12\u001F3\u001F0\u001F1\u001Fhello%20world\u001D13\u001F4\u001F0\u001F0\u001Fnext"
-
-        val decoded = roundTrip(
-            metadata(
-                contentSize = 4096L,
-                contentModifiedAt = 123456L,
-                encodedSentenceWindow = encodedWindow
-            )
-        )
-
-        assertEquals(encodedWindow, decoded?.encodedSentenceWindow)
+        assertNull(BookPreviewCacheMetadataCodec.decode(prefix, "content://books/other", stored))
     }
 
     @Test
     fun readerGenerationIsNeverPersisted() {
         val encoded = BookPreviewCacheMetadataCodec.encode(
             prefix,
-            metadata(contentSize = 4096L, contentModifiedAt = 123456L)
+            metadata(PreviewContentVersion.metadata(4096L, 123456L))
         )
 
         assertTrue(encoded.keys.none { it.contains("generation", ignoreCase = true) })
     }
 
+    private fun assertDecodedUnavailable(stored: Map<String, Any>) {
+        assertEquals(
+            PreviewContentVersion.Unavailable,
+            BookPreviewCacheMetadataCodec.decode(prefix, bookUri, stored)?.contentVersion
+        )
+    }
+
     private fun metadata(
-        contentSize: Long?,
-        contentModifiedAt: Long?,
+        version: PreviewContentVersion,
         encodedSentenceWindow: String = "window"
     ): BookPreviewCacheMetadata {
         return BookPreviewCacheMetadata(
             bookUri = bookUri,
-            contentSize = contentSize,
-            contentModifiedAt = contentModifiedAt,
+            contentVersion = version,
             encodedSentenceWindow = encodedSentenceWindow
         )
+    }
+
+    private fun storedVersion(
+        kind: String,
+        size: Long,
+        sha256: String? = null
+    ): MutableMap<String, Any> {
+        return mutableMapOf<String, Any>(
+            prefix + "uri" to bookUri,
+            prefix + "content_version_kind" to kind,
+            prefix + "content_size" to size
+        ).also { stored ->
+            sha256?.let { stored[prefix + "content_sha256"] = it }
+        }
     }
 
     private fun roundTrip(metadata: BookPreviewCacheMetadata): BookPreviewCacheMetadata? {
