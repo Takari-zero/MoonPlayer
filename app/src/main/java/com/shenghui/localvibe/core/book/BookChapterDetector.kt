@@ -6,6 +6,7 @@ data class BookChapter(
 )
 
 object BookChapterDetector {
+    private val whitespaceRegex = Regex("\\s+")
     private val chapterTitleRegex = Regex(
         pattern = """^\s*第[\s　]*[0-9零〇一二三四五六七八九十百千万两]+[\s　]*[章节回卷部集][\s　\S]*$"""
     )
@@ -15,9 +16,7 @@ object BookChapterDetector {
 
     fun detect(paragraphs: List<String>): List<BookChapter> {
         return paragraphs.mapIndexedNotNull { index, paragraph ->
-            val title = paragraph
-                .replace(Regex("\\s+"), " ")
-                .trim()
+            val title = paragraph.replace(whitespaceRegex, " ").trim()
             if (isLikelyChapterTitle(title)) {
                 BookChapter(title = title, paragraphIndex = index)
             } else {
