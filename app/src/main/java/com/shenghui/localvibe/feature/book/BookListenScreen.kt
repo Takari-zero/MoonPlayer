@@ -364,6 +364,9 @@ fun BookListenScreen(
             matchaBookAvailable
         )
         providerRestoreComplete = true
+        if (!latestPreferredPlaybackEngineUserOverride && restoredPreferredEngine == BookPlaybackEngine.MATCHA_EXPERIMENTAL && matchaBookAvailable) {
+            matchaPlaybackCoordinator.prepareEngine()
+        }
         Log.i(
             "BOOK_PROVIDER_STATE",
             "event=RESTORE_COMPLETE preferred=${restoredPreferredEngine.name} " +
@@ -593,6 +596,9 @@ fun BookListenScreen(
             .getOrNull()
     }
 
+    fun aishell3PrewarmRequest() = BookAishell3PrewarmGuard.begin(
+        { latestBookPlaybackEngineSnapshot }, { latestPlaybackSessionId }, screenDisposed::get)
+
     fun prewarmAishell3Audio(
         key: String,
         text: String,
@@ -600,7 +606,7 @@ fun BookListenScreen(
         keepKeys: Set<String> = setOf(key),
         onReady: (() -> Unit)? = null
     ) {
-        if (!BookAishell3PrewarmGate.allows(effectivePlaybackEngine)) return
+        val prewarm = aishell3PrewarmRequest() ?: return
         if (!isReadableBookTtsText(text)) return
         if (!BookAishell3PreparedAudioCache.markPrewarming(key)) {
             val alreadyPrepared = BookAishell3PreparedAudioCache.contains(key)
@@ -612,7 +618,7 @@ fun BookListenScreen(
             )
             if (alreadyPrepared) {
                 Log.i(BOOK_HOT_TTS_TAG, "prepared cache restore hit key=$key label=$label")
-                onReady?.invoke()
+                prewarm.runIfActive { onReady?.invoke() }
             }
             return
         }
@@ -622,8 +628,7 @@ fun BookListenScreen(
             "prewarm start key=$key label=$label textPreview=${text.take(32)}"
         )
         coroutineScope.launch {
-            if (screenDisposed.get()) {
-                Log.i(BOOK_HOT_TTS_TAG, "ignored callback after dispose prewarm key=$key")
+            if (!prewarm.isActive()) {
                 BookAishell3PreparedAudioCache.unmarkPrewarming(key)
                 return@launch
             }
@@ -633,9 +638,11 @@ fun BookListenScreen(
                     voiceId = latestAishell3VoiceId,
                     pitch = pitch,
                     volume = 1f
-                )
+                ),
+                isRequestValid = prewarm::isActive
             )
             BookAishell3PreparedAudioCache.unmarkPrewarming(key)
+            if (!prewarm.isActive()) return@launch
             result
                 .onSuccess { chunks ->
                     if (chunks.isNotEmpty()) {
@@ -655,7 +662,7 @@ fun BookListenScreen(
                                 "prepared cache size=${BookAishell3PreparedAudioCache.size()} " +
                                 "prepared cache survives screen dispose=true"
                         )
-                        onReady?.invoke()
+                        prewarm.runIfActive { onReady?.invoke() }
                     }
                 }
                 .onFailure { error ->
@@ -674,7 +681,7 @@ fun BookListenScreen(
         label: String,
         onCurrentFirstReady: (() -> Unit)? = null
     ) {
-        if (!BookAishell3PrewarmGate.allows(effectivePlaybackEngine)) return
+        val prewarm = aishell3PrewarmRequest() ?: return
         if (!isReadableBookTtsText(text)) return
         val segments = aishell3TtsEngine.splitTextSegments(text)
         if (segments.isEmpty()) return
@@ -686,15 +693,14 @@ fun BookListenScreen(
         coroutineScope.launch {
             val priorityReadyIndex = if (segments.size > 1) 1 else 0
             segments.forEachIndexed { index, segmentText ->
-                if (screenDisposed.get()) {
-                    Log.i(BOOK_HOT_TTS_TAG, "ignored callback after dispose segment prewarm sentence=$chapterSentenceIndex")
+                if (!prewarm.isActive()) {
                     return@launch
                 }
                 val key = aishell3SegmentKey(chapterSentenceIndex, index, segmentText)
                 val cacheLabel = if (index == 0) "$label segment0" else "$label segment$index"
                 if (BookAishell3SegmentAudioCache.contains(key)) {
                     Log.i(BOOK_HOT_TTS_TAG, "segment cache hit key=$key label=$cacheLabel")
-                    if (index == priorityReadyIndex) onCurrentFirstReady?.invoke()
+                    if (index == priorityReadyIndex) prewarm.runIfActive { onCurrentFirstReady?.invoke() }
                     return@forEachIndexed
                 }
                 if (!BookAishell3SegmentAudioCache.markPrewarming(key)) {
@@ -704,7 +710,7 @@ fun BookListenScreen(
                     )
                     if (index == priorityReadyIndex) {
                         waitForAishell3Segment(key, timeoutMs = 6_000L)?.let {
-                            onCurrentFirstReady?.invoke()
+                            prewarm.runIfActive { onCurrentFirstReady?.invoke() }
                         }
                     }
                     return@forEachIndexed
@@ -724,11 +730,14 @@ fun BookListenScreen(
                     ),
                     sessionLabel = "prewarm",
                     segmentIndex = index,
-                    isFinal = index == segments.lastIndex
+                    isFinal = index == segments.lastIndex,
+                    isRequestValid = prewarm::isActive
                 )
                 BookAishell3SegmentAudioCache.unmarkPrewarming(key)
+                if (!prewarm.isActive()) return@launch
                 result
                     .onSuccess { chunk ->
+                        if (chunk == null) return@launch
                         BookAishell3SegmentAudioCache.put(key, chunk, source = "prewarm")
                         if (index == 0) {
                             Log.i(
@@ -742,7 +751,7 @@ fun BookListenScreen(
                             )
                         }
                         if (index == priorityReadyIndex) {
-                            onCurrentFirstReady?.invoke()
+                            prewarm.runIfActive { onCurrentFirstReady?.invoke() }
                         }
                     }
                     .onFailure { error ->
@@ -1094,6 +1103,7 @@ fun BookListenScreen(
         }
         if (preferredPlaybackEngine == engine) {
             preferredPlaybackEngineUserOverride = true
+            if (engine == BookPlaybackEngine.MATCHA_EXPERIMENTAL) matchaPlaybackCoordinator.prepareEngine()
             Log.i(
                 "BOOK_PROVIDER_STATE",
                 "event=SELECT selected=${engine.name}"
@@ -1105,6 +1115,7 @@ fun BookListenScreen(
         isPlaying = false
         preferredPlaybackEngineUserOverride = true
         preferredPlaybackEngineName = engine.name
+        if (engine == BookPlaybackEngine.MATCHA_EXPERIMENTAL) matchaPlaybackCoordinator.prepareEngine()
         Log.i(
             "BOOK_PROVIDER_STATE",
             "event=SELECT selected=${engine.name}"
@@ -2798,6 +2809,7 @@ fun BookListenScreen(
                         speechRate,
                         pitch
                     ) {
+                        val prewarm = aishell3PrewarmRequest() ?: return@LaunchedEffect
                         val currentSentence = cachedSentences.getOrNull(cachedIndex)
                         val nextSentence = cachedSentences
                             .drop(cachedIndex + 1)
@@ -2828,6 +2840,7 @@ fun BookListenScreen(
                             )
                             Log.i(BOOK_HOT_TTS_TAG, "prewarm current priority key=$key")
                             fun queueNextAfterCurrent() {
+                                if (!prewarm.isActive()) return
                                 nextSentence?.let { sentence ->
                                     nextKey?.let { next ->
                                         Log.i(BOOK_HOT_TTS_TAG, "prewarm next segment0 queued key=$next")
@@ -3173,6 +3186,7 @@ fun BookListenScreen(
                         speechRate,
                         pitch
                     ) {
+                        val prewarm = aishell3PrewarmRequest() ?: return@LaunchedEffect
                         val currentSentence = chapterSentences.getOrNull(currentChapterSentenceIndex)
                         val nextSentence = chapterSentences
                             .drop(currentChapterSentenceIndex + 1)
@@ -3202,6 +3216,7 @@ fun BookListenScreen(
                             )
                             Log.i(BOOK_HOT_TTS_TAG, "prewarm current priority key=$key")
                             fun queueNextAfterCurrent() {
+                                if (!prewarm.isActive()) return
                                 nextSentence?.let { sentence ->
                                     nextKey?.let { next ->
                                         Log.i(BOOK_HOT_TTS_TAG, "prewarm next segment0 queued key=$next")

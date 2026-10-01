@@ -11,6 +11,7 @@ import com.shenghui.localvibe.core.tts.StreamingTtsParams
 import com.shenghui.localvibe.core.tts.StreamingTtsResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -42,10 +43,25 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
     private val engine = MatchaBookTtsEngine(context.applicationContext)
     private val prewarmSlot = MatchaPrewarmSlot()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val prepareLock = Any()
+    private var prepareJob: Job? = null
+    private var released = false
     private var player: StreamingPcmAudioPlayer? = null
 
     val isAvailable: Boolean
         get() = engine.isModelAvailable()
+
+    fun prepareEngine() {
+        synchronized(prepareLock) {
+            if (released || engine.isReady || prepareJob?.isActive == true || !isAvailable) return
+            prepareJob = scope.launch {
+                Log.i("MATCHA_ENGINE_PREPARE", "event=REQUESTED")
+                engine.ensureInitialized().onFailure {
+                    Log.w(TAG, "engine preparation failed", it)
+                }
+            }
+        }
+    }
 
     suspend fun play(
         request: MatchaPlaybackRequest,
@@ -121,6 +137,10 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
     }
 
     fun release() {
+        synchronized(prepareLock) {
+            if (released) return
+            released = true
+        }
         invalidatePrewarm("release")
         scope.coroutineContext.cancel()
         engine.stop()

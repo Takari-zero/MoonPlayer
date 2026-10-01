@@ -305,7 +305,8 @@ class Aishell3SegmentedStreamingTtsEngine(
 
     suspend fun synthesizeToChunks(
         text: String,
-        params: StreamingTtsParams
+        params: StreamingTtsParams,
+        isRequestValid: () -> Boolean = { true }
     ): Result<List<PcmAudioChunk>> = withContext(Dispatchers.IO) {
         val segments = splitTextSegments(text)
         if (segments.isEmpty()) {
@@ -313,15 +314,19 @@ class Aishell3SegmentedStreamingTtsEngine(
         }
 
         runCatching {
-            segments.mapIndexed { index, segmentText ->
-                synthesizeSegmentToChunk(
+            val chunks = ArrayList<PcmAudioChunk>(segments.size)
+            segments.forEachIndexed { index, segmentText ->
+                val chunk = synthesizeSegmentToChunk(
                     segmentText = segmentText,
                     params = params,
                     sessionLabel = "prewarm",
                     segmentIndex = index,
-                    isFinal = index == segments.lastIndex
-                ).getOrThrow()
+                    isFinal = index == segments.lastIndex,
+                    isRequestValid = isRequestValid
+                ).getOrThrow() ?: return@runCatching emptyList<PcmAudioChunk>()
+                chunks.add(chunk)
             }
+            chunks
         }
     }
 
@@ -331,14 +336,34 @@ class Aishell3SegmentedStreamingTtsEngine(
         sessionLabel: String,
         segmentIndex: Int,
         isFinal: Boolean
-    ): Result<PcmAudioChunk> = withContext(Dispatchers.IO) {
+    ): Result<PcmAudioChunk> = synthesizeSegmentToChunk(
+        segmentText, params, sessionLabel, segmentIndex, isFinal, isRequestValid = { true }
+    ).map { checkNotNull(it) }
+
+    // The guarded overload returns success(null) for a normal stale abort.
+    suspend fun synthesizeSegmentToChunk(
+        segmentText: String,
+        params: StreamingTtsParams,
+        sessionLabel: String,
+        segmentIndex: Int,
+        isFinal: Boolean,
+        isRequestValid: () -> Boolean
+    ): Result<PcmAudioChunk?> = withContext(Dispatchers.IO) {
         val requestStartElapsedMs = SystemClock.elapsedRealtime()
+        val nativeEntryGuard = Aishell3NativeEntryGuard(isRequestValid) { phase ->
+            Log.i(
+                "AISHELL3_PREWARM_GUARD",
+                "event=SKIP_BEFORE_NATIVE_GENERATE reason=REQUEST_INVALID phase=$phase " +
+                    "session=$sessionLabel segment=$segmentIndex"
+            )
+        }
         val initResult = initialize()
         if (initResult.isFailure) {
             return@withContext Result.failure(
                 initResult.exceptionOrNull() ?: IllegalStateException("aishell3 initialize failed")
             )
         }
+        if (!nativeEntryGuard.afterInitialization()) return@withContext Result.success(null)
 
         val offlineTts = tts
             ?: return@withContext Result.failure(IllegalStateException("aishell3 engine unavailable"))
@@ -357,7 +382,7 @@ class Aishell3SegmentedStreamingTtsEngine(
             var lockAcquiredElapsedMs = lockWaitStartElapsedMs
             var generateStartElapsedMs = lockWaitStartElapsedMs
             var generateEndElapsedMs = lockWaitStartElapsedMs
-            val audio = synchronized(OfflineTtsNativeLock) {
+            val audio = nativeEntryGuard.generate(OfflineTtsNativeLock) {
                 lockAcquiredElapsedMs = SystemClock.elapsedRealtime()
                 generateStartElapsedMs = lockAcquiredElapsedMs
                 val speechRate = BookSpeechRate.fromUserMultiplier(params.speed)
@@ -368,7 +393,7 @@ class Aishell3SegmentedStreamingTtsEngine(
                 )
                 generateEndElapsedMs = SystemClock.elapsedRealtime()
                 result
-            }
+            } ?: return@runCatching null
             val lockReleasedElapsedMs = SystemClock.elapsedRealtime()
             Log.i(
                 BOOK_HOT_TTS_TAG,
@@ -565,5 +590,22 @@ class Aishell3SegmentedStreamingTtsEngine(
             "speakers.txt"
         )
 
+    }
+}
+
+internal class Aishell3NativeEntryGuard(
+    private val isRequestValid: () -> Boolean = { true },
+    private val onSkipped: (String) -> Unit = {}
+) {
+    fun afterInitialization(): Boolean = checkValidity("POST_INIT")
+
+    fun <T : Any> generate(nativeLock: Any, generate: () -> T): T? = synchronized(nativeLock) {
+        if (checkValidity("NATIVE_LOCK")) generate() else null
+    }
+
+    private fun checkValidity(phase: String): Boolean {
+        if (isRequestValid()) return true
+        onSkipped(phase)
+        return false
     }
 }

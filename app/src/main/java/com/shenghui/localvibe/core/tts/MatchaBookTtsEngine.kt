@@ -7,7 +7,9 @@ import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsMatchaModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -39,31 +41,113 @@ internal class MatchaRequestLifecycle {
     data class Request(val id: Long)
 }
 
+/** Owns a single native initialization without holding the state lock during construction. */
+internal class MatchaEngineInitialization<T : Any>(
+    private val create: () -> T,
+    private val destroy: (T) -> Unit,
+    private val onReady: (T) -> Unit = {}
+) {
+    private val stateLock = Any()
+    private var resource: T? = null
+    private var inFlight: CompletableDeferred<Result<Unit>>? = null
+    private var released = false
+
+    val isReady: Boolean
+        get() = synchronized(stateLock) { resource != null && !released }
+
+    fun readyResource(): T? = synchronized(stateLock) { resource }
+
+    suspend fun ensureInitialized(): Result<Unit> {
+        var owner = false
+        val completion = synchronized(stateLock) {
+            if (released) return releasedResult()
+            if (resource != null) return Result.success(Unit)
+            inFlight ?: CompletableDeferred<Result<Unit>>().also {
+                inFlight = it
+                owner = true
+            }
+        }
+        if (owner) {
+            // Native construction cannot be cancelled; keep its result owned until publish or cleanup.
+            withContext(NonCancellable + Dispatchers.IO) {
+                val mayConstruct = synchronized(stateLock) { !released && inFlight === completion }
+                if (mayConstruct) {
+                    val created = runCatching(create)
+                    val accepted = synchronized(stateLock) {
+                        if (released || inFlight !== completion) {
+                            false
+                        } else {
+                            resource = created.getOrNull()
+                            inFlight = null
+                            true
+                        }
+                    }
+                    val result = if (accepted) created.map { Unit } else releasedResult()
+                    try {
+                        created.getOrNull()?.let {
+                            if (accepted) onReady(it) else destroy(it)
+                        }
+                    } finally {
+                        completion.complete(result)
+                    }
+                }
+            }
+        }
+        val result = completion.await()
+        return synchronized(stateLock) { if (released) releasedResult() else result }
+    }
+
+    fun release() {
+        val detached = synchronized(stateLock) {
+            if (released) return
+            released = true
+            val state = resource to inFlight
+            resource = null
+            inFlight = null
+            state
+        }
+        detached.second?.complete(releasedResult())
+        detached.first?.let(destroy)
+    }
+
+    private fun releasedResult(): Result<Unit> =
+        Result.failure(IllegalStateException("Matcha engine released"))
+}
+
 class MatchaBookTtsEngine(context: Context) : StreamingTtsEngine {
     override val name: String = "matcha-experimental"
-    override var isReady: Boolean = false
-        private set
+    override val isReady: Boolean
+        get() = initialization.isReady
 
     private val appContext = context.applicationContext
     private val root = File(appContext.filesDir, MODEL_RELATIVE_PATH)
-    private var tts: OfflineTts? = null
+    private data class NativeEngine(val tts: OfflineTts, val sampleRate: Int)
+    private val initialization = MatchaEngineInitialization(
+        create = {
+            requireCompleteModel()
+            synchronized(OfflineTtsNativeLock) {
+                val native = OfflineTts(assetManager = null, config = createConfig())
+                try {
+                    NativeEngine(native, native.sampleRate())
+                } catch (error: Throwable) {
+                    native.release()
+                    throw error
+                }
+            }
+        },
+        destroy = { native -> synchronized(OfflineTtsNativeLock) { native.tts.release() } },
+        onReady = { native ->
+            Log.i(TAG, "initialized model=matcha-icefall-zh-baker threads=2 sampleRate=${native.sampleRate}")
+        }
+    )
+    private val tts: OfflineTts?
+        get() = initialization.readyResource()?.tts
 
     private val requestLifecycle = MatchaRequestLifecycle()
 
-    override suspend fun initialize(): Result<Unit> = withContext(Dispatchers.IO) {
-        if (isReady) return@withContext Result.success(Unit)
-        runCatching {
-            requireCompleteModel()
-            tts = synchronized(OfflineTtsNativeLock) {
-                OfflineTts(assetManager = null, config = createConfig())
-            }
-            isReady = true
-            Log.i(TAG, "initialized model=matcha-icefall-zh-baker threads=2 sampleRate=${tts?.sampleRate()}")
-            Unit
-        }.onFailure {
-            release()
-        }
-    }
+    override suspend fun initialize(): Result<Unit> = ensureInitialized()
+
+    suspend fun ensureInitialized(): Result<Unit> = initialization.ensureInitialized()
 
     override suspend fun speak(
         text: String,
@@ -81,7 +165,7 @@ class MatchaBookTtsEngine(context: Context) : StreamingTtsEngine {
             onError(error)
             return@withContext StreamingTtsResult.Error(error)
         }
-        val initResult = initialize()
+        val initResult = ensureInitialized()
         if (initResult.isFailure) {
             val error = initResult.exceptionOrNull()?.message ?: "Matcha initialize failed"
             onError(error)
@@ -164,7 +248,7 @@ class MatchaBookTtsEngine(context: Context) : StreamingTtsEngine {
         if (normalized.spokenText.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("text is blank"))
         }
-        val initResult = initialize()
+        val initResult = ensureInitialized()
         if (initResult.isFailure) {
             return@withContext Result.failure(
                 initResult.exceptionOrNull() ?: IllegalStateException("Matcha initialize failed")
@@ -221,11 +305,7 @@ class MatchaBookTtsEngine(context: Context) : StreamingTtsEngine {
 
     override fun release() {
         requestLifecycle.stop()
-        isReady = false
-        synchronized(OfflineTtsNativeLock) {
-            tts?.release()
-        }
-        tts = null
+        initialization.release()
     }
 
     fun isModelAvailable(): Boolean {
