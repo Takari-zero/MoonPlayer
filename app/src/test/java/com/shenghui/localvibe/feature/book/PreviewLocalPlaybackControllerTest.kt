@@ -47,7 +47,7 @@ class PreviewLocalPlaybackControllerTest {
         val controller = startedController()
         val hydration = hydrate(controller)
 
-        controller.beginContentCycle(identity)
+        controller.beginContentCycle(cycle(2L), identity)
 
         assertRejected(
             PreviewPlaybackRejectionReason.GENERATION_MISMATCH,
@@ -56,13 +56,13 @@ class PreviewLocalPlaybackControllerTest {
     }
 
     @Test
-    fun sameBookReloadAdvancesGenerationAndStalesOldCandidate() {
+    fun sameBookReloadUsesExternalGenerationAndStalesOldCandidate() {
         val controller = PreviewLocalPlaybackController()
-        val firstGeneration = controller.beginContentCycle(identity)
+        controller.beginContentCycle(cycle(1L), identity)
         val hydration = hydrate(controller)
-        val secondGeneration = controller.beginContentCycle(identity)
+        controller.beginContentCycle(cycle(2L), identity)
 
-        assertEquals(firstGeneration + 1L, secondGeneration)
+        assertEquals(2L, controller.currentReaderGeneration)
         assertRejected(
             PreviewPlaybackRejectionReason.GENERATION_MISMATCH,
             controller.resolve(hydration, text, textHash)
@@ -72,12 +72,13 @@ class PreviewLocalPlaybackControllerTest {
     @Test
     fun firstBookACandidateCannotReviveAfterBookAToBToA() {
         val controller = PreviewLocalPlaybackController()
-        val firstGeneration = controller.beginContentCycle(identity)
+        controller.beginContentCycle(cycle(1L), identity)
         val hydration = hydrate(controller)
-        controller.beginContentCycle(identity.copy(bookUri = "content://books/other"))
-        val thirdGeneration = controller.beginContentCycle(identity)
+        val otherIdentity = identity.copy(bookUri = "content://books/other")
+        controller.beginContentCycle(cycle(2L, otherIdentity.bookUri), otherIdentity)
+        controller.beginContentCycle(cycle(3L), identity)
 
-        assertEquals(firstGeneration + 2L, thirdGeneration)
+        assertEquals(3L, controller.currentReaderGeneration)
         assertRejected(
             PreviewPlaybackRejectionReason.GENERATION_MISMATCH,
             controller.resolve(hydration, text, textHash)
@@ -220,12 +221,18 @@ class PreviewLocalPlaybackControllerTest {
     }
 
     private fun startedController(
-        currentIdentity: PreviewContentIdentity = identity
+        currentIdentity: PreviewContentIdentity = identity,
+        generation: Long = 1L
     ): PreviewLocalPlaybackController {
         return PreviewLocalPlaybackController().also {
-            it.beginContentCycle(currentIdentity)
+            it.beginContentCycle(cycle(generation, currentIdentity.bookUri), currentIdentity)
         }
     }
+
+    private fun cycle(
+        generation: Long,
+        bookUri: String = identity.bookUri
+    ): ReaderContentCycle = ReaderContentCycle(generation, bookUri)
 
     private fun hydrate(
         controller: PreviewLocalPlaybackController,

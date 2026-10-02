@@ -136,6 +136,9 @@ fun BookListenScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val readerContentCycleCoordinator = remember(coroutineScope) {
+        ReaderContentCycleCoordinator(coroutineScope, context.applicationContext.contentResolver)
+    }
     val initialReadStateCache = remember(bookFile?.uri) {
         loadBookReadStateCache(context.applicationContext, bookFile?.uri)
     }
@@ -396,6 +399,7 @@ fun BookListenScreen(
             builtInOfflineTtsEngine.release()
             matchaPlaybackCoordinator.release()
             matchaAuditionController.release()
+            readerContentCycleCoordinator.release()
         }
     }
 
@@ -2167,6 +2171,12 @@ fun BookListenScreen(
         loadError = null
         isPlaying = false
         stopCurrentPlayback(reason = "book_changed", invalidateSession = true)
+        val readerCycle = readerContentCycleCoordinator.beginContentCycle(
+            bookUri = bookFile.uri,
+            expectedSize = bookFile.size,
+            modifiedAt = bookFile.modifiedAt
+        )
+        readerContentCycleCoordinator.startCurrentVersionShadow(readerCycle)
         val result = withContext(Dispatchers.IO) {
             TxtBookReader.readParagraphs(context.applicationContext, bookFile.uri)
         }

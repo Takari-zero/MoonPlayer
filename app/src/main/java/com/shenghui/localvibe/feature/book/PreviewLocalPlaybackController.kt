@@ -26,17 +26,14 @@ class PreviewLocalPlaybackController {
         val generation: Long
     )
 
-    private var generationCounter = 0L
     private var currentCycle: ContentCycle? = null
 
     val currentReaderGeneration: Long?
         get() = currentCycle?.generation
 
-    fun beginContentCycle(identity: PreviewContentIdentity): Long {
-        check(generationCounter < Long.MAX_VALUE) { "Reader generation exhausted" }
-        val generation = ++generationCounter
-        currentCycle = ContentCycle(identity, generation)
-        return generation
+    fun beginContentCycle(cycle: ReaderContentCycle, identity: PreviewContentIdentity) {
+        require(cycle.bookUri == identity.bookUri) { "Reader cycle and identity must use the same book URI" }
+        currentCycle = ContentCycle(identity, cycle.generation)
     }
 
     fun hydrateCandidate(
