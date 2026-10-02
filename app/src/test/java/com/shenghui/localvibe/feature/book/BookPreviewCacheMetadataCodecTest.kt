@@ -161,8 +161,8 @@ class BookPreviewCacheMetadataCodecTest {
     }
 
     @Test
-    fun legacyConstructorMapsInvalidMetadataToUnavailable() {
-        val metadata = BookPreviewCacheMetadata(
+    fun legacyFactoryMapsInvalidMetadataToUnavailable() {
+        val metadata = BookPreviewCacheMetadata.fromLegacyMetadata(
             bookUri = bookUri,
             contentSize = 4096L,
             contentModifiedAt = 0L,

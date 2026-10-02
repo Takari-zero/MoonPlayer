@@ -2494,8 +2494,7 @@ fun BookListenScreen(
                         }
                         val updatedState = BookReadStateCache(
                             bookUri = file.uri,
-                            contentSize = file.size,
-                            contentModifiedAt = file.modifiedAt,
+                            contentVersion = PreviewContentVersion.metadata(file.size, file.modifiedAt),
                             bookTitle = file.displayTitle(),
                             lastParagraphIndex = sentence.paragraphIndex,
                             lastSentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
@@ -3342,8 +3341,10 @@ fun BookListenScreen(
                                     }
                                 val state = BookReadStateCache(
                                     bookUri = bookFile?.uri.orEmpty(),
-                                    contentSize = bookFile?.size,
-                                    contentModifiedAt = bookFile?.modifiedAt,
+                                    contentVersion = PreviewContentVersion.metadata(
+                                        bookFile?.size,
+                                        bookFile?.modifiedAt
+                                    ),
                                     bookTitle = bookFile?.displayTitle().orEmpty(),
                                     lastParagraphIndex = currentCachedSentence?.paragraphIndex ?: currentParagraphIndex,
                                     lastSentenceIndexInParagraph = currentCachedSentence?.sentenceIndexInParagraph
@@ -6248,14 +6249,6 @@ private fun preparedChapterEndExclusiveFor(
     return chapters.getOrNull(chapterIndex + 1)?.paragraphIndex?.coerceIn(0, total) ?: total
 }
 
-private data class BookCachedSentence(
-    val text: String,
-    val paragraphIndex: Int,
-    val sentenceIndexInParagraph: Int,
-    val chapterSentenceIndex: Int,
-    val isCurrent: Boolean
-)
-
 private data class BookVisibleWindowSnapshot(
     val firstVisibleItemIndex: Int,
     val firstVisibleChapterSentenceIndex: Int,
@@ -6267,29 +6260,6 @@ private data class BookVisibleWindowSnapshot(
     val cachedProgressFraction: Float,
     val cachedChapterEstimatedDurationSeconds: Int,
     val sentences: List<BookCachedSentence>
-)
-
-private data class BookReadStateCache(
-    val bookUri: String,
-    val contentSize: Long?,
-    val contentModifiedAt: Long?,
-    val bookTitle: String,
-    val lastParagraphIndex: Int,
-    val lastSentenceIndexInParagraph: Int,
-    val lastChapterSentenceIndex: Int,
-    val lastReadingTargetName: String,
-    val lastChapterTitle: String,
-    val lastVisibleFirstItemIndex: Int,
-    val lastVisibleFirstChapterSentenceIndex: Int,
-    val lastVisibleFirstItemScrollOffset: Int,
-    val cachedStartChapterSentenceIndex: Int,
-    val cachedElapsedSeconds: Int,
-    val cachedRemainingSeconds: Int,
-    val cachedProgressFraction: Float,
-    val cachedChapterEstimatedDurationSeconds: Int,
-    val cachedSentences: List<BookCachedSentence>,
-    val cachedVisibleText: List<String>,
-    val updatedAt: Long
 )
 
 private const val BOOK_READ_CACHE_PREFS = "book_read_state_cache"
@@ -6460,8 +6430,7 @@ private fun loadBookReadStateCache(context: Context, bookUri: String?): BookRead
     }
     return BookReadStateCache(
         bookUri = metadata.bookUri,
-        contentSize = metadata.contentSize,
-        contentModifiedAt = metadata.contentModifiedAt,
+        contentVersion = metadata.contentVersion,
         bookTitle = prefs.getString(prefix + "title", null).orEmpty(),
         lastParagraphIndex = prefs.getInt(prefix + "paragraph", 0),
         lastSentenceIndexInParagraph = prefs.getInt(prefix + "sentence", 0),
@@ -6491,8 +6460,7 @@ private fun saveBookReadStateCache(context: Context, state: BookReadStateCache) 
         prefix = prefix,
         metadata = BookPreviewCacheMetadata(
             bookUri = state.bookUri,
-            contentSize = state.contentSize,
-            contentModifiedAt = state.contentModifiedAt,
+            contentVersion = state.contentVersion,
             encodedSentenceWindow = encodeBookCachedSentences(state.cachedSentences)
         )
     ).forEach { (key, value) ->

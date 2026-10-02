@@ -5,22 +5,24 @@ internal data class BookPreviewCacheMetadata(
     val contentVersion: PreviewContentVersion,
     val encodedSentenceWindow: String
 ) {
-    constructor(
-        bookUri: String,
-        contentSize: Long?,
-        contentModifiedAt: Long?,
-        encodedSentenceWindow: String
-    ) : this(
-        bookUri = bookUri,
-        contentVersion = PreviewContentVersion.metadata(contentSize, contentModifiedAt),
-        encodedSentenceWindow = encodedSentenceWindow
-    )
-
     val contentSize: Long?
         get() = contentVersion.size
 
     val contentModifiedAt: Long?
         get() = (contentVersion as? PreviewContentVersion.Metadata)?.modifiedAt
+
+    companion object {
+        fun fromLegacyMetadata(
+            bookUri: String,
+            contentSize: Long?,
+            contentModifiedAt: Long?,
+            encodedSentenceWindow: String
+        ): BookPreviewCacheMetadata = BookPreviewCacheMetadata(
+            bookUri = bookUri,
+            contentVersion = PreviewContentVersion.metadata(contentSize, contentModifiedAt),
+            encodedSentenceWindow = encodedSentenceWindow
+        )
+    }
 }
 
 internal object BookPreviewCacheMetadataCodec {
