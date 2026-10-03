@@ -2188,7 +2188,10 @@ fun BookListenScreen(
                 restoredParagraphIndex = restoredParagraphIndex,
                 restoredSentenceIndex = restoredSentenceIndex,
                 authoritativeContentVersion = loadedBook.fingerprint.toPreviewContentVersion()
-            )
+            ).let { content -> content.copy(
+                cacheProvenance = BookPreviewCacheVersionPolicy.prepare(readerCycle,
+                    content.authoritativeContentVersion, bookFile.size, bookFile.modifiedAt)
+            ) }
             Log.i("FULL_CONTENT_VERSION_SHADOW", "event=READY generation=${readerCycle.generation} versionKind=FINGERPRINT size=${loadedBook.fingerprint.size} source=SHARED_RAW_READ")
             preparedReaderContent = prepared
             paragraphs = loaded
@@ -2219,7 +2222,8 @@ fun BookListenScreen(
         if (chapterRefreshKey == 0 && chapters.isNotEmpty() && activeChapterContainsCurrentParagraph) {
             return@LaunchedEffect
         }
-        val existingSnapshot = preparedReaderContent.sequentialTargetSnapshot
+        val sourceContent = preparedReaderContent
+        val existingSnapshot = sourceContent.sequentialTargetSnapshot
         val result = withContext(Dispatchers.Default) {
             val chaptersForBuild = if (chapterRefreshKey > 0 || chapters.isEmpty()) {
                 BookChapterDetector.detect(paragraphs)
@@ -2253,7 +2257,8 @@ fun BookListenScreen(
                 chapters = chaptersForBuild,
                 activeSentences = sentences,
                 sequentialTargetSnapshot = snapshot,
-                authoritativeContentVersion = preparedReaderContent.authoritativeContentVersion
+                authoritativeContentVersion = sourceContent.authoritativeContentVersion,
+                cacheProvenance = sourceContent.cacheProvenance
             )
         }
         preparedReaderContent = result
@@ -2506,7 +2511,7 @@ fun BookListenScreen(
                         }
                         val updatedState = BookReadStateCache(
                             bookUri = file.uri,
-                            contentVersion = PreviewContentVersion.metadata(file.size, file.modifiedAt),
+                            contentVersion = BookPreviewCacheVersionPolicy.preserveCached(state.contentVersion),
                             bookTitle = file.displayTitle(),
                             lastParagraphIndex = sentence.paragraphIndex,
                             lastSentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
@@ -2530,6 +2535,7 @@ fun BookListenScreen(
                         currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
                         currentReadingTargetName = target.name
                         saveBookReadStateCache(context.applicationContext, updatedState)
+                        readerContentCycleCoordinator.recordCacheWrite(updatedState.contentVersion)
                         Log.d(
                             BOOK_RESTORE_TAG,
                             "save snapshot reason=$reason currentChapterSentenceIndex=${sentence.chapterSentenceIndex} " +
@@ -3112,6 +3118,7 @@ fun BookListenScreen(
                         else -> currentChapter.title
                     }
                     val chapterSentences = activeChapterSentences
+                    val cacheProvenance = preparedReaderContent.cacheProvenance
                     val currentChapterSentenceIndex = chapterSentences
                         .indexOfFirst {
                             it.paragraphIndex == currentParagraphIndex &&
@@ -3345,7 +3352,10 @@ fun BookListenScreen(
                             initialFirstVisibleItemIndex = fullInitialFirstVisibleItemIndex,
                             initialFirstVisibleItemScrollOffset = fullInitialFirstVisibleOffset,
                             progressFractionOverride = null,
-                            onVisibleWindowSnapshot = { snapshot ->
+                            onVisibleWindowSnapshot = snapshot@{ snapshot ->
+                                val cacheVersion = BookPreviewCacheVersionPolicy.forFullSave(
+                                    cacheProvenance, readerContentCycleCoordinator.currentCycleSnapshot()
+                                ) ?: return@snapshot
                                 val currentCachedSentence = snapshot.sentences
                                     .firstOrNull { it.isCurrent }
                                     ?: snapshot.sentences.firstOrNull {
@@ -3353,10 +3363,7 @@ fun BookListenScreen(
                                     }
                                 val state = BookReadStateCache(
                                     bookUri = bookFile?.uri.orEmpty(),
-                                    contentVersion = PreviewContentVersion.metadata(
-                                        bookFile?.size,
-                                        bookFile?.modifiedAt
-                                    ),
+                                    contentVersion = cacheVersion,
                                     bookTitle = bookFile?.displayTitle().orEmpty(),
                                     lastParagraphIndex = currentCachedSentence?.paragraphIndex ?: currentParagraphIndex,
                                     lastSentenceIndexInParagraph = currentCachedSentence?.sentenceIndexInParagraph
@@ -3378,6 +3385,7 @@ fun BookListenScreen(
                                 )
                                 cachedReadState = state
                                 saveBookReadStateCache(context.applicationContext, state)
+                                readerContentCycleCoordinator.recordCacheWrite(cacheVersion, cacheProvenance)
                                 Log.d(
                                     BOOK_RESTORE_TAG,
                                     "Book restore snapshot saved start=${snapshot.cachedStartChapterSentenceIndex} " +
@@ -6210,7 +6218,8 @@ internal data class PreparedReaderContent(
     val restoredSentence: ReaderSentence? = null,
     val sequentialTargetSnapshot: BookSequentialTargetSnapshot =
         BookSequentialTargetSnapshot(emptyList()),
-    val authoritativeContentVersion: PreviewContentVersion = PreviewContentVersion.Unavailable
+    val authoritativeContentVersion: PreviewContentVersion = PreviewContentVersion.Unavailable,
+    val cacheProvenance: PreparedContentProvenance? = null
 )
 
 private suspend fun prepareBookContent(

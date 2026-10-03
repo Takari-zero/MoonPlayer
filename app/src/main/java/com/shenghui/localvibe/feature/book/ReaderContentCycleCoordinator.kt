@@ -62,6 +62,7 @@ internal class ReaderContentCycleCoordinator(
     private var currentCycle: ReaderContentCycle? = null
     private var released = false
     private var shadowState: CurrentVersionShadowState = CurrentVersionShadowState.Idle
+    private val cacheWriteDiagnostics = mutableSetOf<String>()
 
     fun beginContentCycle(
         bookUri: String,
@@ -77,6 +78,7 @@ internal class ReaderContentCycleCoordinator(
             ).also {
                 currentCycle = it
                 shadowState = CurrentVersionShadowState.NotStarted(it)
+                cacheWriteDiagnostics.clear()
             }
         }
         currentVersionLoader.beginContentCycle(
@@ -136,6 +138,23 @@ internal class ReaderContentCycleCoordinator(
     fun currentCycleSnapshot(): ReaderContentCycle? = synchronized(stateLock) { currentCycle }
 
     fun shadowStateSnapshot(): CurrentVersionShadowState = synchronized(stateLock) { shadowState }
+
+    fun recordCacheWrite(
+        version: PreviewContentVersion,
+        provenance: PreparedContentProvenance? = null
+    ) {
+        val message = synchronized(stateLock) {
+            if (released) return
+            val source = if (provenance == null) "CACHED_PREVIEW" else "FULL_CONTENT"
+            val generation = provenance?.cycle?.generation ?: currentCycle?.generation ?: -1L
+            val detail = if (provenance == null) "versionPreserved=true" else "authority=SHARED_RAW_READ"
+            val reason = provenance?.diagnosticReason?.let { " reason=$it" }.orEmpty()
+            "source=$source generation=$generation kind=${version.logKind()} " +
+                "size=${version.size ?: -1L} $detail$reason"
+        }
+        val first = synchronized(stateLock) { cacheWriteDiagnostics.add(message) }
+        if (first) Log.i("BOOK_CACHE_VERSION_WRITE", message)
+    }
 
     fun release() {
         val shouldRelease = synchronized(stateLock) {
