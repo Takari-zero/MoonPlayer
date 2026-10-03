@@ -40,7 +40,10 @@ internal class ReaderContentCycleCoordinator(
     private val shadowLogger: (String) -> Unit = { message ->
         Log.i(PREVIEW_VERSION_SHADOW_TAG, message)
     },
-    private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L }
+    private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
+    private val cacheVersionShadowLogger: (String) -> Unit = { message ->
+        Log.i("PREVIEW_CACHE_VERSION_SHADOW", message)
+    }
 ) {
     constructor(
         ownerScope: CoroutineScope,
@@ -63,11 +66,15 @@ internal class ReaderContentCycleCoordinator(
     private var released = false
     private var shadowState: CurrentVersionShadowState = CurrentVersionShadowState.Idle
     private val cacheWriteDiagnostics = mutableSetOf<String>()
+    private var entryCachedVersion: PreviewContentVersion = PreviewContentVersion.Unavailable
+    private var cycleBeginMs = 0L
+    private var comparedGeneration: Long? = null
 
     fun beginContentCycle(
         bookUri: String,
         expectedSize: Long?,
-        modifiedAt: Long?
+        modifiedAt: Long?,
+        cachedVersion: PreviewContentVersion = PreviewContentVersion.Unavailable
     ): ReaderContentCycle {
         val cycle = synchronized(stateLock) {
             check(!released) { "ReaderContentCycleCoordinator is released" }
@@ -79,6 +86,8 @@ internal class ReaderContentCycleCoordinator(
                 currentCycle = it
                 shadowState = CurrentVersionShadowState.NotStarted(it)
                 cacheWriteDiagnostics.clear()
+                entryCachedVersion = cachedVersion
+                cycleBeginMs = elapsedRealtimeMs()
             }
         }
         currentVersionLoader.beginContentCycle(
@@ -187,17 +196,45 @@ internal class ReaderContentCycleCoordinator(
                         "currentGeneration=${current?.generation ?: -1L}"
                 } else if (result.isReady) {
                     shadowState = CurrentVersionShadowState.Ready(cycle, result)
+                    publishCacheComparisonLocked(cycle, result)
                     "event=READY generation=${cycle.generation} " +
                         "versionKind=${result.version.logKind()} " +
                         "size=${result.version.size ?: -1L} elapsedMs=$elapsedMs"
                 } else {
                     shadowState = CurrentVersionShadowState.Failed(cycle, result)
+                    publishCacheComparisonLocked(cycle, result)
                     "event=FAILED generation=${cycle.generation} " +
                         "diagnosticReason=${result.diagnosticReason}"
                 }
             }
         }
         message?.let(shadowLogger)
+    }
+
+    // Called under stateLock so a newer cycle cannot overtake comparison publication.
+    private fun publishCacheComparisonLocked(
+        cycle: ReaderContentCycle,
+        result: CurrentPreviewContentVersionResult
+    ) {
+        if (comparedGeneration == cycle.generation ||
+            result.diagnosticReason == CurrentPreviewContentVersionFailureReason.STALE
+        ) return
+        comparedGeneration = cycle.generation
+        val current = if (result.isReady) result.version else PreviewContentVersion.Unavailable
+        val reason = PreviewContentVersionComparator.compare(entryCachedVersion, current)
+        val outcome = when (reason) {
+            null -> "MATCH"
+            PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE -> "UNAVAILABLE"
+            else -> "REJECT"
+        }
+        val detail = reason?.let { " reason=$it" }.orEmpty()
+        val failure = result.diagnosticReason?.let { " diagnosticReason=$it" }.orEmpty()
+        cacheVersionShadowLogger(
+            "generation=${cycle.generation} cachedKind=${entryCachedVersion.logKind()} " +
+                "currentKind=${current.logKind()} cachedSize=${entryCachedVersion.size ?: -1L} " +
+                "currentSize=${current.size ?: -1L} result=$outcome$detail$failure " +
+                "elapsedFromCycleBeginMs=${(elapsedRealtimeMs() - cycleBeginMs).coerceAtLeast(0L)}"
+        )
     }
 
     private fun PreviewContentVersion.logKind(): String = when (this) {

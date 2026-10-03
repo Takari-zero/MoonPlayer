@@ -149,6 +149,99 @@ class ReaderContentCycleCoordinatorTest {
         fixture.coordinator.release()
     }
 
+    @Test(timeout = 10_000)
+    fun comparisonKeepsEntryVersionAfterCacheReplacement() {
+        val stream = BlockingInputStream("same".encodeToByteArray())
+        val fixture = fixture(CountingOpener { stream })
+        var savedVersion = PreviewContentVersion.fingerprint(4L, "a".repeat(64))
+        val cycle = fixture.coordinator.beginContentCycle(BOOK_A, 4L, null, savedVersion)
+        fixture.coordinator.startCurrentVersionShadow(cycle)
+        assertTrue(stream.readStarted.await(5, TimeUnit.SECONDS))
+        savedVersion = fingerprint("same")
+        stream.finishRead.countDown()
+        awaitState { fixture.coordinator.shadowStateSnapshot() is CurrentVersionShadowState.Ready }
+
+        assertEquals(fingerprint("same"), savedVersion)
+        assertTrue(fixture.comparisons.single().contains("reason=CONTENT_FINGERPRINT_MISMATCH"))
+        fixture.coordinator.release()
+    }
+
+    @Test(timeout = 10_000)
+    fun sameGenerationPublishesOneMatchingComparison() {
+        val fixture = fixture(CountingOpener { ByteArrayInputStream("same".encodeToByteArray()) })
+        val cycle = fixture.coordinator.beginContentCycle(BOOK_A, 4L, null, fingerprint("same"))
+        assertTrue(fixture.coordinator.startCurrentVersionShadow(cycle))
+        repeat(5) { assertFalse(fixture.coordinator.startCurrentVersionShadow(cycle)) }
+        awaitState { fixture.coordinator.shadowStateSnapshot() is CurrentVersionShadowState.Ready }
+        assertFalse(fixture.coordinator.startCurrentVersionShadow(cycle))
+        assertTrue(fixture.comparisons.single().contains("result=MATCH"))
+        assertFalse(fixture.comparisons.single().contains(BOOK_A))
+        assertFalse(fixture.comparisons.single().contains((fingerprint("same") as PreviewContentVersion.Fingerprint).sha256Hex))
+        fixture.coordinator.release()
+    }
+
+    @Test(timeout = 10_000)
+    fun lateOtherBookCannotPublishComparison() = assertLateComparisonRejected(listOf(BOOK_A, BOOK_B))
+
+    @Test(timeout = 10_000)
+    fun lateSameBookReloadCannotPublishComparison() = assertLateComparisonRejected(listOf(BOOK_A, BOOK_A))
+
+    @Test(timeout = 10_000)
+    fun firstACannotPublishForThirdA() = assertLateComparisonRejected(listOf(BOOK_A, BOOK_B, BOOK_A))
+
+    @Test(timeout = 10_000)
+    fun failedCurrentLoaderCannotMatchOrFallbackToCache() {
+        val fixture = fixture(CountingOpener { null })
+        val cycle = fixture.coordinator.beginContentCycle(BOOK_A, 4L, null, fingerprint("same"))
+        fixture.coordinator.startCurrentVersionShadow(cycle)
+        awaitState { fixture.coordinator.shadowStateSnapshot() is CurrentVersionShadowState.Failed }
+        val message = fixture.comparisons.single()
+        assertTrue(message.contains("result=UNAVAILABLE"))
+        assertTrue(message.contains("currentKind=UNAVAILABLE"))
+        assertTrue(message.contains("diagnosticReason=STREAM_OPEN_FAILED"))
+        assertFalse(message.contains("result=MATCH"))
+        fixture.coordinator.release()
+    }
+
+    @Test(timeout = 10_000)
+    fun unavailableEntryCacheCannotBecomeMatch() {
+        val fixture = fixture(CountingOpener { null })
+        val cycle = fixture.coordinator.beginContentCycle(BOOK_A, 4L, 123L)
+        fixture.coordinator.startCurrentVersionShadow(cycle)
+        awaitState { fixture.coordinator.shadowStateSnapshot() is CurrentVersionShadowState.Ready }
+        assertTrue(fixture.comparisons.single().contains("result=UNAVAILABLE"))
+        fixture.coordinator.release()
+    }
+
+    private fun assertLateComparisonRejected(books: List<String>) {
+        val old = BlockingInputStream("old".encodeToByteArray(), ignoreClose = true)
+        val fixture = fixture(SequenceOpener(listOf(old, ByteArrayInputStream("new".encodeToByteArray()))))
+        val first = fixture.coordinator.beginContentCycle(books.first(), 3L, null, fingerprint("old"))
+        fixture.coordinator.startCurrentVersionShadow(first)
+        assertTrue(old.readStarted.await(5, TimeUnit.SECONDS))
+        var latest = first
+        for (book in books.drop(1)) {
+            latest = fixture.coordinator.beginContentCycle(book, 3L, null, fingerprint("new"))
+        }
+        fixture.coordinator.startCurrentVersionShadow(latest)
+        old.finishRead.countDown()
+        awaitState {
+            val state = fixture.coordinator.shadowStateSnapshot()
+            state is CurrentVersionShadowState.Ready && state.cycle == latest
+        }
+        awaitState { fixture.logs.any { it.contains("event=STALE generation=1 ") } }
+        assertEquals(1, fixture.comparisons.size)
+        assertTrue(fixture.comparisons.single().contains("generation=${latest.generation} "))
+        assertTrue(fixture.comparisons.single().contains("result=MATCH"))
+        fixture.coordinator.release()
+    }
+
+    private fun fingerprint(text: String): PreviewContentVersion = PreviewContentVersion.fingerprint(
+        text.encodeToByteArray().size.toLong(),
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
+            .joinToString("") { "%02x".format(it) }
+    )
+
     private fun fixture(opener: PreviewContentInputStreamOpener): Fixture {
         val scope = CoroutineScope(Dispatchers.Default)
         val loader = CurrentPreviewContentVersionLoader(
@@ -157,12 +250,14 @@ class ReaderContentCycleCoordinatorTest {
             fingerprintDispatcher = Dispatchers.IO
         )
         val logs = Collections.synchronizedList(mutableListOf<String>())
+        val comparisons = Collections.synchronizedList(mutableListOf<String>())
         val coordinator = ReaderContentCycleCoordinator(
             ownerScope = scope,
             currentVersionLoader = loader,
-            shadowLogger = logs::add
+            shadowLogger = logs::add,
+            cacheVersionShadowLogger = comparisons::add
         )
-        return Fixture(coordinator, loader, logs)
+        return Fixture(coordinator, loader, logs, comparisons)
     }
 
     private fun awaitState(predicate: () -> Boolean) {
@@ -176,7 +271,8 @@ class ReaderContentCycleCoordinatorTest {
     private data class Fixture(
         val coordinator: ReaderContentCycleCoordinator,
         val loader: CurrentPreviewContentVersionLoader,
-        val logs: List<String>
+        val logs: List<String>,
+        val comparisons: List<String>
     )
 
     private class CountingOpener(

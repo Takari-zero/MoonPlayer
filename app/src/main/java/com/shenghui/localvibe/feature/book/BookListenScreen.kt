@@ -2174,7 +2174,8 @@ fun BookListenScreen(
         val readerCycle = readerContentCycleCoordinator.beginContentCycle(
             bookUri = bookFile.uri,
             expectedSize = bookFile.size,
-            modifiedAt = bookFile.modifiedAt
+            modifiedAt = bookFile.modifiedAt,
+            cachedVersion = initialReadStateCache?.contentVersion ?: PreviewContentVersion.Unavailable
         )
         readerContentCycleCoordinator.startCurrentVersionShadow(readerCycle)
         val result = TxtBookReader.readBookWithFingerprint(context.applicationContext, bookFile.uri)

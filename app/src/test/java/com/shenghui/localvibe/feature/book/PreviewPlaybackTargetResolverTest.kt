@@ -225,6 +225,41 @@ class PreviewPlaybackTargetResolverTest {
         assertEquals(LocalPlaybackTargetSource.CACHED_PREVIEW, result.target.source)
     }
 
+    @Test
+    fun playIntentPrecedesCoordinatesAndVersion() {
+        assertRejected(PreviewPlaybackRejectionReason.PLAY_NOT_REQUESTED,
+            candidate = candidate.copy(paragraphIndex = -1),
+            cachedIdentity = identity.copy(version = PreviewContentVersion.Unavailable),
+            playRequested = false)
+    }
+
+    @Test
+    fun coordinatesPrecedeUriAndVersion() {
+        assertRejected(PreviewPlaybackRejectionReason.INVALID_COORDINATES,
+            candidate = candidate.copy(paragraphIndex = -1),
+            currentIdentity = identity.copy(bookUri = "other", version = PreviewContentVersion.Unavailable))
+    }
+
+    @Test
+    fun fingerprintMismatchPrecedesGenerationAndText() {
+        assertRejected(PreviewPlaybackRejectionReason.CONTENT_FINGERPRINT_MISMATCH,
+            cachedIdentity = identity.copy(version = fingerprint),
+            currentIdentity = identity.copy(version = PreviewContentVersion.fingerprint(4096L, "b".repeat(64))),
+            currentReaderGeneration = 9L, expectedText = "other", expectedStableTextHash = 0)
+    }
+
+    @Test
+    fun generationPrecedesTextHashAndText() {
+        assertRejected(PreviewPlaybackRejectionReason.GENERATION_MISMATCH,
+            currentReaderGeneration = 9L, expectedText = "other", expectedStableTextHash = 0)
+    }
+
+    @Test
+    fun hashPrecedesText() {
+        assertRejected(PreviewPlaybackRejectionReason.TEXT_HASH_MISMATCH,
+            expectedText = "other", expectedStableTextHash = 0)
+    }
+
     private fun resolve(
         candidate: CachedPreviewPlaybackCandidate = this.candidate,
         cachedIdentity: PreviewContentIdentity = identity,

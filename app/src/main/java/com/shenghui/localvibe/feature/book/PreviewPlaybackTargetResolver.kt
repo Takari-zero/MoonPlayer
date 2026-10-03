@@ -76,38 +76,8 @@ object PreviewPlaybackTargetResolver {
         if (cachedIdentity.bookUri != currentIdentity.bookUri) {
             return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.BOOK_URI_MISMATCH)
         }
-        val cachedVersion = cachedIdentity.version
-        val currentVersion = currentIdentity.version
-        if (
-            cachedVersion == PreviewContentVersion.Unavailable ||
-            currentVersion == PreviewContentVersion.Unavailable
-        ) {
-            return PreviewPlaybackResolution.Rejected(
-                PreviewPlaybackRejectionReason.CONTENT_VERSION_UNAVAILABLE
-            )
-        }
-        if (cachedVersion.size != currentVersion.size) {
-            return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.CONTENT_SIZE_MISMATCH)
-        }
-        if (cachedVersion::class != currentVersion::class) {
-            return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.CONTENT_VERSION_KIND_MISMATCH)
-        }
-        when {
-            cachedVersion is PreviewContentVersion.Metadata &&
-                currentVersion is PreviewContentVersion.Metadata &&
-                cachedVersion.modifiedAt != currentVersion.modifiedAt -> {
-                return PreviewPlaybackResolution.Rejected(
-                    PreviewPlaybackRejectionReason.CONTENT_MODIFIED_AT_MISMATCH
-                )
-            }
-
-            cachedVersion is PreviewContentVersion.Fingerprint &&
-                currentVersion is PreviewContentVersion.Fingerprint &&
-                cachedVersion.sha256Hex != currentVersion.sha256Hex -> {
-                return PreviewPlaybackResolution.Rejected(
-                    PreviewPlaybackRejectionReason.CONTENT_FINGERPRINT_MISMATCH
-                )
-            }
+        PreviewContentVersionComparator.compare(cachedIdentity.version, currentIdentity.version)?.let {
+            return PreviewPlaybackResolution.Rejected(it)
         }
         if (candidate.originReaderGeneration != currentReaderGeneration) {
             return PreviewPlaybackResolution.Rejected(PreviewPlaybackRejectionReason.GENERATION_MISMATCH)
