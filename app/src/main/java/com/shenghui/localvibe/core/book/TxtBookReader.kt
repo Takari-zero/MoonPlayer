@@ -9,20 +9,61 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 object TxtBookReader {
     suspend fun readParagraphs(context: Context, uriString: String): Result<List<String>> {
         return withContext(Dispatchers.IO) {
             runCatching {
-                val uri = Uri.parse(uriString)
-                val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
-                    input.readBytes()
-                } ?: error("Cannot open txt file")
-                val text = decodeText(bytes)
-                    .removePrefix("\uFEFF")
-                    .replace("\r\n", "\n")
-                    .replace('\r', '\n')
-                splitParagraphs(text)
+                parseParagraphs(readBytes(context, uriString))
+            }
+        }
+    }
+
+    suspend fun readBookWithFingerprint(
+        context: Context,
+        uriString: String
+    ): Result<TxtBookReadResult> {
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                readBytesWithFingerprint(readBytes(context, uriString))
+            }
+        }
+    }
+
+    internal fun readBytesWithFingerprint(bytes: ByteArray): TxtBookReadResult {
+        val fingerprint = BookContentFingerprint(
+            size = bytes.size.toLong(),
+            sha256Hex = sha256Hex(bytes)
+        )
+        return TxtBookReadResult(
+            paragraphs = parseParagraphs(bytes),
+            fingerprint = fingerprint
+        )
+    }
+
+    internal fun parseParagraphs(bytes: ByteArray): List<String> {
+        val text = decodeText(bytes)
+            .removePrefix("\uFEFF")
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+        return splitParagraphs(text)
+    }
+
+    private fun readBytes(context: Context, uriString: String): ByteArray {
+        val uri = Uri.parse(uriString)
+        return context.contentResolver.openInputStream(uri)?.use { input ->
+            input.readBytes()
+        } ?: error("Cannot open txt file")
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        return buildString(digest.size * 2) {
+            digest.forEach { value ->
+                val unsigned = value.toInt() and 0xFF
+                append(HEX_DIGITS[unsigned ushr 4])
+                append(HEX_DIGITS[unsigned and 0x0F])
             }
         }
     }
@@ -68,4 +109,6 @@ object TxtBookReader {
         }
         return chunks.filter { it.isNotBlank() }
     }
+
+    private const val HEX_DIGITS = "0123456789abcdef"
 }

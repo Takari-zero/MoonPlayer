@@ -1,5 +1,6 @@
 package com.shenghui.localvibe.feature.book
 
+import com.shenghui.localvibe.core.book.BookContentFingerprint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -58,6 +59,16 @@ class PreviewContentVersionTest {
         assertEquals(
             PreviewContentVersion.Unavailable,
             PreviewContentVersion.metadata(4096L, 0L)
+        )
+    }
+
+    @Test
+    fun coreFingerprintMapsWithoutChangingSizeOrHash() {
+        val fingerprint = BookContentFingerprint(4096L, "a".repeat(64))
+
+        assertEquals(
+            PreviewContentVersion.fingerprint(4096L, "a".repeat(64)),
+            fingerprint.toPreviewContentVersion()
         )
     }
 }

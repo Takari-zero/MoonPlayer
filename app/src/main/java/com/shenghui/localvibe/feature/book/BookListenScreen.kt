@@ -2177,18 +2177,19 @@ fun BookListenScreen(
             modifiedAt = bookFile.modifiedAt
         )
         readerContentCycleCoordinator.startCurrentVersionShadow(readerCycle)
-        val result = withContext(Dispatchers.IO) {
-            TxtBookReader.readParagraphs(context.applicationContext, bookFile.uri)
-        }
+        val result = TxtBookReader.readBookWithFingerprint(context.applicationContext, bookFile.uri)
         if (result.isSuccess) {
-            val loaded = result.getOrNull().orEmpty()
+            val loadedBook = result.getOrThrow()
+            val loaded = loadedBook.paragraphs
             val restoredParagraphIndex = currentParagraphIndex.coerceIn(0, (loaded.size - 1).coerceAtLeast(0))
             val restoredSentenceIndex = currentSentenceIndexInParagraph.coerceAtLeast(0)
             val prepared = prepareBookContent(
                 paragraphs = loaded,
                 restoredParagraphIndex = restoredParagraphIndex,
-                restoredSentenceIndex = restoredSentenceIndex
+                restoredSentenceIndex = restoredSentenceIndex,
+                authoritativeContentVersion = loadedBook.fingerprint.toPreviewContentVersion()
             )
+            Log.i("FULL_CONTENT_VERSION_SHADOW", "event=READY generation=${readerCycle.generation} versionKind=FINGERPRINT size=${loadedBook.fingerprint.size} source=SHARED_RAW_READ")
             preparedReaderContent = prepared
             paragraphs = loaded
             currentParagraphIndex = restoredParagraphIndex
@@ -2251,7 +2252,8 @@ fun BookListenScreen(
             PreparedReaderContent(
                 chapters = chaptersForBuild,
                 activeSentences = sentences,
-                sequentialTargetSnapshot = snapshot
+                sequentialTargetSnapshot = snapshot,
+                authoritativeContentVersion = preparedReaderContent.authoritativeContentVersion
             )
         }
         preparedReaderContent = result
@@ -6195,25 +6197,27 @@ private fun LocalMediaFile.displayTitle(): String {
     return name.substringBeforeLast('.', name)
 }
 
-private data class ReaderSentence(
+internal data class ReaderSentence(
     val text: String,
     val paragraphIndex: Int,
     val sentenceIndexInParagraph: Int,
     val chapterSentenceIndex: Int
 )
 
-private data class PreparedReaderContent(
+internal data class PreparedReaderContent(
     val chapters: List<BookChapter> = emptyList(),
     val activeSentences: List<ReaderSentence> = emptyList(),
     val restoredSentence: ReaderSentence? = null,
     val sequentialTargetSnapshot: BookSequentialTargetSnapshot =
-        BookSequentialTargetSnapshot(emptyList())
+        BookSequentialTargetSnapshot(emptyList()),
+    val authoritativeContentVersion: PreviewContentVersion = PreviewContentVersion.Unavailable
 )
 
 private suspend fun prepareBookContent(
     paragraphs: List<String>,
     restoredParagraphIndex: Int,
-    restoredSentenceIndex: Int
+    restoredSentenceIndex: Int,
+    authoritativeContentVersion: PreviewContentVersion
 ): PreparedReaderContent = withContext(Dispatchers.Default) {
     val chapters = BookChapterDetector.detect(paragraphs)
     val chapter = chapters.lastOrNull { it.paragraphIndex <= restoredParagraphIndex }
@@ -6240,7 +6244,8 @@ private suspend fun prepareBookContent(
             paragraphs = paragraphs,
             chapters = chapters,
             splitParagraph = ::splitParagraphIntoSentences
-        ).snapshot
+        ).snapshot,
+        authoritativeContentVersion = authoritativeContentVersion
     )
 }
 

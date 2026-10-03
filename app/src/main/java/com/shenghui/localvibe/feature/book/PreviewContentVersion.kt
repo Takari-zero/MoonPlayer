@@ -1,5 +1,7 @@
 package com.shenghui.localvibe.feature.book
 
+import com.shenghui.localvibe.core.book.BookContentFingerprint
+
 sealed interface PreviewContentVersion {
     val size: Long?
 
@@ -49,4 +51,8 @@ sealed interface PreviewContentVersion {
             }
         }
     }
+}
+
+internal fun BookContentFingerprint.toPreviewContentVersion(): PreviewContentVersion {
+    return PreviewContentVersion.fingerprint(size, sha256Hex)
 }
