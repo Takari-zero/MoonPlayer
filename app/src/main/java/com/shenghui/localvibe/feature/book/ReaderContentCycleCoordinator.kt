@@ -148,6 +148,11 @@ internal class ReaderContentCycleCoordinator(
 
     fun shadowStateSnapshot(): CurrentVersionShadowState = synchronized(stateLock) { shadowState }
 
+    fun currentVersionSnapshot(cycle: ReaderContentCycle): PreviewContentVersion? = synchronized(stateLock) {
+        val ready = shadowState as? CurrentVersionShadowState.Ready
+        ready?.takeIf { !released && currentCycle == cycle && it.cycle == cycle }?.result?.version
+    }
+
     fun recordCacheWrite(
         version: PreviewContentVersion,
         provenance: PreparedContentProvenance? = null

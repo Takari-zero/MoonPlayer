@@ -3024,6 +3024,8 @@ fun BookListenScreen(
                                             "fullSize=${paragraphs.size} cachedSize=${cachedSentences.size}"
                                     )
                                 } else {
+                                    PreviewTargetShadow.observeClick(readerContentCycleCoordinator,
+                                        initialReadStateCache, sentence, contentReadiness, playRequested = true)
                                     if (isPlaying) {
                                         stopCurrentPlayback(reason = "preview_target_replace", invalidateSession = true)
                                         isPlaying = false
@@ -3321,6 +3323,8 @@ fun BookListenScreen(
                         },
                         onSentenceClick = { sentence ->
                             logBookUiEvent("SENTENCE_CLICK", target = sentence.chapterSentenceIndex)
+                            PreviewTargetShadow.observeClick(readerContentCycleCoordinator,
+                                initialReadStateCache, sentence, contentReadiness, playRequested = true)
                             jumpToSentence(
                                 sentence,
                                 autoPlay = true

@@ -213,6 +213,33 @@ class ReaderContentCycleCoordinatorTest {
         fixture.coordinator.release()
     }
 
+    @Test(timeout = 10_000)
+    fun currentVersionSnapshotIsReadyOnlyAndDoesNotStartRead() {
+        val opener = CountingOpener { null }
+        val fixture = fixture(opener)
+        val first = fixture.coordinator.beginContentCycle(BOOK_A, 4L, null)
+        assertEquals(null, fixture.coordinator.currentVersionSnapshot(first))
+        assertEquals(0, opener.opens.get())
+        fixture.coordinator.startCurrentVersionShadow(first)
+        awaitState { fixture.coordinator.shadowStateSnapshot() is CurrentVersionShadowState.Failed }
+        assertEquals(null, fixture.coordinator.currentVersionSnapshot(first))
+        fixture.coordinator.release()
+    }
+
+    @Test(timeout = 10_000)
+    fun currentVersionSnapshotRejectsReloadAndReleasedCycle() {
+        val fixture = fixture(CountingOpener { null })
+        val first = fixture.coordinator.beginContentCycle(BOOK_A, 4L, 123L)
+        fixture.coordinator.startCurrentVersionShadow(first)
+        awaitState { fixture.coordinator.currentVersionSnapshot(first) != null }
+        val second = fixture.coordinator.beginContentCycle(BOOK_A, 4L, 123L)
+        fixture.coordinator.startCurrentVersionShadow(second)
+        awaitState { fixture.coordinator.currentVersionSnapshot(second) != null }
+        assertEquals(null, fixture.coordinator.currentVersionSnapshot(first))
+        fixture.coordinator.release()
+        assertEquals(null, fixture.coordinator.currentVersionSnapshot(second))
+    }
+
     private fun assertLateComparisonRejected(books: List<String>) {
         val old = BlockingInputStream("old".encodeToByteArray(), ignoreClose = true)
         val fixture = fixture(SequenceOpener(listOf(old, ByteArrayInputStream("new".encodeToByteArray()))))
