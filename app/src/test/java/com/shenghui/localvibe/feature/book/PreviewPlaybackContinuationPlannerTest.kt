@@ -103,9 +103,9 @@ class PreviewPlaybackContinuationPlannerTest {
     }
 
     @Test
-    fun rejectedVerificationStopsFutureContinuationWhileLocalIsPlaying() {
+    fun rejectedVerificationKeepsCurrentLocalSentenceWhilePlaying() {
         assertDecision(
-            PreviewPlaybackContinuationDecision.STOP_AUTO_CONTINUE,
+            PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK,
             baseline.copy(
                 fullReaderStatus = FullReaderStatus.READY,
                 preparedVerification = PreparedTargetVerificationStatus.REJECTED

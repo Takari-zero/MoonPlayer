@@ -62,7 +62,11 @@ object PreviewPlaybackContinuationPlanner {
                 }
 
                 PreparedTargetVerificationStatus.REJECTED -> {
-                    PreviewPlaybackContinuationDecision.STOP_AUTO_CONTINUE
+                    if (snapshot.localSentenceDrained) {
+                        PreviewPlaybackContinuationDecision.STOP_AUTO_CONTINUE
+                    } else {
+                        PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK
+                    }
                 }
 
                 PreparedTargetVerificationStatus.MATCHED -> if (snapshot.localSentenceDrained) {
