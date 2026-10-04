@@ -1449,7 +1449,10 @@ fun BookListenScreen(
                 selectedVoiceName?.let { ttsController?.selectVoice(it) }
                 ttsVoices = ttsController?.getAvailableVoices().orEmpty()
             },
-            onError = { message ->
+            onError = { message, callbackSessionId ->
+                val accepted = callbackSessionId == null ||
+                    (callbackSessionId == latestPlaybackSessionId && !screenDisposed.get())
+                if (!accepted) return@BookTtsController
                 ttsError = message
                 isTtsReady = false
                 isTtsChecking = false
@@ -1463,7 +1466,10 @@ fun BookListenScreen(
             onWarning = { message ->
                 ttsError = message
             },
-            onDone = {
+            onDone = { completedSessionId ->
+                val accepted = completedSessionId != null &&
+                    completedSessionId == latestPlaybackSessionId && !screenDisposed.get()
+                if (!accepted) return@BookTtsController
                 if (latestActivePlaybackEngineName != BookPlaybackEngine.SYSTEM_TTS.name) {
                     Log.d(
                         "BookReaderPlayback",
@@ -1756,7 +1762,8 @@ fun BookListenScreen(
             val result = ttsController?.speakSentence(
                 text = textToSpeak.orEmpty(),
                 speechRate = latestSpeechRate,
-                pitch = pitch
+                pitch = pitch,
+                playbackSessionId = sessionId
             )
             if (result?.success == true) {
                 activePlaybackEngineName = BookPlaybackEngine.SYSTEM_TTS.name
@@ -1908,7 +1915,8 @@ fun BookListenScreen(
             val result = ttsController?.speakSentence(
                 text = textToSpeak.orEmpty(),
                 speechRate = latestSpeechRate,
-                pitch = pitch
+                pitch = pitch,
+                playbackSessionId = sessionId
             )
             return if (result?.success == true) {
                 activePlaybackEngineName = BookPlaybackEngine.SYSTEM_TTS.name
@@ -2797,6 +2805,7 @@ fun BookListenScreen(
                                 aishell3Player = null
                             }
                             withContext(Dispatchers.Main) {
+                                if (sessionId != playbackSessionId || screenDisposed.get()) return@withContext
                                 when (result) {
                                     StreamingTtsResult.Success -> {
                                         if (synthesizedChunks.isNotEmpty()) {
