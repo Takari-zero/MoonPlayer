@@ -285,6 +285,7 @@ fun BookListenScreen(
     }
 
     var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
+    val sentencePlaybackDispatcher = remember { BookSentencePlaybackDispatcher() }
     val builtInOfflineTtsEngine = remember { BuiltInOfflineTtsEngine() }
     val aishell3TtsEngine = remember { Aishell3SegmentedStreamingTtsEngine(context.applicationContext) }
     val matchaPlaybackCoordinator = remember(context) { BookMatchaPlaybackCoordinator(context.applicationContext) }
@@ -773,7 +774,10 @@ fun BookListenScreen(
         key: String,
         chunks: List<PcmAudioChunk>,
         paragraphIndex: Int,
-        onSuccess: () -> Unit
+        onSuccess: () -> Unit = {},
+        onStarted: (Long) -> Unit = {},
+        onDrained: (Long) -> Unit = {},
+        onFailed: (Long, String) -> Unit = { _, _ -> }
     ) {
         coroutineScope.launch {
             awaitAishell3OutputSwitch(trigger = "prepared playback", sessionId = sessionId)
@@ -834,6 +838,7 @@ fun BookListenScreen(
                                     isAishell3Paused = false
                                     isPlaying = true
                                     saveProgress(paragraphIndex)
+                                    onStarted(sessionId)
                                 }
                             }
                             Log.d(
@@ -871,6 +876,7 @@ fun BookListenScreen(
                     }
                 }
                 if (completed && isPreparedSessionActive()) {
+                    onDrained(sessionId)
                     onSuccess()
                 }
             } catch (error: Throwable) {
@@ -884,6 +890,7 @@ fun BookListenScreen(
                     }
                 }
                 Log.e("BookReaderPlayback", "prepared playback failed key=$key", error)
+                onFailed(sessionId, error.message ?: error::class.java.simpleName)
             }
         }
     }
@@ -894,12 +901,16 @@ fun BookListenScreen(
         chapterSentenceIndex: Int,
         text: String,
         paragraphIndex: Int,
-        onSuccess: () -> Unit,
-        onError: (String) -> Unit
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit,
+        onStarted: (Long) -> Unit = {},
+        onDrained: (Long) -> Unit = {},
+        onFailed: (Long, String) -> Unit = { _, _ -> }
     ) {
         coroutineScope.launch {
             val segments = aishell3TtsEngine.splitTextSegments(text)
             if (segments.isEmpty()) {
+                onFailed(sessionId, "text is blank")
                 onError("text is blank")
                 return@launch
             }
@@ -994,6 +1005,7 @@ fun BookListenScreen(
                                 isAishell3Paused = false
                                 isPlaying = true
                                 saveProgress(paragraphIndex)
+                                onStarted(sessionId)
                             }
                         }
                         Log.i(
@@ -1062,6 +1074,7 @@ fun BookListenScreen(
                 }
                 if (isSegmentSessionActive()) {
                     Log.i(BOOK_HOT_TTS_TAG, "sentence segmented playback end current=$chapterSentenceIndex")
+                    onDrained(sessionId)
                     onSuccess()
                 }
             } catch (error: Throwable) {
@@ -1080,6 +1093,7 @@ fun BookListenScreen(
                     }
                 }
                 Log.e("BookReaderPlayback", "segmented playback failed key=$sentenceKey", error)
+                onFailed(sessionId, error.message ?: error::class.java.simpleName)
                 onError(error.message ?: error::class.java.simpleName)
             }
         }
@@ -1450,6 +1464,9 @@ fun BookListenScreen(
                 ttsVoices = ttsController?.getAvailableVoices().orEmpty()
             },
             onError = { message, callbackSessionId ->
+                callbackSessionId?.let { sessionId ->
+                    sentencePlaybackDispatcher.notifySystemTtsFailed(sessionId, message)
+                }
                 val accepted = callbackSessionId == null ||
                     (callbackSessionId == latestPlaybackSessionId && !screenDisposed.get())
                 if (!accepted) return@BookTtsController
@@ -1466,19 +1483,11 @@ fun BookListenScreen(
             onWarning = { message ->
                 ttsError = message
             },
+            onStop = { callbackSessionId ->
+                callbackSessionId?.let(sentencePlaybackDispatcher::clearSystemTts)
+            },
             onDone = { completedSessionId ->
-                val accepted = completedSessionId != null &&
-                    completedSessionId == latestPlaybackSessionId && !screenDisposed.get()
-                if (!accepted) return@BookTtsController
-                if (latestActivePlaybackEngineName != BookPlaybackEngine.SYSTEM_TTS.name) {
-                    Log.d(
-                        "BookReaderPlayback",
-                        "ignore system onDone activeEngine=$latestActivePlaybackEngineName"
-                    )
-                    return@BookTtsController
-                }
-                if (!latestIsPlaying || latestParagraphs.isEmpty()) return@BookTtsController
-                continuePlaybackAfterCurrentTarget(latestPlaybackSessionId)
+                completedSessionId?.let(sentencePlaybackDispatcher::notifySystemTtsDrained)
             }
         )
         ttsController = controller
@@ -1753,199 +1762,185 @@ fun BookListenScreen(
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
         onBeforeSpeak()
 
-        if (dispatchEngine == BookPlaybackEngine.SYSTEM_TTS) {
-            Log.i(
-                "BookReaderPlayback",
-                "preferred provider dispatch preferred=${playbackEngineSnapshot.preferred.name} effective=SYSTEM_TTS " +
-                    "sessionId=$sessionId rate=$latestSpeechRate"
-            )
-            val result = ttsController?.speakSentence(
-                text = textToSpeak.orEmpty(),
-                speechRate = latestSpeechRate,
-                pitch = pitch,
-                playbackSessionId = sessionId
-            )
-            if (result?.success == true) {
-                activePlaybackEngineName = BookPlaybackEngine.SYSTEM_TTS.name
-                isPlaying = true
-                saveProgress(targetParagraphIndex)
-            } else {
-                isPlaying = false
-                activePlaybackEngineName = BookPlaybackEngine.NONE.name
-                ttsError = result?.message ?: "系统语音不可用，请安装或启用系统语音引擎后重试"
-                showVoicePackageSheet = true
-                Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-
-        if (dispatchEngine == BookPlaybackEngine.MATCHA_EXPERIMENTAL) {
-            val request = BookSequentialPlaybackBridge(playbackTargetSnapshot)
-                .createMatchaPlaybackRequest(
-                    chapterSentenceIndex = targetChapterSentenceIndex,
-                    paragraphIndex = targetParagraphIndex,
-                    sentenceIndexInParagraph = targetSentenceIndex,
-                    text = textToSpeak.orEmpty(),
-                    speechRate = latestBookSpeechRate.multiplier,
-                    sessionId = sessionId,
-                    playbackIntentPlaying = playbackIntentPlaying
-                )
-            coroutineScope.launch {
-                val result = matchaPlaybackCoordinator.play(
-                    request = request,
-                    onStarted = {
-                        if (sessionId == playbackSessionId && !screenDisposed.get()) {
-                            activePlaybackEngineName = BookPlaybackEngine.MATCHA_EXPERIMENTAL.name
-                            isPlaying = true
-                            saveProgress(targetParagraphIndex)
-                        }
-                    },
-                    onFirstWrite = {
-                        matchaPlaybackCoordinator.scheduleNextPrewarm(
-                            MatchaPrewarmScheduleRequest(request.targetId, playbackTargetSnapshot, request.speechRate, request.sessionId)
-                        )
-                    }
-                )
-                withContext(Dispatchers.Main.immediate) {
-                    if (sessionId != playbackSessionId || screenDisposed.get()) return@withContext
-                    if (result is StreamingTtsResult.Success) {
-                        isPlaying = false
-                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
-                        continuePlaybackAfterCurrentTarget(sessionId)
-                    } else {
-                        isPlaying = false
-                        activePlaybackEngineName = BookPlaybackEngine.NONE.name
-                    }
-                }
-            }
-            return
-        }
-
-        Log.i(
-            "BookReaderPlayback",
-            "preferred provider dispatch preferred=${playbackEngineSnapshot.preferred.name} effective=AISHELL3 " +
-                "sessionId=$sessionId rate=${latestBookSpeechRate.multiplier}"
-        )
-
-        Log.i(BOOK_HOT_TTS_TAG, "play prepared path enter key=$preparedKey")
-        BookAishell3PreparedAudioCache.get(preparedKey)?.let { chunks ->
-            Log.i(
-                BOOK_HOT_TTS_TAG,
-                "prepared hit key=$preparedKey currentIndex=$targetChapterSentenceIndex " +
-                    "chunks=${chunks.size} prepared cache size=${BookAishell3PreparedAudioCache.size()}"
-            )
-            Log.d(
-                "BookReaderPlayback",
-                "play prepared audio hit costMs=0 key=$preparedKey " +
-                    "currentChapterSentenceIndex=$targetChapterSentenceIndex chunks=${chunks.size} " +
-                    "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
-            )
-            playPreparedAishell3Audio(
-                sessionId = sessionId,
-                key = preparedKey,
-                chunks = chunks,
+        val playbackRequest = BookSentencePlaybackRequest(
+            target = BookPlaybackTargetId(
+                chapterSentenceIndex = targetChapterSentenceIndex,
                 paragraphIndex = targetParagraphIndex,
-                onSuccess = { continuePlaybackAfterCurrentTarget(sessionId) }
-            )
-            return
-        }
-        val missReason = if (BookAishell3PreparedAudioCache.isPrewarming(preparedKey)) {
-            "prewarm_in_progress"
-        } else {
-            "cache_empty_or_key_not_ready"
-        }
-        if (!skipPreparedWait && missReason == "prewarm_in_progress") {
-            Log.i(BOOK_HOT_TTS_TAG, "prepared wait in-flight key=$preparedKey")
-            coroutineScope.launch {
-                val waitStartedAt = SystemClock.elapsedRealtime()
-                val waitedChunks = waitForPreparedAishell3Audio(preparedKey)
-                val waitMs = SystemClock.elapsedRealtime() - waitStartedAt
-                if (sessionId != playbackSessionId) return@launch
-                if (waitedChunks != null) {
-                    Log.i(
-                        BOOK_HOT_TTS_TAG,
-                        "prepared hit after wait key=$preparedKey currentIndex=$targetChapterSentenceIndex " +
-                            "chunks=${waitedChunks.size} waitMs=$waitMs"
-                    )
-                    playPreparedAishell3Audio(
-                        sessionId = sessionId,
-                        key = preparedKey,
-                        chunks = waitedChunks,
-                        paragraphIndex = targetParagraphIndex,
-                        onSuccess = { continuePlaybackAfterCurrentTarget(sessionId) }
-                    )
-                    return@launch
-                }
-                Log.i(
-                    BOOK_HOT_TTS_TAG,
-                    "prepared miss key=$preparedKey reason=prewarm_timeout currentIndex=$targetChapterSentenceIndex waitMs=$waitMs"
-                )
-                Log.i(BOOK_HOT_TTS_TAG, "prepared wait timeout retry without wait key=$preparedKey")
-                speakCurrentSentence(skipPreparedWait = true)
-            }
-            return
-        }
-        Log.i(
-            BOOK_HOT_TTS_TAG,
-            "prepared miss key=$preparedKey reason=$missReason currentIndex=$targetChapterSentenceIndex " +
-                "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
-        )
-        Log.i(BOOK_HOT_TTS_TAG, "fallback synth start key=$preparedKey")
-        Log.d(
-            "BookReaderPlayback",
-            "play prepared audio miss synth costMs=0 key=$preparedKey " +
-                "currentChapterSentenceIndex=$targetChapterSentenceIndex " +
-                "prewarming=${BookAishell3PreparedAudioCache.isPrewarming(preparedKey)} " +
-                "prepared cache size=${BookAishell3PreparedAudioCache.size()}"
-        )
-
-        fun fallbackToSystemTts(reason: String): Boolean {
-            Log.d("BookReaderPlayback", "fallback reason=$reason sessionId=$sessionId")
-            if (sessionId != playbackSessionId) {
-                Log.d("BookReaderPlayback", "discard stale fallback sessionId=$sessionId current=$playbackSessionId")
-                return false
-            }
-            if (!isTtsReady) {
-                isPlaying = false
-                activePlaybackEngineName = BookPlaybackEngine.NONE.name
-                showVoicePackageSheet = true
-                Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
-                return false
-            }
-            val result = ttsController?.speakSentence(
-                text = textToSpeak.orEmpty(),
-                speechRate = latestSpeechRate,
-                pitch = pitch,
-                playbackSessionId = sessionId
-            )
-            return if (result?.success == true) {
-                activePlaybackEngineName = BookPlaybackEngine.SYSTEM_TTS.name
-                isPlaying = true
-                saveProgress(targetParagraphIndex)
-                true
-            } else {
-                isPlaying = false
-                activePlaybackEngineName = BookPlaybackEngine.NONE.name
-                ttsError = result?.message ?: "系统语音不可用，请安装或启用系统语音引擎后重试"
-                showVoicePackageSheet = true
-                Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
-                false
-            }
-        }
-
-        playSegmentedAishell3Audio(
-            sessionId = sessionId,
-            sentenceKey = preparedKey,
-            chapterSentenceIndex = targetChapterSentenceIndex,
+                sentenceIndexInParagraph = targetSentenceIndex
+            ),
             text = textToSpeak.orEmpty(),
-            paragraphIndex = targetParagraphIndex,
-            onSuccess = { continuePlaybackAfterCurrentTarget(sessionId) },
-            onError = { error ->
-                val didFallback = fallbackToSystemTts(error)
-                if (!didFallback) {
-                    Log.d("BookReaderPlayback", "all engines unavailable sessionId=$sessionId")
+            provider = dispatchEngine,
+            speechRate = latestBookSpeechRate.multiplier,
+            playbackSessionId = sessionId,
+            preparedSnapshot = playbackTargetSnapshot,
+            allowNextPrewarm = true,
+            playbackIntentPlaying = playbackIntentPlaying
+        )
+        fun callbacksFor(request: BookSentencePlaybackRequest) = BookSentencePlaybackCallbacks(
+            onStarted = { callbackSessionId ->
+                if (callbackSessionId == playbackSessionId && !screenDisposed.get()) {
+                    activePlaybackEngineName = request.provider.name
+                    isPlaying = true
+                    saveProgress(request.target.paragraphIndex)
+                }
+            },
+            onDrained = { callbackSessionId ->
+                if (callbackSessionId != playbackSessionId || screenDisposed.get()) return@BookSentencePlaybackCallbacks
+                if (request.provider == BookPlaybackEngine.SYSTEM_TTS &&
+                    latestActivePlaybackEngineName != BookPlaybackEngine.SYSTEM_TTS.name
+                ) {
+                    Log.d(
+                        "BookReaderPlayback",
+                        "ignore system onDone activeEngine=$latestActivePlaybackEngineName"
+                    )
+                    return@BookSentencePlaybackCallbacks
+                }
+                if (!latestIsPlaying || latestParagraphs.isEmpty()) return@BookSentencePlaybackCallbacks
+                isPlaying = false
+                activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                continuePlaybackAfterCurrentTarget(callbackSessionId)
+            },
+            onFailed = { callbackSessionId, reason ->
+                if (!BookPlaybackSessionGuard.isActive(callbackSessionId, playbackSessionId, screenDisposed.get())) return@BookSentencePlaybackCallbacks
+                isPlaying = false
+                activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                if (request.provider == BookPlaybackEngine.SYSTEM_TTS) {
+                    ttsError = reason
+                    showVoicePackageSheet = true
                 }
             }
+        )
+        lateinit var providerHandlers: BookSentencePlaybackProviderHandlers
+
+        providerHandlers = BookSentencePlaybackProviderHandlers(
+            matcha = BookSentencePlaybackProviderHandler { request, callbacks ->
+                coroutineScope.launch {
+                    val matchaRequest = MatchaPlaybackRequest(
+                        targetId = request.target,
+                        text = request.text,
+                        speechRate = request.speechRate,
+                        sessionId = request.playbackSessionId,
+                        playbackIntentPlaying = request.playbackIntentPlaying,
+                        snapshot = request.preparedSnapshot
+                    )
+                    val result = matchaPlaybackCoordinator.play(
+                        request = matchaRequest,
+                        onStarted = { callbacks.onStarted(request.playbackSessionId) },
+                        onFirstWrite = {
+                            if (request.allowNextPrewarm) {
+                                request.preparedSnapshot?.let { snapshot ->
+                                    matchaPlaybackCoordinator.scheduleNextPrewarm(
+                                        MatchaPrewarmScheduleRequest(
+                                            request.target,
+                                            snapshot,
+                                            request.speechRate,
+                                            request.playbackSessionId
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    )
+                    withContext(Dispatchers.Main.immediate) {
+                        if (result is StreamingTtsResult.Success) {
+                            callbacks.onDrained(request.playbackSessionId)
+                        } else {
+                            callbacks.onFailed(request.playbackSessionId, "Matcha playback stopped")
+                        }
+                    }
+                }
+            },
+            systemTts = BookSentencePlaybackProviderHandler { request, callbacks ->
+                val result = ttsController?.speakSentence(
+                    text = request.text,
+                    speechRate = request.speechRate,
+                    pitch = pitch,
+                    playbackSessionId = request.playbackSessionId
+                )
+                if (result?.success == true) {
+                    callbacks.onStarted(request.playbackSessionId)
+                } else {
+                    callbacks.onFailed(
+                        request.playbackSessionId,
+                        result?.message ?: "系统语音不可用，请安装或启用系统语音引擎"
+                    )
+                    Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
+                }
+            },
+            aishell3 = BookSentencePlaybackProviderHandler { request, callbacks ->
+                val requestSessionId = request.playbackSessionId
+                val requestTarget = request.target
+                val requestPreparedKey = aishell3PreparedKey(requestTarget.chapterSentenceIndex, request.text)
+                Log.i(BOOK_HOT_TTS_TAG, "play prepared path enter key=$requestPreparedKey")
+                BookAishell3PreparedAudioCache.get(requestPreparedKey)?.let { chunks ->
+                    playPreparedAishell3Audio(
+                        sessionId = requestSessionId,
+                        key = requestPreparedKey,
+                        chunks = chunks,
+                        paragraphIndex = requestTarget.paragraphIndex,
+                        onStarted = callbacks.onStarted,
+                        onDrained = callbacks.onDrained,
+                        onFailed = callbacks.onFailed
+                    )
+                    return@BookSentencePlaybackProviderHandler
+                }
+                val missReason = if (BookAishell3PreparedAudioCache.isPrewarming(requestPreparedKey)) {
+                    "prewarm_in_progress"
+                } else {
+                    "cache_empty_or_key_not_ready"
+                }
+                if (!skipPreparedWait && missReason == "prewarm_in_progress") {
+                    coroutineScope.launch {
+                        val waitedChunks = waitForPreparedAishell3Audio(requestPreparedKey)
+                        if (requestSessionId != playbackSessionId) return@launch
+                        if (waitedChunks != null) {
+                            playPreparedAishell3Audio(
+                                sessionId = requestSessionId,
+                                key = requestPreparedKey,
+                                chunks = waitedChunks,
+                                paragraphIndex = requestTarget.paragraphIndex,
+                                onStarted = callbacks.onStarted,
+                                onDrained = callbacks.onDrained,
+                                onFailed = callbacks.onFailed
+                            )
+                        } else {
+                            speakCurrentSentence(skipPreparedWait = true)
+                        }
+                    }
+                    return@BookSentencePlaybackProviderHandler
+                }
+                fun fallbackToSystemTts(reason: String) {
+                    Log.d("BookReaderPlayback", "fallback reason=$reason sessionId=$requestSessionId")
+                    if (requestSessionId != playbackSessionId) return
+                    val systemRequest = request.copy(provider = BookPlaybackEngine.SYSTEM_TTS)
+                    if (!isTtsReady) {
+                        callbacksFor(systemRequest).onFailed(requestSessionId, "请先安装或启用系统语音")
+                        Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                    sentencePlaybackDispatcher.dispatch(
+                        systemRequest,
+                        callbacksFor(systemRequest),
+                        providerHandlers
+                    )
+                }
+                playSegmentedAishell3Audio(
+                    sessionId = requestSessionId,
+                    sentenceKey = requestPreparedKey,
+                    chapterSentenceIndex = requestTarget.chapterSentenceIndex,
+                    text = request.text,
+                    paragraphIndex = requestTarget.paragraphIndex,
+                    onError = ::fallbackToSystemTts,
+                    onStarted = callbacks.onStarted,
+                    onDrained = callbacks.onDrained,
+                    onFailed = callbacks.onFailed
+                )
+            }
+        )
+        sentencePlaybackDispatcher.dispatch(
+            request = playbackRequest,
+            callbacks = callbacksFor(playbackRequest),
+            handlers = providerHandlers
         )
     }
 
