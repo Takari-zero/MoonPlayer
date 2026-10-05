@@ -92,7 +92,7 @@ class PreviewTargetShadowTest {
         assertOldCandidateRejected(listOf(identity.bookUri, "content://book/b", identity.bookUri))
     }
 
-    @Test(timeout = 10_000) fun allowedObserverReturnsUnitAndLegacyContinuesOnce() {
+    @Test(timeout = 10_000) fun allowedObserverReturnsResultAndLegacyContinuesOnce() {
         observeAndContinue(ready = true, rejected = false, expected = "result=ALLOWED")
     }
 
@@ -136,10 +136,12 @@ class PreviewTargetShadowTest {
             val cache = cache(if (rejected) PreviewContentVersion.Unavailable else metadata)
             val logs = mutableListOf<String>()
             var legacyCalls = 0
-            val result: Unit = PreviewTargetShadow.observeClick(coordinator, cache,
+            val result = PreviewTargetShadow.observeClick(coordinator, cache,
                 ReaderSentence(text, 12, 3, 27), BookContentReadiness.PREVIEW, true, logs::add)
             legacyCalls++
-            assertEquals(Unit, result)
+            assertTrue(result is PreviewTargetShadowResult.Resolved ||
+                result is PreviewTargetShadowResult.ProvenancePending ||
+                result is PreviewTargetShadowResult.Stale)
             assertEquals(1, legacyCalls)
             assertEquals(0, streamOpens)
             assertTrue(logs.single().contains(expected))

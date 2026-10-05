@@ -17,7 +17,7 @@ internal object PreviewTargetShadow {
         readiness: BookContentReadiness,
         playRequested: Boolean,
         logger: (String) -> Unit = { Log.i("PREVIEW_TARGET_SHADOW", it) }
-    ) {
+    ): PreviewTargetShadowResult {
         val cycle = coordinator.currentCycleSnapshot()
         val currentVersion = cycle?.let(coordinator::currentVersionSnapshot)
         val cachedSentence = entryCache?.cachedSentences?.firstOrNull {
@@ -47,6 +47,7 @@ internal object PreviewTargetShadow {
             "chapterSentenceIndex=${clicked.chapterSentenceIndex} " +
             "cachedVersionKind=${cachedIdentity?.version.kind()} currentVersionKind=${currentVersion.kind()} " +
             "contentReadiness=$readiness")
+        return result
     }
 
     // No await, retry, playback callbacks or pending mutations: the caller always continues its legacy path.

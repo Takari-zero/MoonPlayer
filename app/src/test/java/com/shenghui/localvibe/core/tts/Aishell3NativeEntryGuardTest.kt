@@ -174,6 +174,7 @@ class Aishell3NativeEntryGuardTest {
 
         fun begin() = BookAishell3PrewarmGuard.begin(
             latestProvider = { provider.get().let { BookPlaybackEngineSnapshot(it, it, matchaAvailable = true) } },
+            providerSelectionRestored = { true },
             latestSessionId = session::get,
             screenDisposed = disposed::get,
             onDiscard = { _, _, _ -> }

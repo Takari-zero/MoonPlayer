@@ -132,6 +132,7 @@ fun BookListenScreen(
     onProgressChanged: (String, Int, Int) -> Unit,
     onBeforeSpeak: () -> Unit,
     onBack: () -> Unit,
+    matchaRuntimeOwner: BookMatchaRuntimeOwner,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -286,9 +287,18 @@ fun BookListenScreen(
 
     var ttsController by remember { mutableStateOf<BookTtsController?>(null) }
     val sentencePlaybackDispatcher = remember { BookSentencePlaybackDispatcher() }
+    val previewLocalPlaybackAdapter = remember {
+        PreviewLocalPlaybackProductionAdapter()
+    }
+    val previewLocalPlaybackHost = remember { PreviewLocalPlaybackHost() }
+    val previewLocalPlaybackBridge = remember(previewLocalPlaybackAdapter) {
+        PreviewLocalPlaybackProductionBridge(previewLocalPlaybackAdapter, previewLocalPlaybackHost)
+    }
     val builtInOfflineTtsEngine = remember { BuiltInOfflineTtsEngine() }
     val aishell3TtsEngine = remember { Aishell3SegmentedStreamingTtsEngine(context.applicationContext) }
-    val matchaPlaybackCoordinator = remember(context) { BookMatchaPlaybackCoordinator(context.applicationContext) }
+    val matchaPlaybackCoordinator = remember(matchaRuntimeOwner) {
+        BookMatchaPlaybackCoordinator(matchaRuntimeOwner)
+    }
     val matchaBookAvailable = remember(matchaPlaybackCoordinator) { matchaPlaybackCoordinator.isAvailable }
     val matchaAuditionController = remember(context) { BookMatchaAuditionController(context.applicationContext) }
     val matchaAuditionAvailable = remember(matchaAuditionController) { matchaAuditionController.isAvailable }
@@ -398,8 +408,9 @@ fun BookListenScreen(
             }
             ttsController?.stop()
             builtInOfflineTtsEngine.release()
-            matchaPlaybackCoordinator.release()
+            matchaPlaybackCoordinator.releasePlaybackState()
             matchaAuditionController.release()
+            previewLocalPlaybackAdapter.reset()
             readerContentCycleCoordinator.release()
         }
     }
@@ -602,7 +613,11 @@ fun BookListenScreen(
     }
 
     fun aishell3PrewarmRequest() = BookAishell3PrewarmGuard.begin(
-        { latestBookPlaybackEngineSnapshot }, { latestPlaybackSessionId }, screenDisposed::get)
+        latestProvider = { latestBookPlaybackEngineSnapshot },
+        providerSelectionRestored = { providerRestoreComplete },
+        latestSessionId = { latestPlaybackSessionId },
+        screenDisposed = screenDisposed::get
+    )
 
     fun prewarmAishell3Audio(
         key: String,
@@ -1099,10 +1114,50 @@ fun BookListenScreen(
         }
     }
 
+    val providerRouter = BookSentencePlaybackProviderRouter(
+        context = context,
+        coroutineScope = coroutineScope,
+        dispatcher = sentencePlaybackDispatcher,
+        matchaPlaybackCoordinator = matchaPlaybackCoordinator,
+        ttsController = { ttsController },
+        pitch = { pitch },
+        isTtsReady = { isTtsReady },
+        currentPlaybackSessionId = { playbackSessionId },
+        preparedKey = ::aishell3PreparedKey,
+        isPrewarming = BookAishell3PreparedAudioCache::isPrewarming,
+        getPrepared = BookAishell3PreparedAudioCache::get,
+        waitPrepared = ::waitForPreparedAishell3Audio,
+        playPrepared = { sessionId, key, chunks, paragraphIndex, onStarted, onDrained, onFailed ->
+            playPreparedAishell3Audio(
+                sessionId = sessionId,
+                key = key,
+                chunks = chunks,
+                paragraphIndex = paragraphIndex,
+                onStarted = onStarted,
+                onDrained = onDrained,
+                onFailed = onFailed
+            )
+        },
+        playSegmented = { sessionId, key, chapterSentenceIndex, text, paragraphIndex, onError, onStarted, onDrained, onFailed ->
+            playSegmentedAishell3Audio(
+                sessionId = sessionId,
+                sentenceKey = key,
+                chapterSentenceIndex = chapterSentenceIndex,
+                text = text,
+                paragraphIndex = paragraphIndex,
+                onError = onError,
+                onStarted = onStarted,
+                onDrained = onDrained,
+                onFailed = onFailed
+            )
+        }
+    )
+
     fun stopCurrentPlayback(reason: String, invalidateSession: Boolean = true) {
         if (invalidateSession) {
             playbackSessionId += 1
         }
+        previewLocalPlaybackAdapter.reset()
         Log.d(
             "BookReaderPlayback",
             "stop current session reason=$reason sessionId=$playbackSessionId engine=$activePlaybackEngineName"
@@ -1616,12 +1671,68 @@ fun BookListenScreen(
         }
     }
 
+    var preparedWaitTimeout: (() -> Unit)? = null
+    var requestSpeakCurrentWithOptions: (Boolean, PreparedReaderContent?, Boolean, Long?) -> Unit = { _, _, _, _ -> }
+
+    fun dispatchSentencePlayback(
+        request: BookSentencePlaybackRequest,
+        callbacks: BookSentencePlaybackCallbacks,
+        formalCallbacksFor: ((BookSentencePlaybackRequest) -> BookSentencePlaybackCallbacks)? = null,
+        skipPreparedWait: Boolean = false,
+        onPreparedWaitTimeout: (() -> Unit)? = null
+    ) {
+        providerRouter.dispatch(
+            request = request,
+            callbacks = callbacks,
+            formalCallbacksFor = formalCallbacksFor,
+            skipPreparedWait = skipPreparedWait,
+            onPreparedWaitTimeout = onPreparedWaitTimeout ?: {
+                preparedWaitTimeout?.invoke()
+                Unit
+            }
+        )
+    }
+
     fun speakCurrentSentence(
         skipPreparedWait: Boolean = false,
-        preparedContentOverride: PreparedReaderContent? = null
+        preparedContentOverride: PreparedReaderContent? = null,
+        allowFormalContinuation: Boolean = true,
+        sessionIdOverride: Long? = null
     ) {
         val playbackEngineSnapshot = latestBookPlaybackEngineSnapshot
         val dispatchEngine = playbackEngineSnapshot.dispatchEngine()
+        val localSnapshot = previewLocalPlaybackAdapter.snapshot()
+        if (localSnapshot.ownership == PreviewLocalPlaybackOwnership.LOCAL &&
+            localSnapshot.playbackSessionId == playbackSessionId &&
+            playbackIntentPlaying && !isPlaying
+        ) {
+            val generation = localSnapshot.readerGeneration
+            if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && isAishell3Paused) {
+                Log.d("BookReaderPlayback", "resume paused local aishell3 sessionId=$playbackSessionId")
+                generation?.let { previewLocalPlaybackAdapter.onPlaybackIntentChanged(it, playbackSessionId, true) }
+                aishell3Player?.resume()
+                isAishell3Paused = false
+                isPlaying = true
+                return
+            }
+            if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
+                matchaPlaybackCoordinator.resume()
+            ) {
+                generation?.let { previewLocalPlaybackAdapter.onPlaybackIntentChanged(it, playbackSessionId, true) }
+                isPlaying = true
+                return
+            }
+            val localRequest = previewLocalPlaybackAdapter.currentRequest()
+            if (localRequest != null && generation != null) {
+                val transition = previewLocalPlaybackAdapter.onPlaybackIntentChanged(
+                    generation,
+                    playbackSessionId,
+                    true
+                )
+                previewLocalPlaybackBridge.dispatch(PreviewLocalPlaybackDispatch(localRequest, transition))
+                return
+            }
+        }
         if (contentReadiness != BookContentReadiness.PLAYBACK_READY) {
             return
         }
@@ -1726,8 +1837,10 @@ fun BookListenScreen(
             activePlaybackEngineName = BookPlaybackEngine.NONE.name
             return
         }
-        playbackSessionId += 1
-        val sessionId = playbackSessionId
+        if (sessionIdOverride == null) {
+            playbackSessionId += 1
+        }
+        val sessionId = sessionIdOverride ?: playbackSessionId
         if (!skipPreparedWait && shouldIgnoreDuplicatePlaybackRequest(targetChapterSentenceIndex, "play button")) {
             return
         }
@@ -1798,6 +1911,14 @@ fun BookListenScreen(
                 if (!latestIsPlaying || latestParagraphs.isEmpty()) return@BookSentencePlaybackCallbacks
                 isPlaying = false
                 activePlaybackEngineName = BookPlaybackEngine.NONE.name
+                if (!allowFormalContinuation) {
+                    playbackIntentPlaying = false
+                    Log.i(
+                        "PREVIEW_LOCAL_PLAYBACK",
+                        "NEXT_SUPPRESSED_PHASE session=$callbackSessionId reason=prepared_fallback"
+                    )
+                    return@BookSentencePlaybackCallbacks
+                }
                 continuePlaybackAfterCurrentTarget(callbackSessionId)
             },
             onFailed = { callbackSessionId, reason ->
@@ -1810,139 +1931,73 @@ fun BookListenScreen(
                 }
             }
         )
-        lateinit var providerHandlers: BookSentencePlaybackProviderHandlers
-
-        providerHandlers = BookSentencePlaybackProviderHandlers(
-            matcha = BookSentencePlaybackProviderHandler { request, callbacks ->
-                coroutineScope.launch {
-                    val matchaRequest = MatchaPlaybackRequest(
-                        targetId = request.target,
-                        text = request.text,
-                        speechRate = request.speechRate,
-                        sessionId = request.playbackSessionId,
-                        playbackIntentPlaying = request.playbackIntentPlaying,
-                        snapshot = request.preparedSnapshot
-                    )
-                    val result = matchaPlaybackCoordinator.play(
-                        request = matchaRequest,
-                        onStarted = { callbacks.onStarted(request.playbackSessionId) },
-                        onFirstWrite = {
-                            if (request.allowNextPrewarm) {
-                                request.preparedSnapshot?.let { snapshot ->
-                                    matchaPlaybackCoordinator.scheduleNextPrewarm(
-                                        MatchaPrewarmScheduleRequest(
-                                            request.target,
-                                            snapshot,
-                                            request.speechRate,
-                                            request.playbackSessionId
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    )
-                    withContext(Dispatchers.Main.immediate) {
-                        if (result is StreamingTtsResult.Success) {
-                            callbacks.onDrained(request.playbackSessionId)
-                        } else {
-                            callbacks.onFailed(request.playbackSessionId, "Matcha playback stopped")
-                        }
-                    }
-                }
-            },
-            systemTts = BookSentencePlaybackProviderHandler { request, callbacks ->
-                val result = ttsController?.speakSentence(
-                    text = request.text,
-                    speechRate = request.speechRate,
-                    pitch = pitch,
-                    playbackSessionId = request.playbackSessionId
-                )
-                if (result?.success == true) {
-                    callbacks.onStarted(request.playbackSessionId)
-                } else {
-                    callbacks.onFailed(
-                        request.playbackSessionId,
-                        result?.message ?: "系统语音不可用，请安装或启用系统语音引擎"
-                    )
-                    Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
-                }
-            },
-            aishell3 = BookSentencePlaybackProviderHandler { request, callbacks ->
-                val requestSessionId = request.playbackSessionId
-                val requestTarget = request.target
-                val requestPreparedKey = aishell3PreparedKey(requestTarget.chapterSentenceIndex, request.text)
-                Log.i(BOOK_HOT_TTS_TAG, "play prepared path enter key=$requestPreparedKey")
-                BookAishell3PreparedAudioCache.get(requestPreparedKey)?.let { chunks ->
-                    playPreparedAishell3Audio(
-                        sessionId = requestSessionId,
-                        key = requestPreparedKey,
-                        chunks = chunks,
-                        paragraphIndex = requestTarget.paragraphIndex,
-                        onStarted = callbacks.onStarted,
-                        onDrained = callbacks.onDrained,
-                        onFailed = callbacks.onFailed
-                    )
-                    return@BookSentencePlaybackProviderHandler
-                }
-                val missReason = if (BookAishell3PreparedAudioCache.isPrewarming(requestPreparedKey)) {
-                    "prewarm_in_progress"
-                } else {
-                    "cache_empty_or_key_not_ready"
-                }
-                if (!skipPreparedWait && missReason == "prewarm_in_progress") {
-                    coroutineScope.launch {
-                        val waitedChunks = waitForPreparedAishell3Audio(requestPreparedKey)
-                        if (requestSessionId != playbackSessionId) return@launch
-                        if (waitedChunks != null) {
-                            playPreparedAishell3Audio(
-                                sessionId = requestSessionId,
-                                key = requestPreparedKey,
-                                chunks = waitedChunks,
-                                paragraphIndex = requestTarget.paragraphIndex,
-                                onStarted = callbacks.onStarted,
-                                onDrained = callbacks.onDrained,
-                                onFailed = callbacks.onFailed
-                            )
-                        } else {
-                            speakCurrentSentence(skipPreparedWait = true)
-                        }
-                    }
-                    return@BookSentencePlaybackProviderHandler
-                }
-                fun fallbackToSystemTts(reason: String) {
-                    Log.d("BookReaderPlayback", "fallback reason=$reason sessionId=$requestSessionId")
-                    if (requestSessionId != playbackSessionId) return
-                    val systemRequest = request.copy(provider = BookPlaybackEngine.SYSTEM_TTS)
-                    if (!isTtsReady) {
-                        callbacksFor(systemRequest).onFailed(requestSessionId, "请先安装或启用系统语音")
-                        Toast.makeText(context, "请先安装或启用系统语音", Toast.LENGTH_SHORT).show()
-                        return
-                    }
-                    sentencePlaybackDispatcher.dispatch(
-                        systemRequest,
-                        callbacksFor(systemRequest),
-                        providerHandlers
-                    )
-                }
-                playSegmentedAishell3Audio(
-                    sessionId = requestSessionId,
-                    sentenceKey = requestPreparedKey,
-                    chapterSentenceIndex = requestTarget.chapterSentenceIndex,
-                    text = request.text,
-                    paragraphIndex = requestTarget.paragraphIndex,
-                    onError = ::fallbackToSystemTts,
-                    onStarted = callbacks.onStarted,
-                    onDrained = callbacks.onDrained,
-                    onFailed = callbacks.onFailed
-                )
-            }
-        )
-        sentencePlaybackDispatcher.dispatch(
+        dispatchSentencePlayback(
             request = playbackRequest,
             callbacks = callbacksFor(playbackRequest),
-            handlers = providerHandlers
+            formalCallbacksFor = ::callbacksFor,
+            skipPreparedWait = skipPreparedWait
         )
     }
+
+    requestSpeakCurrentWithOptions = { skipPreparedWait, preparedContentOverride, allowFormalContinuation, sessionIdOverride ->
+        speakCurrentSentence(
+            skipPreparedWait = skipPreparedWait,
+            preparedContentOverride = preparedContentOverride,
+            allowFormalContinuation = allowFormalContinuation,
+            sessionIdOverride = sessionIdOverride
+        )
+    }
+    previewLocalPlaybackHost.screenDisposed = { screenDisposed.get() }
+    previewLocalPlaybackHost.fullReaderReady = {
+        contentReadiness == BookContentReadiness.PLAYBACK_READY && paragraphs.isNotEmpty()
+    }
+    previewLocalPlaybackHost.preparedContent = { preparedReaderContent }
+    previewLocalPlaybackHost.currentReaderGeneration = {
+        readerContentCycleCoordinator.currentCycleSnapshot()?.generation
+    }
+    previewLocalPlaybackHost.preparedBookUri = { bookFile?.uri }
+    previewLocalPlaybackHost.dispatchPlayback = { request, callbacks ->
+        dispatchSentencePlayback(request, callbacks, skipPreparedWait = true)
+    }
+    previewLocalPlaybackHost.onStarted = { provider, paragraphIndex ->
+        activePlaybackEngineName = provider.name
+        isPlaying = true
+        saveProgress(paragraphIndex)
+    }
+    previewLocalPlaybackHost.onStopped = {
+        isPlaying = false
+        activePlaybackEngineName = BookPlaybackEngine.NONE.name
+    }
+    previewLocalPlaybackHost.onSuppressFormalNext = { generation, session ->
+        playbackIntentPlaying = false
+        Log.i(
+            "PREVIEW_LOCAL_PLAYBACK",
+            "NEXT_SUPPRESSED_PHASE generation=$generation session=$session reason=p16c2"
+        )
+    }
+    previewLocalPlaybackHost.onRestorePreparedFallback = { sentence, prepared ->
+        stopCurrentPlayback(reason = "preview_local_fallback", invalidateSession = true)
+        currentParagraphIndex = sentence.paragraphIndex
+        currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
+        currentReadingTargetName = BookReadingTarget.SENTENCE.name
+        playbackIntentPlaying = true
+        requestSpeakCurrentWithOptions(false, prepared, false, playbackSessionId)
+    }
+    previewLocalPlaybackHost.onFallbackUnavailable = {
+        playbackIntentPlaying = false
+        isPlaying = false
+        previewLocalPlaybackAdapter.reset()
+    }
+    previewLocalPlaybackHost.onStopAutoContinue = { reason ->
+        playbackIntentPlaying = false
+        Log.i(
+            "PREVIEW_LOCAL_PLAYBACK",
+            "STOP_AUTO_CONTINUE reason=$reason"
+        )
+        stopCurrentPlayback(reason = "preview_local_runtime_failed", invalidateSession = true)
+    }
+
+    preparedWaitTimeout = { speakCurrentSentence(skipPreparedWait = true) }
 
     fun consumePendingPlaybackTarget(preparedContentOverride: PreparedReaderContent? = null) {
         val pending = pendingPlaybackTarget ?: return
@@ -2034,6 +2089,36 @@ fun BookListenScreen(
         pendingPlaySessionId = -1L
         pendingPlayTargetChapterSentenceIndex = -1
         Log.i(BOOK_HOT_TTS_TAG, "play intent cancelled session=$playbackSessionId reason=pause")
+        val localSnapshot = previewLocalPlaybackAdapter.snapshot()
+        if (localSnapshot.ownership == PreviewLocalPlaybackOwnership.LOCAL &&
+            localSnapshot.playbackSessionId == playbackSessionId
+        ) {
+            localSnapshot.readerGeneration?.let { generation ->
+                previewLocalPlaybackAdapter.onPlaybackIntentChanged(generation, playbackSessionId, false)
+            }
+            playbackIntentPlaying = false
+            if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
+                matchaPlaybackCoordinator.pause()
+            ) {
+                isPlaying = false
+                saveProgress(currentParagraphIndex)
+                return
+            }
+            if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && aishell3Player != null) {
+                Log.d("BookReaderPlayback", "pause local aishell3 sessionId=$playbackSessionId")
+                aishell3Player?.pause()
+                isAishell3Paused = true
+                isPlaying = false
+                saveProgress(currentParagraphIndex)
+                return
+            }
+            ttsController?.pause()
+            ttsController?.stop()
+            activePlaybackEngineName = BookPlaybackEngine.NONE.name
+            isPlaying = false
+            saveProgress(currentParagraphIndex)
+            return
+        }
         if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name && matchaPlaybackCoordinator.pause()) {
             isPlaying = false
             saveProgress(currentParagraphIndex)
@@ -2202,7 +2287,9 @@ fun BookListenScreen(
             currentParagraphIndex = restoredParagraphIndex
             currentSentenceIndexInParagraph = restoredSentenceIndex
             contentReadiness = BookContentReadiness.PLAYBACK_READY
-            consumePendingPlaybackTarget(preparedContentOverride = prepared)
+            if (!previewLocalPlaybackBridge.handleFullReaderReady(prepared)) {
+                consumePendingPlaybackTarget(preparedContentOverride = prepared)
+            }
             if (loaded.isEmpty()) {
                 loadError = "小说内容为空"
             }
@@ -3028,27 +3115,49 @@ fun BookListenScreen(
                                             "fullSize=${paragraphs.size} cachedSize=${cachedSentences.size}"
                                     )
                                 } else {
-                                    PreviewTargetShadow.observeClick(readerContentCycleCoordinator,
-                                        initialReadStateCache, sentence, contentReadiness, playRequested = true)
-                                    if (isPlaying) {
-                                        stopCurrentPlayback(reason = "preview_target_replace", invalidateSession = true)
-                                        isPlaying = false
-                                    }
+                                    val shadowResult = PreviewTargetShadow.observeClick(
+                                        readerContentCycleCoordinator,
+                                        initialReadStateCache,
+                                        sentence,
+                                        contentReadiness,
+                                        playRequested = true
+                                    )
+                                    val localTarget = (shadowResult as? PreviewTargetShadowResult.Resolved)
+                                        ?.resolution
+                                        ?.let { it as? PreviewPlaybackResolution.Allowed }
+                                        ?.target
                                     currentParagraphIndex = sentence.paragraphIndex
                                     currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
                                     currentReadingTargetName = BookReadingTarget.SENTENCE.name
                                     val sentenceIndex = cachedSentences.indexOfFirst {
                                         it.chapterSentenceIndex == sentence.chapterSentenceIndex
                                     }.coerceAtLeast(0)
-                                    playbackIntentPlaying = true
-                                    pendingPlaybackTarget = PendingBookPlaybackTarget(
-                                        paragraphIndex = sentence.paragraphIndex,
-                                        sentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
-                                        stableTextHash = sentence.text.hashCode(),
-                                        source = PendingBookPlaybackSource.USER_SENTENCE_TAP,
-                                        playRequested = true
-                                    )
                                     saveCachedPreviewSnapshot("sentence tap", sentenceIndex, BookReadingTarget.SENTENCE)
+                                    if (localTarget != null) {
+                                        stopCurrentPlayback(reason = "preview_local_target_replace", invalidateSession = true)
+                                        playbackIntentPlaying = true
+                                        pendingPlaybackTarget = null
+                                        pendingPlaySessionId = -1L
+                                        pendingPlayTargetChapterSentenceIndex = -1
+                                        val localDispatch = previewLocalPlaybackAdapter.begin(
+                                            target = localTarget,
+                                            provider = latestBookPlaybackEngineSnapshot.dispatchEngine(),
+                                            speechRate = latestBookSpeechRate.multiplier,
+                                            playbackSessionId = playbackSessionId
+                                        )
+                                        if (localDispatch != null) {
+                                            previewLocalPlaybackBridge.dispatch(localDispatch)
+                                        }
+                                    } else {
+                                        playbackIntentPlaying = true
+                                        pendingPlaybackTarget = PendingBookPlaybackTarget(
+                                            paragraphIndex = sentence.paragraphIndex,
+                                            sentenceIndexInParagraph = sentence.sentenceIndexInParagraph,
+                                            stableTextHash = sentence.text.hashCode(),
+                                            source = PendingBookPlaybackSource.USER_SENTENCE_TAP,
+                                            playRequested = true
+                                        )
+                                    }
                                 }
                             },
                             onSpeechRateChange = { newRate ->

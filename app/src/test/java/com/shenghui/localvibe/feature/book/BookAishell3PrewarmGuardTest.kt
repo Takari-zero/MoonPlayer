@@ -88,6 +88,16 @@ class BookAishell3PrewarmGuardTest {
     }
 
     @Test
+    fun `unrestored provider selection skips native synthesis entirely`() {
+        val state = State()
+        state.providerSelectionRestored = false
+        var nativeCalls = 0
+        state.begin()?.runIfActive { nativeCalls++ }
+        assertEquals(0, nativeCalls)
+        assertNull(state.begin())
+    }
+
+    @Test
     fun `session replacement blocks old prewarm even with the same provider`() {
         val state = State()
         val request = state.begin()!!
@@ -123,12 +133,14 @@ class BookAishell3PrewarmGuardTest {
 
     private class State {
         var provider = BookPlaybackEngine.AISHELL3
+        var providerSelectionRestored = true
         var session = 1L
         var disposed = false
         val discards = mutableListOf<String>()
 
         fun begin() = BookAishell3PrewarmGuard.begin(
             latestProvider = { BookPlaybackEngineSnapshot(provider, provider, matchaAvailable = true) },
+            providerSelectionRestored = { providerSelectionRestored },
             latestSessionId = { session },
             screenDisposed = { disposed },
             onDiscard = { reason, _, _ -> discards.add(reason) }

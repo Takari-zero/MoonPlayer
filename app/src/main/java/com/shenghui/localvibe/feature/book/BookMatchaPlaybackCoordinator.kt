@@ -1,8 +1,6 @@
 package com.shenghui.localvibe.feature.book
 
-import android.content.Context
 import android.util.Log
-import com.shenghui.localvibe.core.tts.MatchaBookTtsEngine
 import com.shenghui.localvibe.core.tts.MatchaPrewarmKey
 import com.shenghui.localvibe.core.tts.MatchaPrewarmSlot
 import com.shenghui.localvibe.core.tts.PcmAudioChunk
@@ -11,7 +9,6 @@ import com.shenghui.localvibe.core.tts.StreamingTtsParams
 import com.shenghui.localvibe.core.tts.StreamingTtsResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -39,12 +36,13 @@ internal data class MatchaPrewarmScheduleRequest(
     val sessionId: Long
 )
 
-internal class BookMatchaPlaybackCoordinator(context: Context) {
-    private val engine = MatchaBookTtsEngine(context.applicationContext)
+internal class BookMatchaPlaybackCoordinator(
+    private val runtimeOwner: BookMatchaRuntimeOwner
+) {
+    private val engine = runtimeOwner.playbackRuntime
     private val prewarmSlot = MatchaPrewarmSlot()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prepareLock = Any()
-    private var prepareJob: Job? = null
     private var released = false
     private var player: StreamingPcmAudioPlayer? = null
 
@@ -52,15 +50,7 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
         get() = engine.isModelAvailable()
 
     fun prepareEngine() {
-        synchronized(prepareLock) {
-            if (released || engine.isReady || prepareJob?.isActive == true || !isAvailable) return
-            prepareJob = scope.launch {
-                Log.i("MATCHA_ENGINE_PREPARE", "event=REQUESTED")
-                engine.ensureInitialized().onFailure {
-                    Log.w(TAG, "engine preparation failed", it)
-                }
-            }
-        }
+        if (!released) runtimeOwner.prepareEngine()
     }
 
     suspend fun play(
@@ -111,7 +101,7 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
 
     fun invalidatePrewarm(reason: String) {
         val epoch = prewarmSlot.invalidate()
-        Log.i(TAG, "MATCHA_PREWARM_INVALIDATED reason=$reason epoch=$epoch")
+        runCatching { Log.i(TAG, "MATCHA_PREWARM_INVALIDATED reason=$reason epoch=$epoch") }
     }
 
     fun pause(): Boolean {
@@ -136,7 +126,7 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
         currentPlayer?.release()
     }
 
-    fun release() {
+    fun releasePlaybackState() {
         synchronized(prepareLock) {
             if (released) return
             released = true
@@ -148,7 +138,6 @@ internal class BookMatchaPlaybackCoordinator(context: Context) {
         player = null
         currentPlayer?.stop()
         currentPlayer?.release()
-        engine.release()
     }
 
     private suspend fun speakFresh(

@@ -114,6 +114,10 @@ import com.shenghui.localvibe.feature.audio.AudioLibrarySection
 import com.shenghui.localvibe.feature.audio.AudioSortMode
 import com.shenghui.localvibe.feature.book.BookListenScreen
 import com.shenghui.localvibe.feature.book.BookLibraryScreen
+import com.shenghui.localvibe.feature.book.BookMatchaRuntimeOwner
+import com.shenghui.localvibe.feature.book.BookPlaybackEngine
+import com.shenghui.localvibe.feature.book.BookPlaybackEngineSelection
+import com.shenghui.localvibe.feature.book.shouldPrepareMatchaRuntime
 import com.shenghui.localvibe.feature.folder.FolderScreen
 import com.shenghui.localvibe.feature.home.model.MediaFolderUiModel
 import com.shenghui.localvibe.feature.profile.ProfileScreen
@@ -149,6 +153,28 @@ private fun LocalVibeApp() {
     val navController = rememberNavController()
     val coroutineScope = rememberCoroutineScope()
     val appStateStore = remember { AppStateStore(context.applicationContext) }
+    val matchaRuntimeOwner = remember(context) {
+        BookMatchaRuntimeOwner(context.applicationContext)
+    }
+    var rootBookPlaybackEngineName by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(matchaRuntimeOwner) {
+        onDispose { matchaRuntimeOwner.releaseEngineRuntime() }
+    }
+    LaunchedEffect(appStateStore) {
+        rootBookPlaybackEngineName = appStateStore.loadBookPlaybackEngineName()
+        val preferred = BookPlaybackEngineSelection.parse(
+            rootBookPlaybackEngineName,
+            BookPlaybackEngine.SYSTEM_TTS
+        )
+        val effective = BookPlaybackEngineSelection.effective(
+            preferred = preferred,
+            aishell3Available = false,
+            matchaAvailable = matchaRuntimeOwner.isAvailable
+        )
+        if (shouldPrepareMatchaRuntime(preferred, effective, matchaRuntimeOwner.isAvailable)) {
+            matchaRuntimeOwner.prepareEngine()
+        }
+    }
     val videoFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
     val audioFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
     val bookFolders = remember { mutableStateListOf<MediaFolderUiModel>() }
@@ -2503,6 +2529,14 @@ private fun LocalVibeApp() {
                         onOpenBook = { file ->
                             selectedMediaFile = file
                             selectedBookUri = file.uri
+                            if (
+                                BookPlaybackEngineSelection.parse(
+                                    rootBookPlaybackEngineName,
+                                    BookPlaybackEngine.SYSTEM_TTS
+                                ) == BookPlaybackEngine.MATCHA_EXPERIMENTAL
+                            ) {
+                                matchaRuntimeOwner.prepareEngine()
+                            }
                             navController.navigate(LocalVibeRoute.BookListen)
                         },
                         modifier = contentModifier
@@ -2542,7 +2576,8 @@ private fun LocalVibeApp() {
                             Toast.makeText(context, "已暂停音乐播放", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    matchaRuntimeOwner = matchaRuntimeOwner
                 )
             }
             composable(LocalVibeRoute.Profile) {
