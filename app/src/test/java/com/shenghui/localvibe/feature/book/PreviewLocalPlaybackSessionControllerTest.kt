@@ -105,6 +105,27 @@ class PreviewLocalPlaybackSessionControllerTest {
     }
 
     @Test
+    fun localDrainedBeforeLocalStartIsRecordedAndReevaluatedAfterFullReady() {
+        val controller = PreviewLocalPlaybackSessionController()
+        begin(controller)
+
+        val drained = controller.onLocalDrained(1L, 10L)
+        assertEquals(PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED, drained.snapshot.state)
+        assertEquals(
+            PreviewPlaybackContinuationDecision.WAIT_FOR_FULL_READY,
+            drained.continuationDecision
+        )
+
+        val ready = controller.onFullReaderReady(1L, 10L, PreparedTargetVerificationStatus.MATCHED)
+
+        assertEquals(
+            PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT,
+            ready.continuationDecision
+        )
+        assertTrue(ready.snapshot.localSentenceDrained)
+    }
+
+    @Test
     fun fullReadyUnknownAfterLocalDrainWaitsForVerification() {
         val controller = drainedController()
 

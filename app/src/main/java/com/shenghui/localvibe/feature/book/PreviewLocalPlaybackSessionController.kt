@@ -117,7 +117,8 @@ class PreviewLocalPlaybackSessionController {
         playbackSessionId: Long
     ): PreviewLocalSessionTransitionResult {
         if (!isCurrent(readerGeneration, playbackSessionId)) return staleResult()
-        if (state != PreviewLocalPlaybackState.LOCAL_ACTIVE &&
+        if (state != PreviewLocalPlaybackState.LOCAL_STARTING &&
+            state != PreviewLocalPlaybackState.LOCAL_ACTIVE &&
             state != PreviewLocalPlaybackState.PREPARED_VERIFIED_WAITING_DRAIN
         ) {
             return result()
