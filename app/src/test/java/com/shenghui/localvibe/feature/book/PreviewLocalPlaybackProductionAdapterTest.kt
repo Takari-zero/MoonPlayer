@@ -66,6 +66,18 @@ class PreviewLocalPlaybackProductionAdapterTest {
     }
 
     @Test
+    fun formalContinuationClaimIsExactlyOnceForOneLocalSession() {
+        val adapter = adapter()
+        adapter.begin(target(), BookPlaybackEngine.MATCHA_EXPERIMENTAL, 1f, 41L)
+        adapter.onLocalStarted(7L, 41L)
+        adapter.onLocalDrained(7L, 41L)
+        adapter.onFullReaderReady(7L, 41L, PreparedTargetVerificationStatus.MATCHED)
+
+        assertTrue(adapter.claimFormalContinuation(7L, 41L))
+        assertFalse(adapter.claimFormalContinuation(7L, 41L))
+    }
+
+    @Test
     fun pausePreservesOwnershipAndSessionWithoutAllowingContinuation() {
         val adapter = adapter()
         adapter.begin(target(), BookPlaybackEngine.MATCHA_EXPERIMENTAL, 1f, 41L)

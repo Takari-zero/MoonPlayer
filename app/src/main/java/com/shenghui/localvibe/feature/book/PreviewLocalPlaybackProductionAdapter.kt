@@ -109,6 +109,14 @@ internal class PreviewLocalPlaybackProductionAdapter(
         playbackIntentPlaying
     )
 
+    fun claimFormalContinuation(readerGeneration: Long, playbackSessionId: Long): Boolean {
+        val claimed = controller.claimFormalContinuation(readerGeneration, playbackSessionId)
+        log("FORMAL_CONTINUATION_CLAIM generation=$readerGeneration session=$playbackSessionId claimed=$claimed")
+        return claimed
+    }
+
+    fun release(): PreviewLocalSessionTransitionResult = controller.release()
+
     fun reset() {
         controller.release()
         controller = PreviewLocalPlaybackSessionController()

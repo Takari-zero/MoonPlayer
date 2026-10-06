@@ -144,6 +144,16 @@ class PreviewLocalPlaybackSessionControllerTest {
     }
 
     @Test
+    fun formalContinuationCanBeClaimedOnlyOnce() {
+        val controller = drainedController()
+        controller.onFullReaderReady(1L, 10L, PreparedTargetVerificationStatus.MATCHED)
+
+        assertTrue(controller.claimFormalContinuation(1L, 10L))
+        assertFalse(controller.claimFormalContinuation(1L, 10L))
+        assertTrue(controller.snapshot().formalContinuationClaimed)
+    }
+
+    @Test
     fun rejectedVerificationDoesNotStopActiveLocalSentence() {
         val controller = startedController()
 

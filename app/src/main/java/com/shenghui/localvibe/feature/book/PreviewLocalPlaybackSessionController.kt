@@ -33,7 +33,8 @@ data class PreviewLocalSessionSnapshot(
     val playbackIntentPlaying: Boolean,
     val fullReaderStatus: FullReaderStatus,
     val preparedVerification: PreparedTargetVerificationStatus,
-    val localSentenceDrained: Boolean
+    val localSentenceDrained: Boolean,
+    val formalContinuationClaimed: Boolean
 )
 
 data class PreviewLocalSessionTransitionResult(
@@ -52,6 +53,7 @@ class PreviewLocalPlaybackSessionController {
     private var playbackIntentPlaying = false
     private var fullReaderStatus = FullReaderStatus.LOADING
     private var preparedVerification = PreparedTargetVerificationStatus.UNKNOWN
+    private var formalContinuationClaimed = false
     private var released = false
 
     fun snapshot(): PreviewLocalSessionSnapshot = PreviewLocalSessionSnapshot(
@@ -63,7 +65,8 @@ class PreviewLocalPlaybackSessionController {
         playbackIntentPlaying = playbackIntentPlaying,
         fullReaderStatus = fullReaderStatus,
         preparedVerification = preparedVerification,
-        localSentenceDrained = state == PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED
+        localSentenceDrained = state == PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED,
+        formalContinuationClaimed = formalContinuationClaimed
     )
 
     fun beginLocalOwnership(
@@ -81,6 +84,7 @@ class PreviewLocalPlaybackSessionController {
         this.playbackIntentPlaying = playbackIntentPlaying
         fullReaderStatus = FullReaderStatus.LOADING
         preparedVerification = PreparedTargetVerificationStatus.UNKNOWN
+        formalContinuationClaimed = false
         state = PreviewLocalPlaybackState.LOCAL_STARTING
         return result(PreviewLocalOwnershipDirective.SUPPRESS_SAME_TARGET_PENDING)
     }
@@ -171,6 +175,13 @@ class PreviewLocalPlaybackSessionController {
             planLocalContinuation()
         }
         return result(continuationDecision = decision)
+    }
+
+    fun claimFormalContinuation(readerGeneration: Long, playbackSessionId: Long): Boolean {
+        if (!isCurrent(readerGeneration, playbackSessionId) || formalContinuationClaimed) return false
+        if (planLocalContinuation() != PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT) return false
+        formalContinuationClaimed = true
+        return true
     }
 
     fun release(): PreviewLocalSessionTransitionResult {

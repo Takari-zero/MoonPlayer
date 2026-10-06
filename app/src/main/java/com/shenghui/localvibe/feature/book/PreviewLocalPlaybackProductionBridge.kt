@@ -26,9 +26,12 @@ internal class PreviewLocalPlaybackProductionBridge(
                 val transition = adapter.onLocalDrained(generation, callbackSessionId)
                 if (transition.stale) return@BookSentencePlaybackCallbacks
                 host.onStopped()
-                if (transition.continuationDecision == PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT) {
-                    host.onSuppressFormalNext(generation, callbackSessionId)
-                }
+                handleContinuationDecision(
+                    generation = generation,
+                    session = callbackSessionId,
+                    transition = transition,
+                    prepared = host.preparedContent()
+                )
             },
             onFailed = { callbackSessionId, reason ->
                 if (host.screenDisposed()) return@BookSentencePlaybackCallbacks
@@ -104,9 +107,12 @@ internal class PreviewLocalPlaybackProductionBridge(
             verification
         )
         if (transition.stale) return true
-        if (transition.continuationDecision == PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT) {
-            host.onSuppressFormalNext(currentReaderGeneration ?: -1L, session)
-        }
+        handleContinuationDecision(
+            generation = currentReaderGeneration ?: -1L,
+            session = session,
+            transition = transition,
+            prepared = prepared
+        )
         if (
             transition.ownershipDirective == PreviewLocalOwnershipDirective.RESTORE_PREPARED_FALLBACK &&
             verification == PreparedTargetVerificationStatus.MATCHED
@@ -119,6 +125,63 @@ internal class PreviewLocalPlaybackProductionBridge(
             )
         }
         return true
+    }
+
+    private fun handleContinuationDecision(
+        generation: Long,
+        session: Long,
+        transition: PreviewLocalSessionTransitionResult,
+        prepared: PreparedReaderContent
+    ) {
+        when (transition.continuationDecision) {
+            PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT -> {
+                continueFormalNextIfCurrent(generation, session, transition, prepared)
+            }
+            PreviewPlaybackContinuationDecision.STOP_AUTO_CONTINUE -> {
+                host.onStopAutoContinue("preview_continuation_rejected")
+            }
+            else -> Unit
+        }
+    }
+
+    private fun continueFormalNextIfCurrent(
+        generation: Long,
+        session: Long,
+        transition: PreviewLocalSessionTransitionResult,
+        prepared: PreparedReaderContent
+    ) {
+        val target = transition.snapshot.target ?: run {
+            host.onStopAutoContinue("preview_adoption_target_missing")
+            return
+        }
+        if (
+            transition.snapshot.ownership != PreviewLocalPlaybackOwnership.LOCAL ||
+            transition.snapshot.preparedVerification != PreparedTargetVerificationStatus.MATCHED ||
+            !transition.snapshot.playbackIntentPlaying ||
+            host.currentReaderGeneration() != generation ||
+            host.currentPlaybackSessionId() != session ||
+            !host.playbackIntentPlaying()
+        ) {
+            return
+        }
+        val preparedCurrent = prepared.activeSentences.firstOrNull {
+            it.paragraphIndex == target.paragraphIndex &&
+                it.sentenceIndexInParagraph == target.sentenceIndexInParagraph &&
+                it.chapterSentenceIndex == target.chapterSentenceIndex &&
+                it.text == target.text &&
+                it.text.hashCode() == target.stableTextHash
+        }
+        val adoption = PreviewPreparedCurrentAdoption.plan(preparedCurrent) ?: run {
+            host.onStopAutoContinue("preview_adoption_target_rejected")
+            return
+        }
+        if (!adapter.claimFormalContinuation(generation, session)) return
+        if (!host.adoptPreparedCurrent(adoption)) {
+            host.onStopAutoContinue("preview_adoption_failed")
+            return
+        }
+        adapter.release()
+        host.onContinueFormalNext(session)
     }
 
     private fun restorePreparedFallback(
@@ -150,10 +213,13 @@ internal class PreviewLocalPlaybackHost {
     var preparedContent: () -> PreparedReaderContent = { PreparedReaderContent() }
     var currentReaderGeneration: () -> Long? = { null }
     var preparedBookUri: () -> String? = { null }
+    var currentPlaybackSessionId: () -> Long? = { null }
+    var playbackIntentPlaying: () -> Boolean = { false }
     var dispatchPlayback: (BookSentencePlaybackRequest, BookSentencePlaybackCallbacks) -> Unit = { _, _ -> }
     var onStarted: (BookPlaybackEngine, Int) -> Unit = { _, _ -> }
     var onStopped: () -> Unit = {}
-    var onSuppressFormalNext: (Long, Long) -> Unit = { _, _ -> }
+    var adoptPreparedCurrent: (PreviewPreparedCurrentAdoptionPlan) -> Boolean = { false }
+    var onContinueFormalNext: (Long) -> Unit = {}
     var onRestorePreparedFallback: (ReaderSentence, PreparedReaderContent) -> Unit = { _, _ -> }
     var onFallbackUnavailable: () -> Unit = {}
     var onStopAutoContinue: (String) -> Unit = {}

@@ -1956,6 +1956,8 @@ fun BookListenScreen(
         readerContentCycleCoordinator.currentCycleSnapshot()?.generation
     }
     previewLocalPlaybackHost.preparedBookUri = { bookFile?.uri }
+    previewLocalPlaybackHost.currentPlaybackSessionId = { playbackSessionId }
+    previewLocalPlaybackHost.playbackIntentPlaying = { playbackIntentPlaying }
     previewLocalPlaybackHost.dispatchPlayback = { request, callbacks ->
         dispatchSentencePlayback(request, callbacks, skipPreparedWait = true)
     }
@@ -1968,12 +1970,24 @@ fun BookListenScreen(
         isPlaying = false
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
     }
-    previewLocalPlaybackHost.onSuppressFormalNext = { generation, session ->
-        playbackIntentPlaying = false
+    previewLocalPlaybackHost.adoptPreparedCurrent = { plan ->
+        currentParagraphIndex = plan.paragraphIndex
+        currentSentenceIndexInParagraph = plan.sentenceIndexInParagraph
+        currentReadingTargetName = BookReadingTarget.SENTENCE.name
         Log.i(
             "PREVIEW_LOCAL_PLAYBACK",
-            "NEXT_SUPPRESSED_PHASE generation=$generation session=$session reason=p16c2"
+            "ADOPTION_SUCCESS paragraph=${plan.paragraphIndex} " +
+                "sentence=${plan.sentenceIndexInParagraph} " +
+                "chapterSentence=${plan.chapterSentenceIndex}"
         )
+        true
+    }
+    previewLocalPlaybackHost.onContinueFormalNext = { session ->
+        Log.i(
+            "PREVIEW_LOCAL_PLAYBACK",
+            "FORMAL_CONTINUATION session=$session source=FORMAL_PREPARED"
+        )
+        continuePlaybackAfterCurrentTarget(session)
     }
     previewLocalPlaybackHost.onRestorePreparedFallback = { sentence, prepared ->
         stopCurrentPlayback(reason = "preview_local_fallback", invalidateSession = true)
