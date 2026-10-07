@@ -71,4 +71,19 @@ class BookPlaybackIntentTest {
             )
         )
     }
+
+    @Test
+    fun endOfBookClearsContinuousPlaybackIntent() {
+        assertFalse(BookPlaybackIntent.afterPlaybackAdvance(moved = false, playbackIntentPlaying = true))
+        assertFalse(BookPlaybackIntent.afterPlaybackAdvance(moved = false, playbackIntentPlaying = false))
+    }
+
+    @Test
+    fun duplicateEndOfBookTerminalKeepsIntentStopped() {
+        var intent = true
+        repeat(2) {
+            intent = BookPlaybackIntent.afterPlaybackAdvance(moved = false, playbackIntentPlaying = intent)
+        }
+        assertFalse(intent)
+    }
 }

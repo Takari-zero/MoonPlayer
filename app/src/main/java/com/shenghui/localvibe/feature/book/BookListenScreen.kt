@@ -1530,6 +1530,10 @@ fun BookListenScreen(
             }
         } else {
             isPlaying = false
+            playbackIntentPlaying = BookPlaybackIntent.afterPlaybackAdvance(
+                moved = moved,
+                playbackIntentPlaying = playbackIntentPlaying
+            )
             activePlaybackEngineName = BookPlaybackEngine.NONE.name
             bookFile?.let { file ->
                 if (paragraphs.isNotEmpty()) {
@@ -1905,7 +1909,8 @@ fun BookListenScreen(
             target = BookPlaybackTargetId(
                 chapterSentenceIndex = targetChapterSentenceIndex,
                 paragraphIndex = targetParagraphIndex,
-                sentenceIndexInParagraph = targetSentenceIndex
+                sentenceIndexInParagraph = targetSentenceIndex,
+                isChapterTitle = targetType == BookReadingTarget.CHAPTER_TITLE.name
             ),
             text = textToSpeak.orEmpty(),
             provider = dispatchEngine,

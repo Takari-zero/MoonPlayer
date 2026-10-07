@@ -142,4 +142,56 @@ class BookMatchaNextPlayableTargetResolverTest {
         )
         assertEquals(BookSequentialTarget(1, 0, isChapterTitle = true), result)
     }
+
+    @Test
+    fun matchaPrewarmPreservesChapterTitleTargetSemantics() {
+        val result = resolveMatchaNextPrewarmTarget(
+            currentTarget = BookPlaybackTargetId(
+                chapterSentenceIndex = 1,
+                paragraphIndex = 2,
+                sentenceIndexInParagraph = 0,
+                isChapterTitle = false
+            ),
+            snapshot = snapshot()
+        )
+
+        assertEquals(BookSequentialTarget(3, 0, isChapterTitle = true), result)
+    }
+
+    @Test
+    fun matchaPrewarmResolvesFirstBodyAfterChapterTitle() {
+        val result = resolveMatchaNextPrewarmTarget(
+            currentTarget = BookPlaybackTargetId(
+                chapterSentenceIndex = 0,
+                paragraphIndex = 3,
+                sentenceIndexInParagraph = 0,
+                isChapterTitle = true
+            ),
+            snapshot = snapshot()
+        )
+
+        assertEquals(BookSequentialTarget(4, 0), result)
+    }
+
+    @Test
+    fun matchaPrewarmStopsAtBookEndWithoutWrapAround() {
+        val target = BookSequentialTargetSnapshot(
+            chapters = listOf(
+                BookSequentialChapterSnapshot(
+                    chapterIndex = 0,
+                    title = "第一章",
+                    paragraphIndex = 0,
+                    endParagraphExclusive = 1,
+                    sentences = listOf(BookSequentialSentenceSnapshot(0, 0, 0, "last"))
+                )
+            )
+        )
+
+        assertNull(
+            resolveMatchaNextPrewarmTarget(
+                currentTarget = BookPlaybackTargetId(0, 0, 0),
+                snapshot = target
+            )
+        )
+    }
 }

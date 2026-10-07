@@ -17,7 +17,8 @@ import kotlinx.coroutines.withContext
 internal data class BookPlaybackTargetId(
     val chapterSentenceIndex: Int,
     val paragraphIndex: Int,
-    val sentenceIndexInParagraph: Int
+    val sentenceIndexInParagraph: Int,
+    val isChapterTitle: Boolean = false
 )
 
 internal data class MatchaPlaybackRequest(
@@ -72,10 +73,7 @@ internal class BookMatchaPlaybackCoordinator(
     }
 
     fun scheduleNextPrewarm(request: MatchaPrewarmScheduleRequest) {
-        val next = BookSequentialNextTargetResolver.resolve(
-            current = BookSequentialTarget(request.currentTarget.paragraphIndex, request.currentTarget.sentenceIndexInParagraph),
-            snapshot = request.snapshot
-        ) ?: return
+        val next = resolveMatchaNextPrewarmTarget(request.currentTarget, request.snapshot) ?: return
         if (next.isChapterTitle) return
         val sentence = request.snapshot.chapters.asSequence()
             .flatMap { it.sentences.asSequence() }
@@ -223,3 +221,15 @@ internal class BookMatchaPlaybackCoordinator(
     }
 
 }
+
+internal fun resolveMatchaNextPrewarmTarget(
+    currentTarget: BookPlaybackTargetId,
+    snapshot: BookSequentialTargetSnapshot
+): BookSequentialTarget? = BookSequentialNextTargetResolver.resolve(
+    current = BookSequentialTarget(
+        paragraphIndex = currentTarget.paragraphIndex,
+        sentenceIndexInParagraph = currentTarget.sentenceIndexInParagraph,
+        isChapterTitle = currentTarget.isChapterTitle
+    ),
+    snapshot = snapshot
+)

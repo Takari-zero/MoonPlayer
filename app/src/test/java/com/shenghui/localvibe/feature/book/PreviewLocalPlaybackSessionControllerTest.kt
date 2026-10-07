@@ -2,6 +2,7 @@ package com.shenghui.localvibe.feature.book
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -375,6 +376,74 @@ class PreviewLocalPlaybackSessionControllerTest {
         assertEquals(PreviewLocalPlaybackState.STOPPED, secondRelease.snapshot.state)
         assertTrue(callback.stale)
         assertEquals(PreviewPlaybackContinuationDecision.IGNORE_STALE, callback.continuationDecision)
+    }
+
+    @Test
+    fun localChapterLastAdoptionContinuesFromPreparedChapterBoundary() {
+        val controller = startedController(target(generation = 1L, chapterSentenceIndex = 27))
+        controller.onFullReaderReady(1L, 10L, PreparedTargetVerificationStatus.MATCHED)
+        val drained = controller.onLocalDrained(1L, 10L)
+
+        assertEquals(PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT, drained.continuationDecision)
+        assertTrue(controller.claimFormalContinuation(1L, 10L))
+        assertEquals(
+            BookSequentialTarget(13, 0, isChapterTitle = true),
+            resolveMatchaNextPrewarmTarget(
+                BookPlaybackTargetId(27, 12, 3),
+                BookSequentialTargetSnapshot(
+                    chapters = listOf(
+                        BookSequentialChapterSnapshot(
+                            chapterIndex = 0,
+                            title = "第一章",
+                            paragraphIndex = 0,
+                            endParagraphExclusive = 13,
+                            sentences = listOf(BookSequentialSentenceSnapshot(12, 3, 27, "last"))
+                        ),
+                        BookSequentialChapterSnapshot(
+                            chapterIndex = 1,
+                            title = "第二章",
+                            paragraphIndex = 13,
+                            endParagraphExclusive = 15,
+                            sentences = listOf(BookSequentialSentenceSnapshot(14, 0, 0, "next"))
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    @Test
+    fun localBookFinalAdoptionHasNoFormalNextOrReplay() {
+        val controller = startedController(target(generation = 1L, chapterSentenceIndex = 27))
+        controller.onFullReaderReady(1L, 10L, PreparedTargetVerificationStatus.MATCHED)
+        val drained = controller.onLocalDrained(1L, 10L)
+
+        assertEquals(PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT, drained.continuationDecision)
+        assertTrue(controller.claimFormalContinuation(1L, 10L))
+        assertNull(
+            resolveMatchaNextPrewarmTarget(
+                BookPlaybackTargetId(27, 12, 3),
+                BookSequentialTargetSnapshot(
+                    chapters = listOf(
+                        BookSequentialChapterSnapshot(
+                            chapterIndex = 0,
+                            title = "第一章",
+                            paragraphIndex = 0,
+                            endParagraphExclusive = 13,
+                            sentences = listOf(BookSequentialSentenceSnapshot(12, 3, 27, "last"))
+                        )
+                    )
+                )
+            )
+        )
+        assertFalse(BookPlaybackIntent.afterPlaybackAdvance(moved = false, playbackIntentPlaying = true))
+        assertFalse(
+            shouldContinuePlaybackAfterTarget(
+                moved = false,
+                playbackIntentPlaying = false,
+                sessionValid = true
+            )
+        )
     }
 
     private fun startedController(
