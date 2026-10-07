@@ -11,6 +11,7 @@ enum class PreviewLocalPlaybackState {
     IDLE,
     LOCAL_STARTING,
     LOCAL_ACTIVE,
+    LOCAL_PAUSED,
     LOCAL_DRAINED_WAITING_PREPARED,
     PREPARED_VERIFIED_WAITING_DRAIN,
     PREPARED_FALLBACK_WAITING,
@@ -31,6 +32,7 @@ data class PreviewLocalSessionSnapshot(
     val readerGeneration: Long?,
     val playbackSessionId: Long?,
     val playbackIntentPlaying: Boolean,
+    val localPlaybackPaused: Boolean,
     val fullReaderStatus: FullReaderStatus,
     val preparedVerification: PreparedTargetVerificationStatus,
     val localSentenceDrained: Boolean,
@@ -51,6 +53,7 @@ class PreviewLocalPlaybackSessionController {
     private var readerGeneration: Long? = null
     private var playbackSessionId: Long? = null
     private var playbackIntentPlaying = false
+    private var localPlaybackPaused = false
     private var fullReaderStatus = FullReaderStatus.LOADING
     private var preparedVerification = PreparedTargetVerificationStatus.UNKNOWN
     private var formalContinuationClaimed = false
@@ -63,6 +66,7 @@ class PreviewLocalPlaybackSessionController {
         readerGeneration = readerGeneration,
         playbackSessionId = playbackSessionId,
         playbackIntentPlaying = playbackIntentPlaying,
+        localPlaybackPaused = localPlaybackPaused,
         fullReaderStatus = fullReaderStatus,
         preparedVerification = preparedVerification,
         localSentenceDrained = state == PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED,
@@ -82,6 +86,7 @@ class PreviewLocalPlaybackSessionController {
         this.readerGeneration = readerGeneration
         this.playbackSessionId = playbackSessionId
         this.playbackIntentPlaying = playbackIntentPlaying
+        localPlaybackPaused = false
         fullReaderStatus = FullReaderStatus.LOADING
         preparedVerification = PreparedTargetVerificationStatus.UNKNOWN
         formalContinuationClaimed = false
@@ -124,6 +129,35 @@ class PreviewLocalPlaybackSessionController {
             return result()
         }
         state = PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED
+        return result(continuationDecision = planLocalContinuation())
+    }
+
+    fun onLocalPaused(
+        readerGeneration: Long,
+        playbackSessionId: Long
+    ): PreviewLocalSessionTransitionResult {
+        if (!isCurrent(readerGeneration, playbackSessionId)) return staleResult()
+        if (state != PreviewLocalPlaybackState.LOCAL_STARTING &&
+            state != PreviewLocalPlaybackState.LOCAL_ACTIVE &&
+            state != PreviewLocalPlaybackState.PREPARED_VERIFIED_WAITING_DRAIN
+        ) {
+            return result()
+        }
+        localPlaybackPaused = true
+        playbackIntentPlaying = false
+        state = PreviewLocalPlaybackState.LOCAL_PAUSED
+        return result(continuationDecision = PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK)
+    }
+
+    fun onLocalResumed(
+        readerGeneration: Long,
+        playbackSessionId: Long
+    ): PreviewLocalSessionTransitionResult {
+        if (!isCurrent(readerGeneration, playbackSessionId)) return staleResult()
+        if (state != PreviewLocalPlaybackState.LOCAL_PAUSED) return result()
+        localPlaybackPaused = false
+        playbackIntentPlaying = true
+        state = stateAfterLocalResume()
         return result(continuationDecision = planLocalContinuation())
     }
 
@@ -193,6 +227,7 @@ class PreviewLocalPlaybackSessionController {
         readerGeneration = null
         playbackSessionId = null
         playbackIntentPlaying = false
+        localPlaybackPaused = false
         return result(PreviewLocalOwnershipDirective.CLEAR_LOCAL_OWNERSHIP)
     }
 
@@ -208,6 +243,9 @@ class PreviewLocalPlaybackSessionController {
         }
         if (state == PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED) {
             return PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED
+        }
+        if (state == PreviewLocalPlaybackState.LOCAL_PAUSED) {
+            return PreviewLocalPlaybackState.LOCAL_PAUSED
         }
         return if (
             fullReaderStatus == FullReaderStatus.READY &&
@@ -230,9 +268,23 @@ class PreviewLocalPlaybackSessionController {
         }
     }
 
+    private fun stateAfterLocalResume(): PreviewLocalPlaybackState {
+        return if (
+            fullReaderStatus == FullReaderStatus.READY &&
+            preparedVerification == PreparedTargetVerificationStatus.MATCHED
+        ) {
+            PreviewLocalPlaybackState.PREPARED_VERIFIED_WAITING_DRAIN
+        } else {
+            PreviewLocalPlaybackState.LOCAL_ACTIVE
+        }
+    }
+
     private fun planLocalContinuation(): PreviewPlaybackContinuationDecision {
         val localGeneration = readerGeneration ?: return PreviewPlaybackContinuationDecision.IGNORE_STALE
         val localSession = playbackSessionId ?: return PreviewPlaybackContinuationDecision.IGNORE_STALE
+        if (localPlaybackPaused) {
+            return PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK
+        }
         return PreviewPlaybackContinuationPlanner.plan(
             LocalPlaybackLifecycleSnapshot(
                 localTargetGeneration = localGeneration,
@@ -283,6 +335,7 @@ class PreviewLocalPlaybackSessionController {
         return when (this) {
             PreviewLocalPlaybackState.LOCAL_STARTING,
             PreviewLocalPlaybackState.LOCAL_ACTIVE,
+            PreviewLocalPlaybackState.LOCAL_PAUSED,
             PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED,
             PreviewLocalPlaybackState.PREPARED_VERIFIED_WAITING_DRAIN ->
                 PreviewLocalPlaybackOwnership.LOCAL

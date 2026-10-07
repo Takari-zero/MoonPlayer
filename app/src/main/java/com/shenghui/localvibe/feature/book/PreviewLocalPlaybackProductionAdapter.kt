@@ -63,6 +63,16 @@ internal class PreviewLocalPlaybackProductionAdapter(
 
     fun currentRequest(): BookSentencePlaybackRequest? = lastDispatch
 
+    fun hasCurrentLocalOwnership(
+        readerGeneration: Long?,
+        playbackSessionId: Long
+    ): Boolean {
+        val snapshot = controller.snapshot()
+        return snapshot.ownership == PreviewLocalPlaybackOwnership.LOCAL &&
+            snapshot.readerGeneration == readerGeneration &&
+            snapshot.playbackSessionId == playbackSessionId
+    }
+
     fun onLocalStarted(
         readerGeneration: Long,
         playbackSessionId: Long
@@ -81,6 +91,18 @@ internal class PreviewLocalPlaybackProductionAdapter(
     ): PreviewLocalSessionTransitionResult = controller.onLocalDrained(readerGeneration, playbackSessionId)
         .also { logCallback("DRAINED", readerGeneration, playbackSessionId, it) }
 
+
+    fun onLocalPaused(
+        readerGeneration: Long,
+        playbackSessionId: Long
+    ): PreviewLocalSessionTransitionResult = controller.onLocalPaused(readerGeneration, playbackSessionId)
+        .also { logCallback("PAUSED", readerGeneration, playbackSessionId, it) }
+
+    fun onLocalResumed(
+        readerGeneration: Long,
+        playbackSessionId: Long
+    ): PreviewLocalSessionTransitionResult = controller.onLocalResumed(readerGeneration, playbackSessionId)
+        .also { logCallback("RESUMED", readerGeneration, playbackSessionId, it) }
     fun onFullReaderReady(
         readerGeneration: Long,
         playbackSessionId: Long,

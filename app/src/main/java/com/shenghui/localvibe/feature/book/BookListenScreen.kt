@@ -1704,13 +1704,13 @@ fun BookListenScreen(
         val localSnapshot = previewLocalPlaybackAdapter.snapshot()
         if (localSnapshot.ownership == PreviewLocalPlaybackOwnership.LOCAL &&
             localSnapshot.playbackSessionId == playbackSessionId &&
-            playbackIntentPlaying && !isPlaying
+            localSnapshot.localPlaybackPaused && playbackIntentPlaying && !isPlaying
         ) {
             val generation = localSnapshot.readerGeneration
             if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && isAishell3Paused) {
                 Log.d("BookReaderPlayback", "resume paused local aishell3 sessionId=$playbackSessionId")
-                generation?.let { previewLocalPlaybackAdapter.onPlaybackIntentChanged(it, playbackSessionId, true) }
                 aishell3Player?.resume()
+                generation?.let { previewLocalPlaybackAdapter.onLocalResumed(it, playbackSessionId) }
                 isAishell3Paused = false
                 isPlaying = true
                 return
@@ -1718,18 +1718,13 @@ fun BookListenScreen(
             if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
                 matchaPlaybackCoordinator.resume()
             ) {
-                generation?.let { previewLocalPlaybackAdapter.onPlaybackIntentChanged(it, playbackSessionId, true) }
-                isPlaying = true
-                return
-            }
-            val localRequest = previewLocalPlaybackAdapter.currentRequest()
-            if (localRequest != null && generation != null) {
-                val transition = previewLocalPlaybackAdapter.onPlaybackIntentChanged(
-                    generation,
-                    playbackSessionId,
-                    true
+                generation?.let { previewLocalPlaybackAdapter.onLocalResumed(it, playbackSessionId) }
+                Log.i(
+                    "PREVIEW_LOCAL_PLAYBACK",
+                    "RESUME_ACCEPTED sessionBefore=$playbackSessionId sessionAfter=$playbackSessionId " +
+                        "ownership=${localSnapshot.ownership} provider=MATCHA_EXPERIMENTAL"
                 )
-                previewLocalPlaybackBridge.dispatch(PreviewLocalPlaybackDispatch(localRequest, transition))
+                isPlaying = true
                 return
             }
         }
@@ -2107,13 +2102,18 @@ fun BookListenScreen(
         if (localSnapshot.ownership == PreviewLocalPlaybackOwnership.LOCAL &&
             localSnapshot.playbackSessionId == playbackSessionId
         ) {
-            localSnapshot.readerGeneration?.let { generation ->
-                previewLocalPlaybackAdapter.onPlaybackIntentChanged(generation, playbackSessionId, false)
-            }
-            playbackIntentPlaying = false
             if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
                 matchaPlaybackCoordinator.pause()
             ) {
+                localSnapshot.readerGeneration?.let { generation ->
+                    previewLocalPlaybackAdapter.onLocalPaused(generation, playbackSessionId)
+                }
+                playbackIntentPlaying = false
+                Log.i(
+                    "PREVIEW_LOCAL_PLAYBACK",
+                    "PAUSE_ACCEPTED sessionBefore=$playbackSessionId sessionAfter=$playbackSessionId " +
+                        "ownership=${localSnapshot.ownership} provider=MATCHA_EXPERIMENTAL"
+                )
                 isPlaying = false
                 saveProgress(currentParagraphIndex)
                 return
@@ -2121,11 +2121,19 @@ fun BookListenScreen(
             if (activePlaybackEngineName == BookPlaybackEngine.AISHELL3.name && aishell3Player != null) {
                 Log.d("BookReaderPlayback", "pause local aishell3 sessionId=$playbackSessionId")
                 aishell3Player?.pause()
+                localSnapshot.readerGeneration?.let { generation ->
+                    previewLocalPlaybackAdapter.onLocalPaused(generation, playbackSessionId)
+                }
+                playbackIntentPlaying = false
                 isAishell3Paused = true
                 isPlaying = false
                 saveProgress(currentParagraphIndex)
                 return
             }
+            localSnapshot.readerGeneration?.let { generation ->
+                previewLocalPlaybackAdapter.onPlaybackIntentChanged(generation, playbackSessionId, false)
+            }
+            playbackIntentPlaying = false
             ttsController?.pause()
             ttsController?.stop()
             activePlaybackEngineName = BookPlaybackEngine.NONE.name
@@ -2153,6 +2161,30 @@ fun BookListenScreen(
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
         isPlaying = false
         saveProgress(currentParagraphIndex)
+    }
+
+    fun currentLocalPlaybackSnapshot(): PreviewLocalSessionSnapshot? {
+        val snapshot = previewLocalPlaybackAdapter.snapshot()
+        val generation = readerContentCycleCoordinator.currentCycleSnapshot()?.generation
+        return snapshot.takeIf {
+            previewLocalPlaybackAdapter.hasCurrentLocalOwnership(generation, playbackSessionId)
+        }
+    }
+
+    fun playbackToggleFacts(
+        hasPending: Boolean,
+        playbackPreparing: Boolean
+    ): BookPlaybackToggleFacts {
+        val localSnapshot = currentLocalPlaybackSnapshot()
+        return BookPlaybackToggleFacts(
+            hasCurrentLocalOwnership = localSnapshot != null,
+            localPlaybackPaused = localSnapshot?.localPlaybackPaused == true,
+            formalIsPlaying = isPlaying,
+            playbackIntentPlaying = playbackIntentPlaying,
+            contentReadiness = contentReadiness,
+            hasPendingPlaybackTarget = hasPending,
+            playbackPreparing = playbackPreparing
+        )
     }
 
     fun stopReading() {
@@ -2987,6 +3019,16 @@ fun BookListenScreen(
                     }
 
                     key("cached-${bookFile?.uri}-${cachedState?.updatedAt}") {
+                        val cachedLocalSnapshot = currentLocalPlaybackSnapshot()
+                        val hasCachedLocalOwnership = cachedLocalSnapshot != null
+                        val cachedPlaybackPreparing = contentReadiness == BookContentReadiness.PREVIEW &&
+                            playbackIntentPlaying && pendingPlaybackTarget != null
+                        val cachedToggleDecision = decideBookPlaybackToggle(
+                            playbackToggleFacts(
+                                hasPending = pendingPlaybackTarget != null,
+                                playbackPreparing = cachedPlaybackPreparing
+                            )
+                        )
                         BookListenContent(
                             chapterTitle = cachedState?.lastChapterTitle.orEmpty().ifBlank {
                                 bookFile?.displayTitle().orEmpty()
@@ -3004,9 +3046,8 @@ fun BookListenScreen(
                                 ?: currentSentenceIndexInParagraph,
                             listenedTimeLabel = cachedListenedTimeLabel,
                             remainingTimeLabel = cachedRemainingTimeLabel,
-                            isPlaying = false,
-                            isPlaybackPreparing = contentReadiness == BookContentReadiness.PREVIEW &&
-                                playbackIntentPlaying && pendingPlaybackTarget != null,
+                            isPlaying = hasCachedLocalOwnership && cachedLocalSnapshot?.localPlaybackPaused == false,
+                            isPlaybackPreparing = !hasCachedLocalOwnership && cachedPlaybackPreparing,
                             isTtsReady = isTtsReady,
                             isTtsChecking = isTtsChecking,
                             ttsError = ttsError,
@@ -3035,22 +3076,24 @@ fun BookListenScreen(
                                     currentSentenceIndexInParagraph = sentence.sentenceIndexInParagraph
                                     currentReadingTargetName = cachedTarget.name
                                 }
-                                if (contentReadiness == BookContentReadiness.PLAYBACK_READY) {
-                                    if (isPlaying || playbackIntentPlaying) {
+                                applyBookPlaybackToggleDecision(
+                                    decision = cachedToggleDecision,
+                                    onPause = {
                                         playbackIntentPlaying = false
                                         pauseReading()
-                                    } else {
+                                    },
+                                    onResume = {
                                         playbackIntentPlaying = true
                                         speakCurrentSentence()
-                                    }
-                                } else {
-                                    cachedSentences.getOrNull(playableIndex)?.let { sentence ->
-                                        if (playbackIntentPlaying) {
-                                            playbackIntentPlaying = false
-                                            pendingPlaybackTarget = pendingPlaybackTarget?.let {
-                                                PendingBookPlaybackTargetResolver.setPlayRequested(it, false)
-                                            }
-                                        } else {
+                                    },
+                                    onCancelPreviewPending = {
+                                        playbackIntentPlaying = false
+                                        pendingPlaybackTarget = pendingPlaybackTarget?.let {
+                                            PendingBookPlaybackTargetResolver.setPlayRequested(it, false)
+                                        }
+                                    },
+                                    onStartPreview = {
+                                        cachedSentences.getOrNull(playableIndex)?.let { sentence ->
                                             playbackIntentPlaying = true
                                             pendingPlaybackTarget = PendingBookPlaybackTarget(
                                                 paragraphIndex = sentence.paragraphIndex,
@@ -3061,7 +3104,7 @@ fun BookListenScreen(
                                             )
                                         }
                                     }
-                                }
+                                )
                             },
                             onStop = { if (paragraphs.isNotEmpty()) stopReading() },
                             onPrevious = {
@@ -3387,6 +3430,12 @@ fun BookListenScreen(
                         }
                     }
                     key("full-${bookFile?.uri}-$chapterStartIndex") {
+                        val formalToggleDecision = decideBookPlaybackToggle(
+                            playbackToggleFacts(
+                                hasPending = pendingPlaybackTarget != null,
+                                playbackPreparing = false
+                            )
+                        )
                         BookListenContent(
                             chapterTitle = chapterTitle,
                             chapterSentences = chapterSentences,
@@ -3407,13 +3456,19 @@ fun BookListenScreen(
                             readerFontSizeSp = readerFontSizeSp,
                             onPlayPause = {
                                 logBookUiEvent("PLAY_PAUSE_BUTTON")
-                                if (isPlaying || playbackIntentPlaying) {
-                                    playbackIntentPlaying = false
-                                    pauseReading()
-                                } else {
-                                    playbackIntentPlaying = true
-                                    speakCurrentSentence()
-                                }
+                                applyBookPlaybackToggleDecision(
+                                    decision = formalToggleDecision,
+                                    onPause = {
+                                        playbackIntentPlaying = false
+                                        pauseReading()
+                                    },
+                                    onResume = {
+                                        playbackIntentPlaying = true
+                                        speakCurrentSentence()
+                                    },
+                                    onCancelPreviewPending = {},
+                                    onStartPreview = {}
+                                )
                             },
                             onStop = {
                                 playbackIntentPlaying = false

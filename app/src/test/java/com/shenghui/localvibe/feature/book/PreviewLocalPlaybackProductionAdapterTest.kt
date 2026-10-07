@@ -159,6 +159,58 @@ class PreviewLocalPlaybackProductionAdapterTest {
         assertEquals(PreviewLocalPlaybackOwnership.NONE, adapter.snapshot().ownership)
     }
 
+
+    @Test
+    fun localPausePreservesOwnershipAndSessionWithoutAllowingContinuation() {
+        val adapter = adapter()
+        adapter.begin(target(), BookPlaybackEngine.MATCHA_EXPERIMENTAL, 1f, 41L)
+        adapter.onLocalStarted(7L, 41L)
+
+        val paused = adapter.onLocalPaused(7L, 41L)
+
+        assertEquals(PreviewLocalPlaybackOwnership.LOCAL, paused.snapshot.ownership)
+        assertEquals(PreviewLocalPlaybackState.LOCAL_PAUSED, paused.snapshot.state)
+        assertEquals(41L, paused.snapshot.playbackSessionId)
+        assertTrue(paused.snapshot.localPlaybackPaused)
+        assertFalse(paused.snapshot.playbackIntentPlaying)
+        assertEquals(PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK, paused.continuationDecision)
+    }
+
+    @Test
+    fun fullReadyWhilePausedDoesNotAdoptOrAllowFormalNext() {
+        val adapter = adapter()
+        adapter.begin(target(), BookPlaybackEngine.MATCHA_EXPERIMENTAL, 1f, 41L)
+        adapter.onLocalStarted(7L, 41L)
+        adapter.onLocalPaused(7L, 41L)
+
+        val ready = adapter.onFullReaderReady(7L, 41L, PreparedTargetVerificationStatus.MATCHED)
+
+        assertEquals(PreviewLocalPlaybackState.LOCAL_PAUSED, ready.snapshot.state)
+        assertEquals(PreviewLocalPlaybackOwnership.LOCAL, ready.snapshot.ownership)
+        assertEquals(PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK, ready.continuationDecision)
+        assertFalse(adapter.claimFormalContinuation(7L, 41L))
+    }
+
+    @Test
+    fun resumeAfterMatchedFullReadyKeepsSessionAndAllowsOneFormalContinuationAfterDrain() {
+        val adapter = adapter()
+        adapter.begin(target(), BookPlaybackEngine.MATCHA_EXPERIMENTAL, 1f, 41L)
+        adapter.onLocalStarted(7L, 41L)
+        adapter.onLocalPaused(7L, 41L)
+        adapter.onFullReaderReady(7L, 41L, PreparedTargetVerificationStatus.MATCHED)
+
+        val resumed = adapter.onLocalResumed(7L, 41L)
+
+        assertEquals(PreviewLocalPlaybackState.PREPARED_VERIFIED_WAITING_DRAIN, resumed.snapshot.state)
+        assertEquals(41L, resumed.snapshot.playbackSessionId)
+        assertTrue(resumed.snapshot.playbackIntentPlaying)
+        assertEquals(PreviewPlaybackContinuationDecision.KEEP_CURRENT_PLAYBACK, resumed.continuationDecision)
+
+        val drained = adapter.onLocalDrained(7L, 41L)
+        assertEquals(PreviewPlaybackContinuationDecision.ALLOW_FORMAL_NEXT, drained.continuationDecision)
+        assertTrue(adapter.claimFormalContinuation(7L, 41L))
+        assertFalse(adapter.claimFormalContinuation(7L, 41L))
+    }
     private fun adapter(): PreviewLocalPlaybackProductionAdapter =
         PreviewLocalPlaybackProductionAdapter(logger = {})
 

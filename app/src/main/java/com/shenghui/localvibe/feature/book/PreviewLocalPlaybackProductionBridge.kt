@@ -67,6 +67,7 @@ internal class PreviewLocalPlaybackProductionBridge(
         val localStates = setOf(
             PreviewLocalPlaybackState.LOCAL_STARTING,
             PreviewLocalPlaybackState.LOCAL_ACTIVE,
+            PreviewLocalPlaybackState.LOCAL_PAUSED,
             PreviewLocalPlaybackState.LOCAL_DRAINED_WAITING_PREPARED,
             PreviewLocalPlaybackState.PREPARED_VERIFIED_WAITING_DRAIN,
             PreviewLocalPlaybackState.PREPARED_FALLBACK_WAITING
