@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -340,7 +341,12 @@ fun BookListenScreen(
     val latestBookSpeechRate by rememberUpdatedState(bookSpeechRate)
     val latestPreferredPlaybackEngineUserOverride by rememberUpdatedState(preferredPlaybackEngineUserOverride)
     val screenDisposed = remember(bookFile?.uri) { java.util.concurrent.atomic.AtomicBoolean(false) }
-
+    val disposeCleanupStarted = remember(screenDisposed) {
+        java.util.concurrent.atomic.AtomicBoolean(false)
+    }
+    val readerExitCoordinator = remember(screenDisposed) {
+        BookReaderExitCoordinator()
+    }
     LaunchedEffect(offlineTtsAvailability.aishell3Available) {
         providerRestoreComplete = false
         Log.i(
@@ -390,9 +396,13 @@ fun BookListenScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            if (!disposeCleanupStarted.compareAndSet(false, true)) return@onDispose
             screenDisposed.set(true)
             playbackIntentPlaying = false
-            playbackSessionId += 1
+            if (!readerExitCoordinator.hasExited) {
+                playbackSessionId += 1
+            }
+            pendingPlaybackTarget = null
             pendingPlaySessionId = -1L
             pendingPlayTargetChapterSentenceIndex = -1
             isAishell3Paused = false
@@ -1166,6 +1176,23 @@ fun BookListenScreen(
         matchaPlaybackCoordinator.stop()
         ttsController?.stop()
         activePlaybackEngineName = BookPlaybackEngine.NONE.name
+    }
+
+    fun exitReader(reason: String) {
+        if (!readerExitCoordinator.tryStartExit()) return
+        if (paragraphs.isNotEmpty()) saveProgress(currentParagraphIndex)
+        stopCurrentPlayback(reason = reason, invalidateSession = true)
+        playbackIntentPlaying = false
+        pendingPlaybackTarget = null
+        pendingPlaySessionId = -1L
+        pendingPlayTargetChapterSentenceIndex = -1
+        isAishell3Paused = false
+        isPlaying = false
+        onBack()
+    }
+
+    BackHandler {
+        exitReader("back")
     }
 
     fun selectPreferredPlaybackEngine(engine: BookPlaybackEngine) {
@@ -2459,12 +2486,7 @@ fun BookListenScreen(
         ) {
             BookListenTopBar(
                 title = bookFile?.displayTitle().orEmpty().ifBlank { "未选择小说文件" },
-                onBack = {
-                    if (paragraphs.isNotEmpty()) saveProgress(currentParagraphIndex)
-                    stopCurrentPlayback(reason = "back", invalidateSession = true)
-                    isPlaying = false
-                    onBack()
-                },
+                onBack = { exitReader("back") },
                 onMenuAction = { action ->
                     when (action) {
                         "语音设置" -> showVoicePackageSheet = true
