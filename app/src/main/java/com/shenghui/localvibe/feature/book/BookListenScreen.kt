@@ -1211,6 +1211,10 @@ fun BookListenScreen(
             return
         }
         stopCurrentPlayback(reason = "provider_change", invalidateSession = true)
+        val clearedPendingPlaybackIntent = PendingBookPlaybackTargetResolver.clearPendingPlaybackIntent()
+        pendingPlaybackTarget = clearedPendingPlaybackIntent.target
+        pendingPlaySessionId = clearedPendingPlaybackIntent.sessionId
+        pendingPlayTargetChapterSentenceIndex = clearedPendingPlaybackIntent.targetChapterSentenceIndex
         playbackIntentPlaying = false
         isPlaying = false
         preferredPlaybackEngineUserOverride = true

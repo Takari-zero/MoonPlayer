@@ -15,6 +15,12 @@ data class PendingBookPlaybackTarget(
     val playRequested: Boolean
 )
 
+data class ClearedPendingBookPlaybackIntent(
+    val target: PendingBookPlaybackTarget?,
+    val sessionId: Long,
+    val targetChapterSentenceIndex: Int
+)
+
 enum class PendingBookPlaybackSource {
     USER_SENTENCE_TAP,
     PLAY_BUTTON,
@@ -39,6 +45,13 @@ object PendingBookPlaybackTargetResolver {
         current: PendingBookPlaybackTarget,
         playRequested: Boolean
     ): PendingBookPlaybackTarget = current.copy(playRequested = playRequested)
+
+    fun clearPendingPlaybackIntent(): ClearedPendingBookPlaybackIntent =
+        ClearedPendingBookPlaybackIntent(
+            target = null,
+            sessionId = -1L,
+            targetChapterSentenceIndex = -1
+        )
 
     fun resolve(
         pending: PendingBookPlaybackTarget,

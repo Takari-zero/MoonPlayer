@@ -1,6 +1,7 @@
 package com.shenghui.localvibe.feature.book
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -167,5 +168,29 @@ class BookContentReadinessTest {
         assertEquals(BookPlaybackSentenceTarget(12, 2, 7), result.resolvedTarget)
         assertEquals(true, result.playbackIntentPlaying)
         assertEquals(false, result.preparedNotReady)
+    }
+
+    @Test
+    fun providerSwitchClearsPendingIntentAndPreventsLaterFullReadyReplay() {
+        val pending = PendingBookPlaybackTarget(
+            12, 2, "target".hashCode(), PendingBookPlaybackSource.USER_SENTENCE_TAP, true
+        )
+
+        val cleared = PendingBookPlaybackTargetResolver.clearPendingPlaybackIntent()
+        val result = PendingBookPlaybackTargetResolver.consume(
+            pending = cleared.target,
+            readiness = BookContentReadiness.PLAYBACK_READY,
+            preparedAvailable = true,
+            preparedTargets = listOf(BookPlaybackSentenceTarget(12, 2, 7)),
+            currentPlaybackIntentPlaying = false
+        )
+
+        assertNull(cleared.target)
+        assertEquals(-1L, cleared.sessionId)
+        assertEquals(-1, cleared.targetChapterSentenceIndex)
+        assertNull(result.resolvedTarget)
+        assertFalse(result.playbackIntentPlaying)
+        assertFalse(result.terminalRejected)
+        assertEquals(pending.playRequested, true)
     }
 }

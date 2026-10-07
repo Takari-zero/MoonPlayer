@@ -102,4 +102,38 @@ class BookReaderExitCoordinatorTest {
         assertFalse(adapter.hasCurrentLocalOwnership(readerGeneration = 7L, playbackSessionId = 41L))
         assertFalse(adapter.claimFormalContinuation(readerGeneration = 7L, playbackSessionId = 41L))
     }
+
+    @Test
+    fun providerSwitchClearsLocalOwnershipAndRejectsOldDrain() {
+        val adapter = PreviewLocalPlaybackProductionAdapter(logger = {})
+        val target = LocalPlaybackTarget(
+            bookUri = "content://book",
+            paragraphIndex = 12,
+            sentenceIndexInParagraph = 3,
+            chapterSentenceIndex = 27,
+            text = "cached sentence",
+            stableTextHash = "cached sentence".hashCode(),
+            generation = 7L,
+            source = LocalPlaybackTargetSource.CACHED_PREVIEW
+        )
+
+        requireNotNull(
+            adapter.begin(
+                target = target,
+                provider = BookPlaybackEngine.MATCHA_EXPERIMENTAL,
+                speechRate = 1f,
+                playbackSessionId = 41L
+            )
+        )
+        adapter.onLocalStarted(readerGeneration = 7L, playbackSessionId = 41L)
+        adapter.reset()
+
+        val oldDrain = adapter.onLocalDrained(readerGeneration = 7L, playbackSessionId = 41L)
+
+        assertTrue(oldDrain.stale)
+        assertEquals(PreviewPlaybackContinuationDecision.IGNORE_STALE, oldDrain.continuationDecision)
+        assertEquals(PreviewLocalPlaybackState.IDLE, adapter.snapshot().state)
+        assertEquals(PreviewLocalPlaybackOwnership.NONE, adapter.snapshot().ownership)
+        assertFalse(adapter.claimFormalContinuation(readerGeneration = 7L, playbackSessionId = 41L))
+    }
 }
