@@ -1,0 +1,33 @@
+// Read-only AGP model audit; no build/signing configuration is changed.
+import groovy.json.JsonOutput
+import org.gradle.util.GradleVersion
+
+gradle.projectsEvaluated {
+    def app = gradle.rootProject.findProject(':app')
+    if (app == null) throw new GradleException('Missing :app')
+    app.tasks.register('writeSystemTtsReleaseAudit') {
+        doLast {
+            def android = app.extensions.getByName('android')
+            def release = android.buildTypes.getByName('release')
+            def output = app.findProperty('systemTtsReleaseAuditOutput')
+            if (!output) throw new GradleException('Missing systemTtsReleaseAuditOutput')
+            def audit = [
+                namespace: android.namespace,
+                applicationId: android.defaultConfig.applicationId,
+                versionCode: android.defaultConfig.versionCode,
+                versionName: android.defaultConfig.versionName,
+                minSdk: android.defaultConfig.minSdkVersion.apiLevel,
+                targetSdk: android.defaultConfig.targetSdkVersion.apiLevel,
+                compileSdk: android.compileSdkVersion,
+                buildToolsVersion: android.buildToolsVersion,
+                debuggable: release.debuggable,
+                minifyEnabled: release.minifyEnabled,
+                shrinkResources: release.shrinkResources,
+                proguardFiles: release.proguardFiles.collect { it.name },
+                signingConfig: release.signingConfig?.name,
+                gradleVersion: GradleVersion.current().version
+            ]
+            new File(output.toString()).setText(JsonOutput.prettyPrint(JsonOutput.toJson(audit)), 'UTF-8')
+        }
+    }
+}
