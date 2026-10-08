@@ -46,6 +46,7 @@ internal class BookMatchaPlaybackCoordinator(
     private val prepareLock = Any()
     private var released = false
     private var player: StreamingPcmAudioPlayer? = null
+    private val pauseState = BookMatchaPlaybackPauseState()
 
     val isAvailable: Boolean
         get() = engine.isModelAvailable()
@@ -102,16 +103,21 @@ internal class BookMatchaPlaybackCoordinator(
         runCatching { Log.i(TAG, "MATCHA_PREWARM_INVALIDATED reason=$reason epoch=$epoch") }
     }
 
-    fun pause(): Boolean {
+    fun pause(sessionId: Long): Boolean {
         invalidatePrewarm("pause")
         val currentPlayer = player ?: return false
         currentPlayer.pause()
+        pauseState.pause(sessionId)
         return true
     }
 
-    fun resume(): Boolean {
+    fun isPaused(sessionId: Long): Boolean = pauseState.isPaused(sessionId)
+
+    fun resume(sessionId: Long): Boolean {
+        if (!pauseState.canResume(sessionId)) return false
         val currentPlayer = player ?: return false
-        currentPlayer.resume()
+        if (currentPlayer.resume().isFailure) return false
+        pauseState.resume(sessionId)
         return true
     }
 
@@ -120,6 +126,7 @@ internal class BookMatchaPlaybackCoordinator(
         engine.stop()
         val currentPlayer = player
         player = null
+        pauseState.clear()
         currentPlayer?.stop()
         currentPlayer?.release()
     }
@@ -134,6 +141,7 @@ internal class BookMatchaPlaybackCoordinator(
         engine.stop()
         val currentPlayer = player
         player = null
+        pauseState.clear()
         currentPlayer?.stop()
         currentPlayer?.release()
     }
@@ -211,6 +219,7 @@ internal class BookMatchaPlaybackCoordinator(
     private fun replacePlayerOutput() {
         val currentPlayer = player
         player = null
+        pauseState.clear()
         currentPlayer?.stop()
         currentPlayer?.release()
     }
@@ -220,6 +229,28 @@ internal class BookMatchaPlaybackCoordinator(
         const val TAG = "BookMatchaCoordinator"
     }
 
+}
+
+internal class BookMatchaPlaybackPauseState {
+    private var pausedSessionId: Long? = null
+
+    fun pause(sessionId: Long) {
+        pausedSessionId = sessionId
+    }
+
+    fun isPaused(sessionId: Long): Boolean = pausedSessionId == sessionId
+
+    fun canResume(sessionId: Long): Boolean = pausedSessionId == sessionId
+
+    fun resume(sessionId: Long): Boolean {
+        if (!canResume(sessionId)) return false
+        pausedSessionId = null
+        return true
+    }
+
+    fun clear() {
+        pausedSessionId = null
+    }
 }
 
 internal fun resolveMatchaNextPrewarmTarget(

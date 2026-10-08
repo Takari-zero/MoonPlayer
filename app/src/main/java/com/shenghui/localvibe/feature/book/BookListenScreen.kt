@@ -1751,7 +1751,7 @@ fun BookListenScreen(
                 return
             }
             if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
-                matchaPlaybackCoordinator.resume()
+                matchaPlaybackCoordinator.resume(playbackSessionId)
             ) {
                 generation?.let { previewLocalPlaybackAdapter.onLocalResumed(it, playbackSessionId) }
                 Log.i(
@@ -1774,8 +1774,12 @@ fun BookListenScreen(
             return
         }
         if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
-            !isPlaying && playbackIntentPlaying && matchaPlaybackCoordinator.resume()
+            !isPlaying && playbackIntentPlaying && matchaPlaybackCoordinator.resume(playbackSessionId)
         ) {
+            Log.i(
+                "BookReaderPlayback",
+                "formal matcha resume in place sessionId=$playbackSessionId"
+            )
             isPlaying = true
             return
         }
@@ -1930,6 +1934,15 @@ fun BookListenScreen(
             },
             onDrained = { callbackSessionId ->
                 if (callbackSessionId != playbackSessionId || screenDisposed.get()) return@BookSentencePlaybackCallbacks
+                if (request.provider == BookPlaybackEngine.MATCHA_EXPERIMENTAL &&
+                    matchaPlaybackCoordinator.isPaused(callbackSessionId)
+                ) {
+                    Log.i(
+                        "BookReaderPlayback",
+                        "ignore matcha drain while paused session=$callbackSessionId"
+                    )
+                    return@BookSentencePlaybackCallbacks
+                }
                 if (request.provider == BookPlaybackEngine.SYSTEM_TTS &&
                     latestActivePlaybackEngineName != BookPlaybackEngine.SYSTEM_TTS.name
                 ) {
@@ -1954,6 +1967,15 @@ fun BookListenScreen(
             },
             onFailed = { callbackSessionId, reason ->
                 if (!BookPlaybackSessionGuard.isActive(callbackSessionId, playbackSessionId, screenDisposed.get())) return@BookSentencePlaybackCallbacks
+                if (request.provider == BookPlaybackEngine.MATCHA_EXPERIMENTAL &&
+                    matchaPlaybackCoordinator.isPaused(callbackSessionId)
+                ) {
+                    Log.i(
+                        "BookReaderPlayback",
+                        "ignore matcha failure while paused session=$callbackSessionId reason=$reason"
+                    )
+                    return@BookSentencePlaybackCallbacks
+                }
                 isPlaying = false
                 activePlaybackEngineName = BookPlaybackEngine.NONE.name
                 if (request.provider == BookPlaybackEngine.SYSTEM_TTS) {
@@ -2139,7 +2161,7 @@ fun BookListenScreen(
             localSnapshot.playbackSessionId == playbackSessionId
         ) {
             if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
-                matchaPlaybackCoordinator.pause()
+                matchaPlaybackCoordinator.pause(playbackSessionId)
             ) {
                 localSnapshot.readerGeneration?.let { generation ->
                     previewLocalPlaybackAdapter.onLocalPaused(generation, playbackSessionId)
@@ -2177,7 +2199,9 @@ fun BookListenScreen(
             saveProgress(currentParagraphIndex)
             return
         }
-        if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name && matchaPlaybackCoordinator.pause()) {
+        if (activePlaybackEngineName == BookPlaybackEngine.MATCHA_EXPERIMENTAL.name &&
+            matchaPlaybackCoordinator.pause(playbackSessionId)
+        ) {
             isPlaying = false
             saveProgress(currentParagraphIndex)
             return
